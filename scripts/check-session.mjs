@@ -31,6 +31,7 @@ const logger = {
 function harness({ withDefaultModel = true } = {}) {
   const created = [];
   const inbox = [];
+  const renames = [];
   const agentCtxHandlers = [];
   let live = null;
 
@@ -52,11 +53,12 @@ function harness({ withDefaultModel = true } = {}) {
       if (name === 'agentDefaultModel') {
         return withDefaultModel ? { currentSelection: () => ({ provider: 'stub-provider', model: 'stub-model' }) } : undefined;
       }
+      if (name === 'sessionTitle') return { rename: (session, label) => { renames.push({ id: session?.id, label }); } };
       return undefined;
     },
     on: () => () => {},
   };
-  return { ctx, created, inbox, agentCtxHandlers, get live() { return live; } };
+  return { ctx, created, inbox, renames, agentCtxHandlers, get live() { return live; } };
 }
 
 const dataDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-check-'));
@@ -121,6 +123,12 @@ check('second utterance reuses the live agent instead of recreating it', () => {
   assert.equal(h1.created.length, 1);
 });
 check('both utterances landed in the inbox', () => { assert.equal(h1.inbox.length, 2); });
+// The bridge only learns the speaker's name from the plugin environment, which
+// can arrive a turn later than session creation; the IP-only title must heal.
+check('the device label titles the session', () => {
+  assert.deepEqual(h1.renames, [{ id: result1.sessionId, label: '小爱音箱' }]);
+});
+check('a repeat delivery does not re-title', () => { assert.equal(h1.renames.length, 1); });
 
 // --- case 2: a host without a default model selection -----------------------
 console.log('case 2: host without a default model selection');

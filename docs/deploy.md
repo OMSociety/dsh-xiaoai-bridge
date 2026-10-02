@@ -453,7 +453,7 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/session.js` | 一台音箱一个会话；`agents.resume` 优先、`agents.create` 兜底；**投递用 `agent.followup()`** |
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
-| `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，13 项断言，含 §12.6 坑三的回归） |
+| `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，15 项断言，含 §12.6 坑三的回归） |
 | `scripts/check-supervisor.mjs` | 进程收养单测（10 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
 | `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` 三项） |
 
