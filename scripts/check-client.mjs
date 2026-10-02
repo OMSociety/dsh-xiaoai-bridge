@@ -5,8 +5,9 @@
  * so there is no bundler to catch mistakes. This script evaluates the bundle in
  * a sandbox with stubbed `react` / `react/jsx-runtime`, then asserts that the
  * module id matches the package name, that the plugin exports `apply`/`inject`,
- * and that applying it registers the expected settings tab. It also renders the
- * tab once with stubbed hooks to prove the component tree builds.
+ * and that applying it registers the bundle's configuration under the slot the
+ * plugin manager actually dispatches. It also renders the component once with
+ * stubbed hooks to prove the tree builds in both the `page` and `summary` views.
  *
  * Run: node scripts/check-client.mjs
  */
@@ -19,7 +20,11 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLIENT_FILE = join(PACKAGE_ROOT, 'lib', 'client.js');
 const MANIFEST_FILE = join(PACKAGE_ROOT, 'package.json');
 
-const EXPECTED_TAB = Object.freeze({ name: 'settings.plugins.tab', id: 'xiaoai', label: '小爱音箱' });
+/**
+ * dsh-client-ui-plugin-manager owns `plugins.bundle.config` and dispatches it
+ * with `{ entryKey: pkg.name }`, so the cell key must be the package name.
+ */
+const EXPECTED_SLOT = Object.freeze({ name: 'plugins.bundle.config', keyProperty: 'key' });
 
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); };
@@ -96,7 +101,8 @@ if (captured !== null) {
       'bundle inject must include the "slots" service, got ' + JSON.stringify(mod.inject),
     );
 
-    // 3. Applying the plugin must register the settings tab we advertise.
+    // 3. Applying the plugin must register the bundle-configuration cell the
+    //    plugin manager dispatches by package name.
     const registrations = [];
     const ctx = {
       slots: {
@@ -114,18 +120,20 @@ if (captured !== null) {
     check(registrations.length === 1, `expected exactly 1 slot registration, got ${registrations.length}`);
     const first = registrations[0];
     if (first) {
-      check(first.options.name === EXPECTED_TAB.name, `slot name ${JSON.stringify(first.options.name)} != ${JSON.stringify(EXPECTED_TAB.name)}`);
-      check(first.options.id === EXPECTED_TAB.id, `slot id ${JSON.stringify(first.options.id)} != ${JSON.stringify(EXPECTED_TAB.id)}`);
-      check(first.options.label === EXPECTED_TAB.label, `slot label ${JSON.stringify(first.options.label)} != ${JSON.stringify(EXPECTED_TAB.label)}`);
-      check(typeof first.options.order === 'number', 'slot registration needs a numeric order');
+      check(first.options.name === EXPECTED_SLOT.name, `slot name ${JSON.stringify(first.options.name)} != ${JSON.stringify(EXPECTED_SLOT.name)}`);
+      check(first.options.key === pkg.name, `slot key ${JSON.stringify(first.options.key)} != package name ${JSON.stringify(pkg.name)}`);
+      check(first.options.id === undefined, 'bundle-config slot takes "key", not "id"');
       check(typeof first.component === 'function', 'slot registration needs a component function');
 
-      // 4. The component must build its initial (loading) tree without throwing.
+      // 4. The component must build both views without throwing.
       if (typeof first.component === 'function') {
         try {
-          const tree = first.component();
-          const text = collectText(tree);
-          check(text.includes('小爱音箱'), 'tab does not render its title');
+          // collectText() returns the text nodes; join them before substring checks.
+          const page = collectText(first.component({ view: 'page' })).join('');
+          check(page.includes('配置概览'), 'page view does not render its section heading');
+          check(page.includes('小爱音箱'), 'page view does not name the device');
+          const summary = collectText(first.component({ view: 'summary' })).join('');
+          check(summary.includes('小爱音箱'), 'summary view does not name the device');
         } catch (err) {
           failures.push('component render threw: ' + String(err?.message ?? err));
         }
@@ -151,4 +159,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error('  - ' + failure);
   process.exit(1);
 }
-console.log('client bundle check OK: id=' + pkg.name + ', tab=' + EXPECTED_TAB.id + ' (' + EXPECTED_TAB.label + ')');
+console.log('client bundle check OK: id=' + pkg.name + ', slot=' + EXPECTED_SLOT.name + ' key=' + pkg.name);

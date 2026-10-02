@@ -364,9 +364,51 @@ dsh plugin --profile desktop add D:\WorkSpace\dsh-xiaoai-bridge --config.minimum
 - `GET /plugin/xiaoai/health` → **200**，`checks` 四项全 true（bridgeDir/python/modelsDir/skillFile）
 - `GET /config` → 200；`POST /config` → 200；跨域 origin → **403**；未知路由 → 404
 
-### 11.5 尚未验证（等 1.10 断点）
+### 11.5 尚未验证
 
-- 设置页是否真的出现「小爱音箱」页签，Console 有无 `Failed to load plugins`。
-- `dsh.client.inject` 用完整 scoped 名 `["@deepseek-ai/dsh-client-ui-slots"]` 是否被接受
-  （判据就是页签能否出现；不行则退回裸服务名写法）。
 - 重启后 bundle 是否仍在 `dsh.profile.bundles` 里被正常装载（不以 `dsh plugin list` 为加载证据）。
+- 主界面「插件」→ 本 bundle 页面上是否真的渲染出「配置概览」一段（§11.6 修正后的判据）。
+
+### 11.6 首次尝试放错了槽位（已修正）
+
+第一次把页面注册进 `settings.plugins.tab`，重启后**页签确实出现了，但位置错了**——它落在
+「设置 → 内置插件」的标签条里，与「MinerU 解析」并列，而那是**宿主自己的设置页**待的地方。
+
+官方技能 `C:\Users\Administrator\.dsh\skills\dsh-plugin-creator` 的
+`check-mounts.mjs --explain` 直接给了答案；`plugins.item` 的槽位说明原文就写着：
+
+> OCCUPIED by the official settings pages, one companion package per host-plane
+> namespace; **a bundle's configuration belongs in `plugins.bundle.config` or
+> `plugins.row.config` instead**.
+
+正确落点与契约（`--explain` 给出 source
+`packages/client/ui-plugin-manager/src/client/slot-contract.ts:94`，分发代码见 asar 内
+`@deepseek-ai/dsh-client-ui-plugin-manager/lib/client.js`）：
+
+| 项 | 值 |
+|---|---|
+| 槽位 | `plugins.bundle.config`（keyed / root / `shadows-shipped-ui`） |
+| key | **bundle 的包名**，即 `dsh-xiaoai-bridge` |
+| 声明者 | `main` 里的 `client-ui-plugin-manager` → `dsh.client.inject` 写 `["@deepseek-ai/dsh-client-ui-plugin-manager"]` |
+| ownerProps | `{ view: 'summary' \| 'page' }`（本槽位只按 `view: 'page'` 渲染，**不传 `form`**） |
+| 渲染位置 | 主界面「插件」→ 该 bundle 自己的页面里，**描述与行列表之间** |
+
+宿主的分发代码原文（决定「注册了为什么没出现」）：
+
+```js
+configured: ledger.bundles.has(openPkg.name)   // ledger.bundles = plugins.bundle.config 的 key 集合
+...
+configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: pkg.name }) : null
+```
+
+即：**注册的 key 就是包名**，页面按包名分发；`configured` 为真才渲染这一段，所以 key 写错就等于隐身。
+`plugins.row.config` 的 key 是 `` `${bundle}#${rowId}` ``（本插件为 `dsh-xiaoai-bridge#xiaoai`），
+且那一侧**会**传 `form`；本插件只声明一行，故配置段走 `plugins.bundle.config`。
+
+**教训（并入本仓库工作规则）**：
+
+1. `dsh.client.inject` 填**声明者的包名**（`--explain` 输出里的「声明者」），
+   `lib/client.js` 导出的 `inject` 填**服务名**（如 `slots`）——两者不是一回事。
+2. 选槽位先跑 `check-mounts.mjs --explain <key>` 读 purpose，**不要照抄别的插件的写法**：
+   MinerU 用 `settings.plugins.tab` 是因为它要在设置区里加一个页面，不是 bundle 配置。
+3. 改完跑 `check-mounts.mjs --check <插件目录>` 静态核对字面量 slot key（本仓库当前 0 error）。
