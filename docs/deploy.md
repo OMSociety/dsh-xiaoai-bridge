@@ -235,7 +235,11 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `tests/test_playback_gate.py` 15 条，见 §12.16）
 - [ ] 3.10 多设备设计验证（`device_host` 已全链路透传，多台实机验证待用户有第二台音箱）
 - [ ] 3.11 fork 自加 API Server bearer 鉴权（上游 9 个端点仍无鉴权；loopback 限定，待排期）
-- [ ] 3.13 人格提示词 + replyer 模型（planner/replyer 拆分，待与用户确定设置项后落地）
+- [x] 3.13 人格提示词 + replyer 模型（三个字段 + 回复器 + 自动接管播报 + `spoken.jsonl` 留痕，
+      见 §12.17/§12.18/§12.19；`scripts/check-speak.mjs` 约 40 条断言，**实机待验证**）
+- [x] 3.14 会话分组：按工作区登记音箱会话（`attachToWorkspace()`，见 §12.20）
+- [ ] 3.15 实机验收（用户重启 DSH 后）：语音一轮 → 听到口语化播报、`spoken.jsonl` 落一行、
+      音箱会话出现在工作区分组里
 
 ## 9. 第 1 期实现决策
 
@@ -957,4 +961,106 @@ DSH 会话里也能看到模型在**同一轮**里连调约 6 次 `xiaoai_speak`
 的兜底分支走的是 `speaker.play(text=...)` 默认 `blocking=True`，由第 2 条天然覆盖；
 但**真正判断「音箱还在响吗」只有设备事件与估算两种间接证据**，没有拿到 Rust 侧播放结束回调。
 如果实机上仍有回声，第一个要调的是 `RELEASE_TAIL_SECONDS` 与 `SPEAKING_RATE_CPS`。
+
+### 12.17 自动接管播报：回复正文本身就是要说的话
+
+**症状（2026-10-03 实机）**：音箱里的回答又长又念不出口 —— 模型把屏幕上的排版
+（标题、列表、`**加粗**`）照样写进回复，然后因为旧的规则文本「你必须调用
+`xiaoai_speak` 工具」而**每条回复都只走工具**，工具文本也就等于那条长文本。
+另一端更糟：规则把模型训练成「永远不会直接回答」，replyer 这类后处理根本没上线。
+
+**设计**：播报不再依赖模型记得调工具，而是**接在回合结束上**。新增三个模块：
+
+| 文件 | 职责 |
+|---|---|
+| `lib/auto-speak.js` | 按会话跟踪一「轮」：`POST /asr` 开轮 → `assistant/message` 记草稿（**最新一条胜出**）→ `turn/end` 才真正播报 |
+| `lib/replyer.js` | 把「要表达的意图」改写成口语（人格 + 风格 + 输出限制组 system 提示，历史 + 意图组 user 消息），走 `ctx.llm.stream` |
+| `lib/speech-log.js` | 追加写 `<dataDir>/spoken.jsonl`，只落盘不参与决策 |
+
+**为什么只在 `turn/end` 播报**：DSH 的回合是提交型的（§12.16），`assistant/message`
+可能来好几条（中间步骤、工具前的铺垫）。等到回合结束再取「最后一条最终文本」，
+就不会把半句话念出去，也不需要去抖定时器。
+
+**工具仍是逐字逃生舱**：一轮里模型调了 `xiaoai_speak`，就**只念工具文本**、不过
+回复器，本轮正文丢弃；同一轮第二次调用被忽略（`claimToolSpeak` 先到先得）。
+「工具优先、照原样念」是刻意的：调用工具本身就是在说「这句话要逐字念」。
+
+**失败与超长**：
+- 回复器失败（含 `NO_ADAPTER` / `RATE_LIMIT` 等终结 chunk）→ 念
+  `replyerFailureText`（默认「回复器调用失败」），**绝不把未润色的原文当正常回复念出去**。
+- 会话没选模型（`no-route`）→ 这是配置缺失，不是回复器故障，念截断后的 agent 原文。
+- 超过 `spokenMaxChars` → 让回复器**精简一次**，仍超则在最后一个句号/问号/叹号处截断。
+- 消息形状兜底：system+user 两条消息失败时，重试一次合成单条 user 消息。
+
+**规则文本反转**：`dsh.rule_prompt_for_skill` 的默认文本不再要求「必须调用工具」，
+改成「正文会被自动念出来，直接写要说的话就好；只有要逐字念的内容才调工具」。
+这句话现在由**插件拥有**（`lib/render-config.js` 渲染），所以老部署不用手改；
+桥接器模板里的同名字符串也已同步（`bridge/config.py`）。
+
+**离线测试**：`scripts/check-speak.mjs`（约 40 条）覆盖留痕、截断、路由解析、提示词
+组装、重试/精简/失败/无路由，以及 auto-speak 的「最新草稿胜出」「工具轮不重复播报」
+「一轮只认一次 claim」「历史裁剪」「失败念提示语」。六个 checker 全绿：
+`check-client` / `check-config` / `check-keywords` / `check-session` /
+`check-supervisor` / `check-speak`。
+
+**仍未实机验证**：真实模型下 replyer 的改写质量与 800ms 级别的感知延迟、音箱念出
+超 300 字时的截断手感。
+
+### 12.18 人格三层：谁说的话归谁管
+
+设置页把人格拆成三个字段，**只有前两个进回复器**：
+
+| 字段 | 注入位置 | 影响范围 |
+|---|---|---|
+| `personality`（人格设定） | 回复器 system：「关于你自己：…」 | 只有被念出来的那句话 |
+| `replyStyle`（说话风格） | 回复器 system：「说话风格：…」 | 同上 |
+| `behaviorStyle`（行动准则） | **语音规则文本**，作为 `行动准则：…` 追加 | 音箱会话的 agent（思考与行动），不影响桌面会话 |
+
+`behaviorStyle` 拼在规则文本里，而不是走 `system-prompt/assemble`，理由是宿主自带的
+插件开发规范逐字写着「**Do not listen to `system-prompt/assemble` to add or remove
+tools or text.**」（`cordis-plugin-development/references/practices.md`），而且
+profile 级的 `ctx.systemPrompt.section()` 会漏进**所有**桌面会话 —— 语音规则文本由
+桥接器每轮追加在语音输入后面，天然只作用于音箱会话。实现见 `lib/render-config.js`
+的 `composeVoiceRule()`。
+
+### 12.19 播报留痕：`spoken.jsonl`
+
+每次真的念出去一句，就追加一行 JSON 到 `<dataDir>/spoken.jsonl`：
+
+```json
+{"time":"2026-10-03T01:12:44.190Z","device":"192.168.1.191","intent":"回合结束时的最终文本","spoken":"实际念出来的口语化句子","provider":"deepseek","model":"deepseek-chat","source":"replyer"}
+```
+
+`source` ∈ `replyer`（回复器改写）/ `tool`（逐字工具）/ `failure`（失败提示语）/
+`raw`（无路由时念的原文）。用途是回答「音箱刚才到底念了什么」——实机排查回声、
+串词、答非所问时，`bridge.log` 只有「我说：」的粗粒度记录，这一行才是原文对照。
+写入是尽力而为：目录不存在就建、失败只 warn 一次，绝不让留痕拖垮回合。
+
+`dataDir` = `<DSH_HOME>/xiaoai-bridge`（没有 `DSH_HOME` 时 `~/.dsh/xiaoai-bridge`），
+和 `devices.json`、`bridge.pid`、`config.py` 同一个目录。
+
+### 12.20 会话分组：为什么音箱会话显示「未分组」
+
+**症状（m04179）**：`sessionCwd` 指的是工作区里的子目录（`D:\WorkSpace\XiaoAI`），
+会话却落在侧栏的「未分组」里。
+
+**机制**（读 `@deepseek-ai/dsh-workspace/lib/index.js`，宿主源码）：
+- 一个分组 = 一条 workspace 记录（`path` / `title` / `sessionIds` 有序账本）。
+- `WorkspaceEntity.sessionIds` 的 getter **按 cwd 过滤**：
+  `this.record.sessionIds.filter((id) => this.host.sessionPath(id) === this.record.path)`。
+- `attachSession(sessionId)` 会先 realpath 归一化会话 header 里的 cwd，然后逐字
+  `if (cwd !== this.record.path) throw` —— **cwd 必须正好等于工作区目录**，子目录不行。
+- **没有任何隐式attach**：宿主的 session controller 只在调用方传了 `workspaceId`
+  时才 `attachSession`。插件用 `agents.create` 建会话，不经过那条路径，所以从来没人
+  把它登记进账本。
+- `insertSessionBefore` 对没登记过的会话直接抛 `WorkspaceMoveInvalidError`
+  （`the session is not accounted`），所以「事后拖进分组」不是可用的修法。
+
+**修法**（`lib/session.js` 的 `attachToWorkspace()`）：建完会话后拿 cwd 去
+`workspaceRegistry.resolveByPath(cwd)` 查工作区，查到就 `attachSession`；
+查不到就什么都不做（宿主反正会拒，何必抛一次）。resume 分支也尽力附一次，
+用来治愈「会话建在工作区之前」的老会话。**因此要让它出现在工作区分组里，
+`sessionCwd` 要填写工作区目录本身，而不是它下面的子目录**；想让音箱会话待在
+`D:\WorkSpace\XiaoAI`，就在侧栏把那个目录建成一个工作区，两者取其一。
+`scripts/check-session.mjs` 的 case 5/6 各加了一条断言（落地即成组 / 子目录不硬塞）。
 

@@ -185,11 +185,13 @@ if (captured !== null) {
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
             '对话保持时长（秒）', '朗读音箱插件', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
+            '自动念出回复', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
+            '回复器失败提示语', '人格设定', '说话风格', '行动准则', '输出限制', '语音消息附加提示',
           ];
           for (const label of configFields) {
             check(page.includes(label), `page view is missing the field ${JSON.stringify(label)}`);
           }
-          for (const heading of ['基本', '唤醒与语音', '应答与兜底', '桥接器进程', '本地 API 服务', '运行状态']) {
+          for (const heading of ['基本', '唤醒与语音', '应答与兜底', '播报与回复器', '人格与提示词', '桥接器进程', '本地 API 服务', '运行状态']) {
             check(page.includes(heading), `page view is missing the section ${JSON.stringify(heading)}`);
           }
 
@@ -227,7 +229,7 @@ if (captured !== null) {
             check(typeof field.resetLabel === 'string', `value field ${field.id} has no resetLabel`);
             check(typeof field.overriddenLabel === 'string', `value field ${field.id} has no overriddenLabel`);
           }
-          check(seen.switches.length === 3, `expected 3 Switch controls, got ${seen.switches.length}`);
+          check(seen.switches.length === 4, `expected 4 Switch controls, got ${seen.switches.length}`);
           for (const control of seen.switches) {
             check(typeof control.checked === 'boolean', 'a Switch has no checked value');
             check(typeof control.onChange === 'function', 'a Switch has no onChange');

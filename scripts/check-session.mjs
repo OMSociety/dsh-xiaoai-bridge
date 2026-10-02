@@ -33,6 +33,7 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
   const inbox = [];
   const renames = [];
   const agentCtxHandlers = [];
+  const attached = [];
   let live = null;
   let resumeCalls = 0;
 
@@ -56,14 +57,23 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
       }
       if (name === 'sessionTitle') return { rename: (session, label) => { renames.push({ id: session?.id, label }); } };
       if (name === 'workspaceRegistry' && workspacePath !== undefined) {
-        return { list: () => [{ path: workspacePath }] };
+        const entry = {
+          path: workspacePath,
+          attachSession: async (sessionId) => { attached.push({ path: workspacePath, sessionId }); },
+        };
+        return {
+          list: () => [entry],
+          // Async on the host (it canonicalizes the path first): a fake that
+          // answers synchronously would hide a missing `await`.
+          resolveByPath: async (path) => (path === workspacePath ? entry : undefined),
+        };
       }
       return undefined;
     },
     on: () => () => {},
   };
   return {
-    ctx, created, inbox, renames, agentCtxHandlers,
+    ctx, created, inbox, renames, agentCtxHandlers, attached,
     get live() { return live; },
     get resumeCalls() { return resumeCalls; },
   };
@@ -221,6 +231,12 @@ await bridge5.deliver({ host: '192.168.1.193', text: '你好' });
 check('an unconfigured sessionCwd uses the host workspace', () => {
   assert.equal(h5.created[0].meta.cwd, workspaceDir);
 });
+// A sidebar group is a workspace plus the sessions explicitly attached to it:
+// the host never infers membership from cwd, and it refuses to attach a session
+// whose cwd is not exactly the workspace path.
+check('a session created in a workspace directory is attached to it', () => {
+  assert.deepEqual(h5.attached, [{ path: workspaceDir, sessionId: h5.created[0].sessionId }]);
+});
 
 // --- case 6: an explicit sessionCwd wins over the host workspace ------------
 console.log('case 6: configured sessionCwd');
@@ -235,6 +251,11 @@ const bridge6 = createSessionBridge({
 await bridge6.deliver({ host: '192.168.1.194', text: '你好' });
 check('the configured sessionCwd is used verbatim', () => {
   assert.equal(h6.created[0].meta.cwd, configuredDir);
+});
+// Sub-directory of the workspace, or a directory nobody registered: the host
+// would refuse the attach, so the plugin does not even try.
+check('a session outside every workspace stays ungrouped', () => {
+  assert.deepEqual(h6.attached, []);
 });
 
 // --- case 7: a relative sessionCwd is refused, not passed through -----------

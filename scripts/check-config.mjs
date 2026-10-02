@@ -69,7 +69,7 @@ eq(splitList(''), [], 'empty text');
 eq(splitList(undefined), [], 'absent text');
 
 console.log('render-config: overrides');
-const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', asrBackend: '' });
+const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', asrBackend: '' });
 // `wakeup.timeout` is the one key always written: the plugin owns it with a
 // concrete default, and the bridge template's own value is the same 20 seconds.
 eq(bare, { wakeup: { timeout: DEFAULTS.wakeupTimeout } }, 'emptied fields fall back to the template default');
@@ -95,6 +95,7 @@ eq(full.dsh.tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
 eq(full.dsh.wakeup_reply, '在呢', 'dsh.wakeup_reply');
 eq(full.dsh.exit_reply, '拜拜', 'dsh.exit_reply');
 eq(full.dsh.fallback_text, '电脑睡了', 'dsh.fallback_text');
+eq(full.dsh.rule_prompt_for_skill, DEFAULTS.voiceRuleText, 'dsh.rule_prompt_for_skill');
 eq(full.asr.model, 'paraformer', 'asr.model');
 
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-'));
@@ -184,7 +185,10 @@ print(json.dumps({
   const sparseSource = readFileSync(sparse, 'utf8');
   eq(sparseOverrides.wakeup, { keywords: ['小爱小爱'], timeout: DEFAULTS.wakeupTimeout }, 'sparse overrides carry only the wake words');
   eq(sparseOverrides.dsh.wakeup_keywords, ['小爱小爱'], 'the same words feed the routing hook');
-  ok(!sparseSource.includes('rule_prompt'), 'template-only keys are never restated in the generated file');
+  // `rule_prompt` (the text channel's wording) is template-only: the plugin
+  // writes `rule_prompt_for_skill` and must leave the other one alone.
+  ok(!sparseSource.includes('"rule_prompt"'), 'template-only keys are never restated in the generated file');
+  ok(!sparseSource.includes('response_timeout'), 'template-only keys are never restated in the generated file');
   ok(!sparseSource.includes('doubao'), 'untouched sections stay out of the generated file');
 } finally {
   rmSync(workDir, { recursive: true, force: true });

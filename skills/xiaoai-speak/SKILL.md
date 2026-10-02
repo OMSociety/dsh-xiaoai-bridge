@@ -4,28 +4,37 @@ Speak text out loud through the user's XiaoAI speaker (小爱音箱).
 
 ## When to use
 
-Use this skill whenever the user wants sound to come out of the speaker rather
-than text on screen:
+**A message that arrived through the speaker is answered out loud by itself.**
+When the user says the wake word and talks to the speaker, the plugin reads the
+reply you write and speaks it, lightly rephrased into something that sounds
+natural out loud. So the normal voice conversation needs no tool call at all:
+just write the answer. The user cannot see this window — if you only think it,
+they hear nothing.
 
-- "让小爱说 ...", "用音箱播报一下 ...", "语音念一下 ...", "读出来"
-- "say it out loud", "announce ... on the speaker", "read this back to me"
-- a spoken summary, reminder, alert or notification
-- **a conversation that arrived through the speaker** — the user said the wake
-  word, spoke, and is now waiting to hear an answer. In that case the user
-  cannot see this window: if the reply stays on screen, they hear nothing.
+Call the `xiaoai_speak` tool when the exact wording matters or when the sound is
+not the reply itself:
 
-Do not use it for ordinary chat replies typed into the window: those belong in
-the conversation, not on the speaker. Only speak when the user asked for speech,
-when the message came in through the speaker, or when a task explicitly ends
-with an announcement.
+- the user asked for a specific text to be read out ("让小爱说 ...", "用音箱念
+  一下 ...", "read this back to me") and it must come out word for word
+- an announcement, reminder or alert should play while your reply stays a reply
+- a task finishes and the conclusion belongs on the speaker
+- the user asked for sound from a desktop conversation: "say it out loud",
+  "announce ... on the speaker"
+
+Do not call it for ordinary chat replies typed into the window that nobody asked
+to hear — those belong in the conversation, not on the speaker.
 
 ## How to call it
 
 Call the `xiaoai_speak` tool with the exact text to speak:
 
-- `text` (required): what to say. Write it the way it should be heard — no
-  Markdown, no code blocks, no bullet lists, no URLs read out character by
-  character. Keep it short; a speaker has no scrollbar.
+- `text` (required): what to say, written the way it should be heard. It is
+  spoken verbatim: no Markdown, no code blocks, no bullet lists, no URLs read
+  out character by character. Keep it short; a speaker has no scrollbar.
+
+One call per turn: a second `xiaoai_speak` in the same turn is ignored, and a
+turn that calls it speaks only what the tool was given — the reply text is not
+spoken a second time after it.
 
 The call returns as soon as playback has been handed to the speaker, so a long
 sentence does not hold the turn open. There is no blocking option: the bridge's
@@ -44,4 +53,5 @@ uses the asynchronous one.
 4. If `xiaoai_speak` reports that the speaker is unavailable, say so in text and
    carry on; do not retry in a loop.
 5. A spoken answer is still a normal answer: keep the full detail in the
-   conversation and put only the hearable summary on the speaker.
+   conversation and put only the hearable part on the speaker. In a voice turn
+   that means a short, plain reply — not a report with headings and tables.
