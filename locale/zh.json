@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "小爱音箱桥接器",
+    "description": "把小爱音箱接入 DeepSeek Harness：唤醒词、语音识别、DSH 会话与音箱播报，桥接器进程由插件托管。"
+  }
+}

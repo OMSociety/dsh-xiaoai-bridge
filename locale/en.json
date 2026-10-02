@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "XiaoAI Speaker Bridge",
+    "description": "Bridge a XiaoAI speaker to DeepSeek Harness: wake word, speech recognition, DSH sessions and speaker playback, with the bridge process hosted by the plugin."
+  }
+}

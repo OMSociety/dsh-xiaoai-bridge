@@ -15,11 +15,13 @@
       "types": "./lib/types/client.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*": "./locale/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/",
     "skills/",
+    "locale/",
     "cordis.patch.yml",
     "docs/",
     "README.md",

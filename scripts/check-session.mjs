@@ -14,9 +14,9 @@
  * Run: node scripts/check-session.mjs
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 const { createSessionBridge, SOURCE_KIND } = await import(new URL('../lib/session.js', import.meta.url).href);
 
@@ -28,18 +28,19 @@ const logger = {
 };
 
 /** Build a host-shaped ctx whose single device is a live agent. */
-function harness({ withDefaultModel = true } = {}) {
+function harness({ withDefaultModel = true, workspacePath } = {}) {
   const created = [];
   const inbox = [];
   const renames = [];
   const agentCtxHandlers = [];
   let live = null;
+  let resumeCalls = 0;
 
   const agent = { session: { id: null }, followup: (message) => { inbox.push(message); } };
   const agents = {
     // The host's registry.get(id) returns the Agent, not the create handle.
     get: (id) => (live && live.agent.session.id === id ? live.agent : null),
-    resume: async () => { throw new Error('no persisted session'); },
+    resume: async () => { resumeCalls += 1; throw new Error('no persisted session'); },
     create: async (options) => {
       created.push(options);
       agent.session.id = options.sessionId;
@@ -54,11 +55,18 @@ function harness({ withDefaultModel = true } = {}) {
         return withDefaultModel ? { currentSelection: () => ({ provider: 'stub-provider', model: 'stub-model' }) } : undefined;
       }
       if (name === 'sessionTitle') return { rename: (session, label) => { renames.push({ id: session?.id, label }); } };
+      if (name === 'workspaceRegistry' && workspacePath !== undefined) {
+        return { list: () => [{ path: workspacePath }] };
+      }
       return undefined;
     },
     on: () => () => {},
   };
-  return { ctx, created, inbox, renames, agentCtxHandlers, get live() { return live; } };
+  return {
+    ctx, created, inbox, renames, agentCtxHandlers,
+    get live() { return live; },
+    get resumeCalls() { return resumeCalls; },
+  };
 }
 
 const dataDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-check-'));
@@ -91,6 +99,15 @@ check('agent is created with agentOptions provider/model', () => {
 check('agent is created with a setup hook', () => {
   assert.equal(typeof h1.created[0].setup, 'function');
 });
+// DSH refuses to serve a session whose header has no `cwd` (the GUI then shows
+// "历史加载失败"), and the deployment persona's `{{cwd}}` variable has no value.
+// Both symptoms come from an empty `meta.cwd`, so it must never be empty.
+check('agent is created with an absolute working directory', () => {
+  const cwd = h1.created[0].meta?.cwd;
+  assert.equal(typeof cwd, 'string');
+  assert.ok(cwd.length > 0, 'meta.cwd was empty');
+  assert.ok(isAbsolute(cwd), `meta.cwd is not absolute: ${cwd}`);
+});
 const setupHandlers = [];
 h1.created[0].setup({ on: (event, handler) => { setupHandlers.push([event, handler]); return () => {}; } });
 const assemblyListener = setupHandlers.find(([event]) => event === 'system-prompt/assemble');
@@ -113,6 +130,7 @@ check('message carries the block content and the owned source kind', () => {
 await new Promise((resolve) => { setTimeout(resolve, 400); });
 check('device store records the session id', () => {
   const stored = JSON.parse(readFileSync(join(dataDir, 'devices.json'), 'utf8'));
+  assert.equal(stored.version, 2);
   assert.equal(stored.devices.length, 1);
   assert.equal(stored.devices[0].sessionId, result1.sessionId);
   assert.equal(stored.devices[0].name, '小爱音箱');
@@ -154,10 +172,97 @@ check('empty text is refused', () => {
   assert.equal(h3.created.length, 0);
 });
 
+// --- case 4: a version 1 store points at a cwd-less session -----------------
+// Such a session is on disk and valid, but the host's session controller
+// refuses to serve it (`session/not-found`), so the old link must not be reused.
+console.log('case 4: legacy device store');
+const legacyDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-legacy-'));
+const legacySessionId = 'session-95b1abb2-f868-43a3-8ead-a3651adc44dd';
+writeFileSync(join(legacyDir, 'devices.json'), `${JSON.stringify({
+  version: 1,
+  devices: [{
+    key: '192.168.1.191',
+    host: '192.168.1.191',
+    name: '小爱音箱',
+    sessionId: legacySessionId,
+    utterances: 5,
+    createdAt: 1,
+    updatedAt: 2,
+  }],
+}, null, 2)}\n`, 'utf8');
+const h4 = harness();
+const bridge4 = createSessionBridge({ ctx: h4.ctx, getConfig: () => ({}), dataDir: legacyDir, logger });
+const result4 = await bridge4.deliver({ host: '192.168.1.191', name: '小爱音箱', text: '你好' });
+check('a legacy session id is retired instead of resumed', () => {
+  assert.equal(result4.ok, true);
+  assert.notEqual(result4.sessionId, legacySessionId);
+  assert.match(result4.sessionId, /^session-/);
+  assert.equal(h4.resumeCalls, 0);
+  assert.equal(h4.created.length, 1);
+});
+await new Promise((resolve) => { setTimeout(resolve, 400); });
+check('the upgraded store is written back as version 2', () => {
+  const stored = JSON.parse(readFileSync(join(legacyDir, 'devices.json'), 'utf8'));
+  assert.equal(stored.version, 2);
+  assert.equal(stored.devices[0].sessionId, result4.sessionId);
+});
+check('a legacy record keeps its utterance count and name', () => {
+  const stored = JSON.parse(readFileSync(join(legacyDir, 'devices.json'), 'utf8'));
+  assert.equal(stored.devices[0].name, '小爱音箱');
+  assert.equal(stored.devices[0].utterances, 6);
+});
+
+// --- case 5: the working directory falls back to a host workspace -----------
+console.log('case 5: workspace directory fallback');
+const workspaceDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-workspace-'));
+const h5 = harness({ workspacePath: workspaceDir });
+const bridge5 = createSessionBridge({ ctx: h5.ctx, getConfig: () => ({}), dataDir, logger });
+await bridge5.deliver({ host: '192.168.1.193', text: '你好' });
+check('an unconfigured sessionCwd uses the host workspace', () => {
+  assert.equal(h5.created[0].meta.cwd, workspaceDir);
+});
+
+// --- case 6: an explicit sessionCwd wins over the host workspace ------------
+console.log('case 6: configured sessionCwd');
+const configuredDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-configured-'));
+const h6 = harness({ workspacePath: workspaceDir });
+const bridge6 = createSessionBridge({
+  ctx: h6.ctx,
+  getConfig: () => ({ sessionCwd: configuredDir }),
+  dataDir,
+  logger,
+});
+await bridge6.deliver({ host: '192.168.1.194', text: '你好' });
+check('the configured sessionCwd is used verbatim', () => {
+  assert.equal(h6.created[0].meta.cwd, configuredDir);
+});
+
+// --- case 7: a relative sessionCwd is refused, not passed through -----------
+console.log('case 7: relative sessionCwd');
+const h7 = harness({ workspacePath: workspaceDir });
+const bridge7 = createSessionBridge({
+  ctx: h7.ctx,
+  getConfig: () => ({ sessionCwd: 'relative/path' }),
+  dataDir,
+  logger,
+});
+await bridge7.deliver({ host: '192.168.1.195', text: '你好' });
+check('a relative sessionCwd falls back instead of being handed to the host', () => {
+  assert.equal(h7.created[0].meta.cwd, workspaceDir);
+  assert.ok(warnings.some((line) => line.includes('sessionCwd must be an absolute path')), warnings.join(' | '));
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();
+await bridge4.dispose();
+await bridge5.dispose();
+await bridge6.dispose();
+await bridge7.dispose();
 rmSync(dataDir, { recursive: true, force: true });
+rmSync(legacyDir, { recursive: true, force: true });
+rmSync(workspaceDir, { recursive: true, force: true });
+rmSync(configuredDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? '\nsession check OK' : `\nsession check FAILED (${failures})`);
 process.exitCode = failures === 0 ? 0 : 1;

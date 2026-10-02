@@ -215,6 +215,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 2.13 事件订阅（`ctx.on('session/event', ...)`，只读观察，异常被吞掉不影响 append）
 - [x] 2.14 闭环联调 —— **待用户重启 DSH 后实机验证**（说唤醒词 → 说话 → 看会话 → 听播报）
 - [x] 2.15 插件托管桥接器进程（计划未排期，作为插入任务实现；`lib/process.js` + `lib/bridge.js`）
+- [x] 2.16 修 `meta.cwd`（会话 header 无 `cwd` → `{{cwd}}` 渲染失败 + GUI「历史加载失败」，
+      见 §12.9；`sessionCwd()` 四级兜底 + `DEVICE_STORE_VERSION` 1→2 退役旧会话）
+- [x] 2.17 设置页重写 + 插件名 i18n（原生表单件 + `{ops,revision}` 写路由 + 包内 `locale/*.json`，
+      见 §12.10；待用户重启 DSH 后在插件页确认渲染与保存）
 
 ## 9. 第 1 期实现决策
 
@@ -453,11 +457,11 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/session.js` | 一台音箱一个会话；`agents.resume` 优先、`agents.create` 兜底；**投递用 `agent.followup()`** |
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
-| `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，15 项断言，含 §12.6 坑三的回归） |
+| `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，7 组 23 项断言，含 §12.6 坑三与 §12.9 坑六的回归） |
 | `scripts/check-supervisor.mjs` | 进程收养单测（10 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
-| `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` 三项） |
+| `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` / 官方表单件形状 / 14 个字段与 5 个分区 / `locale/*.json` 契约） |
 
-四个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
+五个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
 
 1. **投递必须用 `agent.followup(message)`**。`agent.inject()` 不唤醒 agent，
    空闲 agent 收到消息后一动不动。
@@ -467,6 +471,8 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
    （裸值会让会话当场可写、之后永久不可读）。
 4. **`agents.create` / `agents.resume` 必须带 `agentOptions` + `setup`**，
    否则第一条消息会以 `prompt variable "{{model}}" has no value` 收尾（§12.6 坑三）。
+5. **`meta.cwd` 必须是绝对路径且不能省略**。省略它不会当场报错，而是让宿主
+   **拒绝服务这个会话**（GUI「历史加载失败」）且 `{{cwd}}` 无值（§12.9 坑六）。
 
 ### 12.3 两个真坑（重启前修掉）
 
@@ -507,8 +513,18 @@ core/models/keywords.txt  181 字节 → 93 字节
   `GET/POST /config` 200、`GET /bridge/status` 200、
   `POST /asr` 无 bearer → 401、空文本 → 400、无 agents 服务 → 503、
   跨域 → 403、未知路由 → 404。
-- 会话桥接单测（`scripts/check-session.mjs`）：交付结果、`source.kind`、content 数组形状、
-  设备库落盘、第二次投递复用活 agent、无默认模型时的降级告警、空文本拒绝。
+- 配置写路由两种形态都对：`{patch,revision}` → 200、`{ops,revision}` → 200；
+  `{patch,ops}` 同时给 → 400、空 `ops` → 400、非法 op → 400、过期 revision → 409。
+- 会话桥接单测（`scripts/check-session.mjs`，7 组 23 项）：交付结果、`source.kind`、
+  content 数组形状、`meta.cwd` 为绝对路径、设备库落盘（`version: 2`）、第二次投递复用活 agent、
+  无默认模型时的降级告警、空文本拒绝、**v1 遗产设备库退役重建**、
+  工作区兜底 / 配置生效 / 相对路径回退三条 `sessionCwd` 路径。
+- 进程收养单测（`scripts/check-supervisor.mjs`，10 项）与客户端 bundle 校验
+  （`scripts/check-client.mjs`：官方表单件形状、14 个字段与 5 个分区标题、
+  `locale/*.json` 的存在性/语言 id/`meta.title|description` 非空、`exports` 与 `files` 是否放行 locale）。
+- locale 解析实测（在 profile 目录里跑）：
+  `require.resolve('dsh-xiaoai-bridge/locale/en.json')` → `D:\WorkSpace\dsh-xiaoai-bridge\locale\en.json`，
+  即 `exports` 的 `"./locale/*"` 已生效（`readPluginMeta` 走的就是同一个 Node 解析器）。
 
 ### 12.5 未验证（需要用户重启 DSH）
 
@@ -638,7 +654,96 @@ DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」
 回归测试 `node scripts/check-supervisor.mjs`（10 项）在临时目录里各起一个假
 `main.py`（`pythonPath` 指向 node 自身）覆盖两条分支，不会碰到真实的音箱连接。
 
-### 12.9 已知遗留
+### 12.9 坑六：会话 header 里没有 `cwd`，一个原因两个症状
+
+首次实机联调（§12.6）之后暴露了两个看似无关的问题：
+
+1. 每一轮的 `deployment:persona-suffix` 都渲染失败（`{{cwd}}` 无值）；
+2. GUI 打开那个会话时报「历史加载失败：session "session-95b1abb2-…" not found
+   （session/not-found）」。
+
+**它们同一个根因，而且不是本地 DSH 损坏。** 取证：
+
+- `C:\Users\Administrator\.dsh\sessions` 下只有两个桶：`--D-WorkSpace--`（407 个会话）
+  与 `_no-cwd`（**1 个，就是我们那个**）。全机不存在第二个没有 `cwd` 的会话，
+  所以原有会话无一受影响；两边的 `session.v4.jsonl.zstd` 结构完全一致（能正常解开）。
+- 两份 header 的差别只有一个键：
+
+  ```
+  我们的： {"type":"session","version":4,"id":"session-95b1abb2-…","createdAt":…,"isSeeded":false,"delegationDepth":0}
+  健康的： {… , "cwd":"D:\\WorkSpace", "parentSession":"…", "origin":"subagent", "agentPreset":"cordis"}
+  ```
+
+- 持久化层本身**支持** `_no-cwd`：`dsh-session-persistence-jsonl/lib/index.js:902`
+  `projectDir(root, cwd)` 在 `cwd === undefined` 时就是 `join(root,'_no-cwd')`，
+  且 `:3359-3373 findLog(id)` 会遍历所有 project dir，按 id 找得到。
+- 拒绝发生在 **API 层**：`dsh-api-session-controller/lib/index.js:1566-1587`
+  `sourceFor()` 取到 observation 后第一件事就是
+
+  ```js
+  if (observation.header.cwd === void 0) {
+      observation[Symbol.dispose]();
+      rejectNotFound(address);
+  }
+  ```
+
+  `rejectNotFound`（`:1645-1651`）抛 `session/not-found`「session "<id>" not found」，
+  由 `dsh-client-ui-chat/lib/client.js:5444` 的 `"chat.loadError": "历史加载失败：{message}（{code}）"`
+  渲染成用户看到的那行红字。
+
+**结论**：文件读写没问题，是**宿主策略拒绝服务任何 header 里没有绝对 `cwd` 的会话**。
+插件的错：`lib/session.js` 在 `sessionCwd()` 为空时省略了 `meta.cwd`。
+
+修法（两处）：
+
+- `sessionCwd()` **永不返回空串**：配置值（须绝对）→ 宿主第一个工作区
+  （`ctx.get('workspaceRegistry')?.list?.()?.[0]?.path`）→ `process.cwd()` → `homedir()`。
+- `ensureAgent` 的 create 分支固定 `const meta = { cwd: sessionCwd() };`。
+
+另外 `DEVICE_STORE_VERSION` 从 1 升到 **2**：v1 记录指向的会话 header 里没有 `cwd`，
+**永远救不回来**，所以载入时直接退役它的 `sessionId`（历史文件留在磁盘上不动），
+并立刻回写设备库，避免崩溃后把旧链接复活。日志会留
+`device store v1 has no working directory on its sessions; starting fresh sessions`。
+
+`scripts/check-session.mjs` 的 case 4 就是这条回归：写一个 v1 设备库 → 断言它**不 resume**
+而是新建、`resumeCalls === 0`、去抖后回写成 `version: 2`、`name` 与 `utterances` 保留。
+
+### 12.10 设置页重写（第 2 期 UI 收尾）
+
+原来的 `lib/client.js` 是只读的「配置概览 / 环境自检 / 解析路径」三张卡片，
+用户评价「胡乱拼凑」。现在换成**与官方「子智能体」设置页同构的可编辑表单**：
+同一套 `@deepseek-ai/dsh-client-ui-primitives` 组件（`SettingsForm` /
+`SettingsValueField` / `Switch` / `SegmentedControl` / `Tag`），同样的「暂存草稿、
+点保存才写、离开丢弃」语义，14 个字段按 基本 / 唤醒与语音 / 桥接器进程 / 本地 API 服务
+四个分区排布，另附只读的运行状态区。
+
+三条关键决策：
+
+1. **不走 `ctx.configForms`**，改用现有 `/plugin/xiaoai/config` HTTP 路由自持草稿。
+   理由：① plugin-manager README `:108` 明说 bundle 级页面「can contain several entries
+   and have no single form」，自持草稿是官方认可的写法；② `configForms.whileServed`
+   要求登记前就知道命名空间，而我们要先问 `/health` 才知道（鸡生蛋）；
+   ③ 宿主已有的路由带 revision 围栏，不必再依赖一个客户端服务。
+2. **一次保存只发 `ops`，从不发 `patch`**。因为一次保存里可能同时有「改值」和「重置」，
+   而 `settings.update` 是合并语义、表达不了「还原到继承值」。
+   为此 `lib/http.js` 的 `POST /config` 增加了 `{ops, revision}` → `settings.mutate(...)`
+   （`{op:'unset', path:[field]}` 才会回到 base 层）。
+3. **`apiServerTokenCredential` 用普通文本框而不是 `SettingsSecretField`**：
+   它存的是凭据**名**（`XIAOAI_API_TOKEN`），不是密钥本身。
+
+插件显示名的 i18n 走**包内 `locale/*.json`**，不需要写代码：
+`dsh-app-boot/lib/index.js:1969-1985 readPluginMeta()` 用 Node 模块解析器取
+`<包名>/locale/en.json`，再扫同目录的兄弟 `*.json` 作为各语言词典
+（文件名即语言 id，内容 `{"meta":{"title":…,"description":…}}`）。
+两个前提缺一不可：`package.json` 的 `exports` 放行 `"./locale/*"`（`readPluginMeta`
+走的就是那个解析器）、`files` 包含 `locale/`。
+中文名「小爱音箱桥接器」，英文名「XiaoAI Speaker Bridge」。
+
+`scripts/check-client.mjs` 现在同时守住两件事：客户端 bundle 的槽位/表单件形状，
+以及 locale 文件的存在性、语言 id 合法性、`meta.title|description` 非空、
+`exports`/`files` 是否放行。
+
+### 12.11 已知遗留
 
 - `lib/process.js` 的 `childEnv()` 会 `delete env.OPENAI_ENABLE`：OpenAI 兼容后端
   代码保留但插件托管下不可达（它只是可被手工启动的参考实现）。这是刻意的，
