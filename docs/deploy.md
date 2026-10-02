@@ -278,6 +278,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.10 合规自查（`package.json` 补 `@deepseek-ai/dsh-client-ui-primitives`
       peer、`files` 纳入 `bridge/` 与三份文档；确认 `pnpm-lock.yaml`、
       `bridge/device.json`、渲染产物与凭据都不入库；见 §12.28）
+- [x] 4.11 通读 + 子代理复核（README / CHANGELOG / CONTRIBUTING 十类事实逐条对照源码，
+      8 类全对；1 处真问题与 2 处措辞已改、1 条误报经复核后不改；见 §12.28.8）
+- [x] 4.12 给编码 agent 的 AGENTS.md（计划外增补：根 `AGENTS.md` 120 行；
+      `CONTRIBUTING.md` 加一行指向它、`package.json` 的 `files` 纳入它；见 §12.29）
 
 ## 9. 第 1 期实现决策
 
@@ -1655,6 +1659,69 @@ README / CHANGELOG / CONTRIBUTING 三份文档交给一个只做事实核对、�
 `&cacheSeconds=1` 实测已经不是负结果），等缓存过期自会恢复，不必改 URL。
 **实机验收（第 4 期那六条）仍待用户重启 DSH**：插件在 profile 里是
 `link:D:/WorkSpace/Github/dsh-xiaoai-bridge`，重启即载入当前工作树，无需重新安装。
+
+### 12.29 写给编码 agent 的 AGENTS.md（4.12，计划外增补）
+
+#### 12.29.1 为什么加
+
+仓库此前没有根级 `AGENTS.md`，只有 `bridge/AGENTS.md`（上游原文，375 行，管 Python/Rust
+侧）。根目录这一半（Node 插件）的命令、模块边界与禁区没有任何机器可读的入口——README
+讲的是「怎么用」，CHANGELOG 讲的是「改过什么」，都不是「你该怎么做改」。当前会话里由
+用户点名要这份文件。
+
+#### 12.29.2 按哪个技能写
+
+本机技能 `C:\Users\Administrator\.dsh\skills\agent-md-creator\`（`SKILL.md` 147 行，另有
+`references/section-guide.md`、`references/anti-patterns.md`、`references/ci-check.md`、
+`assets/{AGENTS.md,module-AGENTS.md}.tmpl`、`scripts/check_agents_md.py`；本会话的工具面板
+没装载这个技能，直接读盘上的文件照做）。三条硬原则：机器可读、渐进式披露（目标 ≤200 行、
+硬上限 500 行）、规范行为而非描述状态；只写工具管不住的东西——八个 checker 已经守住的
+事实不重复描述，只写「改哪类东西要跑哪个检查」。
+
+#### 12.29.3 机器校验
+
+```powershell
+python C:\Users\Administrator\.dsh\skills\agent-md-creator\scripts\check_agents_md.py --root D:\WorkSpace\Github\dsh-xiaoai-bridge
+```
+
+第一版报 1 条 warn：把 `Get-ChildItem scripts\check-*.mjs | ForEach-Object { … }` 那行当
+命令解析，`Get-ChildItem` 既不在仓库配置里也不在 PATH 上（PowerShell 内建命令本来就不是
+可执行文件）。改成八条逐行 `node scripts\check-*.mjs` 后 **error 0 / warn 0**；唯一的
+info 是上游 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——那是上游文件，本 fork 不动。
+成文 120 行。
+
+#### 12.29.4 盲测与它抓出来的四处缺口
+
+派了一个只拿到这份 `AGENTS.md` 的子代理（`6ea8b41d-786d-4078-9486-fd31200fc91b`，明确
+不许读仓库里其它文件），问三个问题：怎么跑测试、改 `lib/client.js` 前后必须做什么、
+三条禁令与理由。三问都答得出，但它报出四处缺口，都已补进成文：
+
+1. 八条 node 检查用的是相对路径，却没说工作目录 → 补「工作目录都是仓库根，在别处跑会
+   直接报找不到文件」。
+2. `90 passed, 19 subtests` 是「必须等于」还是「不许低于」没定义 → 补「基线只许升：变大
+   是新增测试，变小说明有测试被删或被跳过，要查清」。
+3. 「改界面」这条链没写动手前读什么，而它旁边的「改 teardown」「改 `bridge/`」都写了 →
+   在「修改契约」开头补一段通用必读（README 配置项与排错表、CONTRIBUTING 约定、
+   `docs/deploy.md` 相关 §12.x）。
+4. 风险区说 `lib/client.js` 「改完必跑 `check-client`」，验收标准第 3 条却要求真机核对，
+   两处口径不一致 → 风险区那行补「可见行为还要按验收标准第 3 条重启后核对」，并写明
+   `check-client` 能拦住什么（语法、模块形态、席位注册）、拦不住什么（真机交互与桥接器
+   进程行为）。另外补一条优先级规则：一次改动跨多条链时相关检查取并集。
+
+#### 12.29.5 随附改动
+
+- `CONTRIBUTING.md` 开头一句话后加「给编码 agent 的硬规则（命令、模块边界、禁区、验收）
+  见 [AGENTS.md](AGENTS.md)」——`CONTRIBUTING.md` 是给人看的流程，`AGENTS.md` 是给 agent
+  看的判据，互相指一下。
+- `package.json` 的 `files` 纳入 `"AGENTS.md"`（与 `CHANGELOG.md`/`CONTRIBUTING.md`/
+  `DISCLAIMER.md` 同一处理），`node -e` 校验 JSON 合法。
+- 纯文档改动，版本仍为 `0.2.8`（沿用仓库既有习惯：文档提交不 bump）。
+
+#### 12.29.6 维护
+
+`AGENTS.md` 末尾写明与代码同 PR 更新，并点出四类「必须同步」的改动：验收命令
+（`scripts/check-*.mjs` 的增删）、模块边界与端口、`.gitignore` 的禁区、profile 的安装
+方式。`bridge/` 侧规则仍归 `bridge/AGENTS.md`，冲突时以更接近改动点的那份为准。
 
 
 

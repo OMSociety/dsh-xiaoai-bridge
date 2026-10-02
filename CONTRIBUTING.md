@@ -1,6 +1,6 @@
 # 参与开发
 
-这个仓库有两半：根目录的 **DSH 插件**（Node，`lib/`）与 `bridge/` 下的 **Python 桥接器**（fork 上游）。改动前先读 [README.md](README.md) 与 [docs/deploy.md](docs/deploy.md)——后者按「期」记录了每个决策、踩过的坑与取证方式。
+这个仓库有两半：根目录的 **DSH 插件**（Node，`lib/`）与 `bridge/` 下的 **Python 桥接器**（fork 上游）。改动前先读 [README.md](README.md) 与 [docs/deploy.md](docs/deploy.md)——后者按「期」记录了每个决策、踩过的坑与取证方式。给编码 agent 的硬规则（命令、模块边界、禁区、验收）见 [AGENTS.md](AGENTS.md)。
 
 ## 环境
 
