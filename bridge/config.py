@@ -227,7 +227,7 @@ APP_CONFIG = {
         "input_mode": "local_asr",
         "exit_keywords": ["退出", "停止", "再见"],  # 退出连续对话的关键词
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
-        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
+        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发来的语音，他看不到你回复的文字。你必须调用 xiaoai_speak 工具把要说的内容念出来，否则主人什么都听不到。字数控制在300字以内",
         "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话
     },
     # OpenAI-compatible Service Configuration

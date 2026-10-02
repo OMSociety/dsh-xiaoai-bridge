@@ -453,6 +453,8 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/session.js` | 一台音箱一个会话；`agents.resume` 优先、`agents.create` 兜底；**投递用 `agent.followup()`** |
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
+| `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，13 项断言，含 §12.6 坑三的回归） |
+| `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` 三项） |
 
 四个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
 
@@ -463,7 +465,7 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 3. **`source.kind` 不能是裸 `'plugin'`**。我们写 `plugin:dsh-xiaoai-bridge`
    （裸值会让会话当场可写、之后永久不可读）。
 4. **`agents.create` / `agents.resume` 必须带 `agentOptions` + `setup`**，
-   否则第一条消息会以 `prompt variable "{{model}}" has no value` 收尾（§12.7 坑三）。
+   否则第一条消息会以 `prompt variable "{{model}}" has no value` 收尾（§12.6 坑三）。
 
 ### 12.3 两个真坑（重启前修掉）
 
@@ -517,7 +519,7 @@ core/models/keywords.txt  181 字节 → 93 字节
 4. 说退出词「退出」/「停止」/「再见」能打断并恢复监听；
 5. 无重复播报。
 
-### 12.7 第 1 次实机联调（2026-10-02 23:20）
+### 12.6 第 1 次实机联调（2026-10-02 23:20）
 
 链路的前半段**一次通过**：`bridge.log` 依次出现
 
@@ -582,7 +584,45 @@ seq 9  turn/end  reason: { kind: "error", error: {
 与 `agents.create({sessionId, meta, ...factory})`。宿主包解析不到时退回一个只注册
 `system-prompt/assemble` 的最小兜底（`{{model}}` 正是致命的那一半，路由另有 `agentOptions`）。
 
-### 12.6 已知遗留
+### 12.7 坑四：模型不知道自己在跟「看不见屏幕的人」说话
+
+同一次联调还暴露出一个语义缺口（不是崩溃，是「跑通了但用户什么都听不到」）：
+`core/dsh_conversation.py` 提交语音识别结果时用的是 `DshManager._rule_prompt`
+——「将结果处理成纯文字版，不要返回任何 markdown 格式，并将字数控制在300字以内」。
+这是**文字频道**的话术。语音频道里模型把答案写成文字等于没说：桥接器按设计不做 TTS，
+用户听到的是沉默，而日志里一切正常。`bridge.log` 那一行
+`注意：将结果处理成纯文字版…` 就是现场证据。
+
+DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」），才是这个频道该用的。
+修法两处：
+
+- `core/dsh_conversation.py` 优先取 `_rule_prompt_for_skill`，为空才退回 `_rule_prompt`：
+
+  ```python
+  # The voice channel needs the skill variant: it is the text that tells
+  # the model the user cannot read its reply, which is what pushes it to
+  # speak through the plugin's `xiaoai_speak` tool.
+  rule = (
+      getattr(self.backend, "_rule_prompt_for_skill", "")
+      or self.backend._rule_prompt
+  )
+  full_text = text if not rule else text + "\n" + rule
+  ```
+
+- `config.py` 的 **`dsh` 段**把 `rule_prompt_for_skill` 改成显式点名工具（`openai` 段有同名
+  键，编辑时要带上同段的 `"wakeup_keywords": ["小爱小爱"]` 才能唯一定位）：
+
+  ```
+  注意：这条消息是主人通过小爱音箱发来的语音，他看不到你回复的文字。
+  你必须调用 xiaoai_speak 工具把要说的内容念出来，否则主人什么都听不到。
+  字数控制在300字以内
+  ```
+
+改 `.py` 需要桥接器进程重启才生效（`config.py` 有热重载，模块代码没有）。
+注意这不是它的职责：`lib/tools.js` 里 `xiaoai_speak` 的 description 也写了同样的引导，
+但**提示词里的话术比工具描述更能决定模型是否调工具**，两处都要保留。
+
+### 12.8 已知遗留
 
 - `lib/process.js` 的 `childEnv()` 会 `delete env.OPENAI_ENABLE`：OpenAI 兼容后端
   代码保留但插件托管下不可达（它只是可被手工启动的参考实现）。这是刻意的，

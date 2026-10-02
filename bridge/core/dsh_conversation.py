@@ -63,9 +63,16 @@ class DshConversationController(ExternalConversationController):
                 logger.info(f"Exit keyword: {kw}", module=self.LOG_MODULE)
                 return "exit"
 
-        full_text = text
-        if self.backend._rule_prompt:
-            full_text = text + "\n" + self.backend._rule_prompt
+        # The voice channel needs the skill variant: it is the text that tells
+        # the model the user cannot read its reply, which is what pushes it to
+        # speak through the plugin's `xiaoai_speak` tool. The plain rule prompt
+        # only talks about formatting, so fall back to it only when the voice
+        # one is empty.
+        rule = (
+            getattr(self.backend, "_rule_prompt_for_skill", "")
+            or self.backend._rule_prompt
+        )
+        full_text = text if not rule else text + "\n" + rule
 
         run_id = await self.backend.send(full_text, wait_response=False)
         if run_id is None:
