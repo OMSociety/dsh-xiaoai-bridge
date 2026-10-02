@@ -67,7 +67,7 @@ chmod +x /data/open-xiaoai/client
 | 项 | 值 |
 |---|---|
 | 上游 | `https://github.com/coderzc/open-xiaoai-bridge`（MIT） |
-| 本地 | `D:\WorkSpace\dsh-xiaoai-bridge` |
+| 本地 | `D:\WorkSpace\Github\dsh-xiaoai-bridge` |
 | 克隆方式 | 完整克隆（**保留上游 157 条提交历史**，不 depth=1） |
 | baseline 提交 | `b2d8384b44788a5376aa5eb5c4224ff503f4b746`（2026-09-24，`feat: 添加 OpenAI-compatible TTS / MLX-Audio TTS provider (#28)`） |
 | baseline tag | `baseline`，注释 `upstream coderzc/open-xiaoai-bridge @ b2d8384 (pre-fork baseline)` |
@@ -141,7 +141,7 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 |---|---|---|
 | uv | 已装（`C:\Users\Administrator\.local\bin\uv.exe`，`0.12.17`） | — |
 | Python 3.12 | 已装（uv 托管，`3.12.14`） | `C:\Users\Administrator\AppData\Roaming\uv\python\cpython-3.12.14-windows-x86_64-none\` |
-| 项目 venv | 已建 | `D:\WorkSpace\dsh-xiaoai-bridge\.venv`（Python 3.12.14） |
+| 项目 venv | 已建 | `D:\WorkSpace\Github\dsh-xiaoai-bridge\.venv`（Python 3.12.14） |
 | cmake | 已装 `4.4.3`（scoop） | `C:\Users\Administrator\scoop\apps\cmake`；shim 在 `C:\Users\Administrator\scoop\shims` |
 | rustup + Rust | 已装 `rustc 1.99.0 (b940084d7 2026-09-28)` / `cargo 1.99.0 (5f94df478 2026-08-27)`，默认 host `x86_64-pc-windows-msvc` | `C:\Users\Administrator\scoop\persist\rustup-msvc\.cargo` `…\.rustup` |
 | MSVC Build Tools 2022 | 已装（winget，v17.14.41，workload `Microsoft.VisualStudio.Workload.VCTools`）；MSVC 工具集 `14.44.35207`，Windows SDK `10.0.26100.0`；`link.exe` 在 `…\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe` | `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools` |
@@ -246,7 +246,7 @@ $env:PATH = "C:\Users\Administrator\.local\bin;$env:PATH"     # uv
 $env:PYTHONUTF8      = "1"      # 必须，见 10.2 坑二
 $env:PYTHONIOENCODING = "utf-8" # 同上的加强
 # 可选：$env:API_SERVER_ENABLE = "1"   → 开 127.0.0.1:9092
-Set-Location D:\WorkSpace\dsh-xiaoai-bridge
+Set-Location D:\WorkSpace\Github\dsh-xiaoai-bridge
 uv run --no-sync python -u main.py
 ```
 
@@ -313,37 +313,66 @@ ubus call mibrain text_to_speech '{"text":"...","save":0}'   # 返回 {"code": 0
 ### 11.1 仓库外形
 
 ```
-D:\WorkSpace\dsh-xiaoai-bridge\
+D:\WorkSpace\Github\dsh-xiaoai-bridge\        # 2026-10-03 从 D:\WorkSpace\dsh-xiaoai-bridge 迁移到此
   package.json          cordis.patch.yml      LICENSE        DISCLAIMER.md
-  lib\{index,config,http,skill,client}.js     lib\types\*.d.ts
+  lib\index.js          # 插件主体：设置命名空间、token 签发、工具/技能注册、生命周期
+  lib\config.js         # Schemastery 配置 schema + 双层覆盖解析
+  lib\http.js           # /plugin/xiaoai/* 宿主路由（health/config/devices/asr/bridge/*）
+  lib\skill.js          # 加载 skills\xiaoai-speak\SKILL.md
+  lib\client.js         # 客户端 bundle：plugins.bundle.config 设置页
+  lib\bridge.js         # 桥接器 HTTP 客户端（/api/play/text 等）
+  lib\process.js        # 桥接器子进程托管 + pidfile 收养
+  lib\session.js        # 设备→DSH 会话桥（agents.create/resume、设备库落盘）
+  lib\tools.js          # xiaoai_speak 工具定义
+  lib\types\*.d.ts
+  locale\{zh,en}.json   # 插件名 i18n，由 dsh-app-boot 的 readPluginMeta 解析
   skills\xiaoai-speak\SKILL.md
-  scripts\check-client.mjs
+  scripts\{check-client,check-session,check-supervisor}.mjs
   docs\deploy.md
-  bridge\               # fork 后的上游桥接器（含 core\models\，被 gitignore）
+  bridge\               # fork 后的上游桥接器（含 core\models\、target\，均被 gitignore）
 ```
 
 `git remote`：只有 `upstream = https://github.com/coderzc/open-xiaoai-bridge`（**没有 origin**，
-等用户提供 fork URL）。基线 tag：`baseline`；HEAD 仍在上游 `b2d8384`，第 1 期的改动尚未提交。
+等用户提供 fork URL）。基线 tag：`baseline`；HEAD 已在 fork 之后的本地提交线上（最新 `9ddb541`）。
 
 ### 11.2 安装记录
 
 ```powershell
 # 先在插件仓库里准备好唯一的外部依赖（pnpm 会把本地目录装成 link:，不代装它的依赖）
-Set-Location D:\WorkSpace\dsh-xiaoai-bridge
+Set-Location D:\WorkSpace\Github\dsh-xiaoai-bridge
 pnpm add "@deepseek-ai/schemastery@^3.18.4"
 
 # 再装进 desktop profile
-dsh plugin --profile desktop add D:\WorkSpace\dsh-xiaoai-bridge
+dsh plugin --profile desktop add D:\WorkSpace\Github\dsh-xiaoai-bridge
 ```
 
 实测落点：
 
 | 项 | 值 |
 |---|---|
-| profile 依赖 | `"dsh-xiaoai-bridge": "link:D:/WorkSpace/dsh-xiaoai-bridge"` |
+| profile 依赖 | `"dsh-xiaoai-bridge": "link:D:/WorkSpace/Github/dsh-xiaoai-bridge"` |
 | `dsh.profile.bundles` | 已追加 `"dsh-xiaoai-bridge"`（末位） |
-| `node_modules\dsh-xiaoai-bridge` | SymbolicLink → `D:\WorkSpace\dsh-xiaoai-bridge` |
+| `node_modules\dsh-xiaoai-bridge` | SymbolicLink → `D:\WorkSpace\Github\dsh-xiaoai-bridge` |
 | 依赖解析 | 仓库内 `node_modules\@deepseek-ai\schemastery\package.json` 存在（`link:` 语义要求插件自带依赖） |
+
+三个位置都要一起改，少一个就从旧路径加载（或直接报模块不存在）：
+
+| 位置 | 迁移前 | 迁移后 |
+|---|---|---|
+| profile 依赖（`package.json` 的 `dependencies`） | `link:D:/WorkSpace/dsh-xiaoai-bridge` | `link:D:/WorkSpace/Github/dsh-xiaoai-bridge` |
+| `node_modules\dsh-xiaoai-bridge` 符号链接 | `D:\WorkSpace\dsh-xiaoai-bridge` | `D:\WorkSpace\Github\dsh-xiaoai-bridge` |
+| 运行中的宿主进程 | 旧路径 | **必须重启 DSH 才会重新加载** |
+
+**移动仓库前必须先停桥接器**（Windows 不允许移动被占用目录）：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:19387/plugin/xiaoai/bridge/stop
+# → {"ok":true,"result":{"ok":true,"stopped":true}}；接着 bridge 状态应为 running:false
+```
+
+`Move-Item` 之后 `bridge\.venv` **不需要重建**：`pyvenv.cfg` 的 `home` 指向 uv 的基础解释器
+（`%APPDATA%\uv\python\cpython-3.12-windows-x86_64-none`），与项目路径无关；实测搬移后
+`import open_xiaoai_server, sherpa_onnx, numpy` 与 `pytest`（41 passed）全部照常。
 
 拿安装前备份：`D:\WorkSpace\_oxb-wheels\profile-backup\{package.json,pnpm-lock.yaml,pnpm-workspace.yaml,compatibility.json}.bak`。
 
@@ -364,7 +393,7 @@ dsh: plugin command failed
 - 绕过（已验证）：给这一次安装关掉时效策略即可。
 
 ```powershell
-dsh plugin --profile desktop add D:\WorkSpace\dsh-xiaoai-bridge --config.minimum-release-age=0
+dsh plugin --profile desktop add D:\WorkSpace\Github\dsh-xiaoai-bridge --config.minimum-release-age=0
 ```
 
 - 这条策略是**profile 级、长期存在**的：以后任何 `dsh plugin add` 都可能再撞上，除非把新条目补进
@@ -377,7 +406,7 @@ dsh plugin --profile desktop add D:\WorkSpace\dsh-xiaoai-bridge --config.minimum
 | 脚本 | 作用 | 结果 |
 |---|---|---|
 | `D:\WorkSpace\_oxb-wheels\plugin-smoke.mjs` | 用假 cordis ctx 加载 `lib/index.js` 并驱动 HTTP 层五连测 | 通过 |
-| `D:\WorkSpace\dsh-xiaoai-bridge\scripts\check-client.mjs` | `node:vm` 里加载 `lib/client.js`，断言 id/导出/页签注册/首帧 | 通过 |
+| `D:\WorkSpace\Github\dsh-xiaoai-bridge\scripts\check-client.mjs` | `node:vm` 里加载 `lib/client.js`，断言 id/导出/页签注册/首帧 | 通过 |
 
 `plugin-smoke.mjs` 实测输出要点：
 
@@ -523,7 +552,7 @@ core/models/keywords.txt  181 字节 → 93 字节
   （`scripts/check-client.mjs`：官方表单件形状、14 个字段与 5 个分区标题、
   `locale/*.json` 的存在性/语言 id/`meta.title|description` 非空、`exports` 与 `files` 是否放行 locale）。
 - locale 解析实测（在 profile 目录里跑）：
-  `require.resolve('dsh-xiaoai-bridge/locale/en.json')` → `D:\WorkSpace\dsh-xiaoai-bridge\locale\en.json`，
+  `require.resolve('dsh-xiaoai-bridge/locale/en.json')` → `D:\WorkSpace\Github\dsh-xiaoai-bridge\locale\en.json`，
   即 `exports` 的 `"./locale/*"` 已生效（`readPluginMeta` 走的就是同一个 Node 解析器）。
 
 ### 12.5 未验证（需要用户重启 DSH）
