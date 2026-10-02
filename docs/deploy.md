@@ -3,7 +3,7 @@
 本文件是 dsh-xiaoai-bridge 的**部署基线记录**与**可重入断点**。执行任何一步之前先读「进度」一节，
 不要在已完成的步骤上重来。
 
-版本：v1（第 1 期骨架已装，等 1.10 重启验证）
+版本：v1（第 1 期验收通过：插件可加载、配置段渲染正确、等第 2 期接线）
 
 ---
 
@@ -194,8 +194,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 1.7 `lib/client.js` + `scripts/check-client.mjs`（结构自检通过）
 - [x] 1.8 注册 `xiaoai-speak` 技能（`resourceBase: {kind:'directory'}`）
 - [x] 1.9 装进 desktop profile（见 §11.2；**踩到 pnpm 供应链策略，绕过方式见 §11.3**）
-- [ ] 1.10 **断点**：用户手动重启 DSH → 验证设置页出现「小爱音箱」页签、Console 无
-      `Failed to load plugins`、`GET /plugin/xiaoai/health` 返回 200
+- [x] 1.10 **断点已通过（2026-10-02 22:54，用户重启 DSH 后截图确认）**：
+      `插件 → dsh-xiaoai-bridge` 页面在**描述与组件列表之间**渲染出「配置概览」段；
+      `GET /plugin/xiaoai/health` → 200、`/plugin/xiaoai/config` → 200、无 `Failed to load plugins`。
+      槽位修正过程与正确契约见 §11.6（第一次落在 `settings.plugins.tab`，位置错误）
 
 ## 9. 第 1 期实现决策
 
