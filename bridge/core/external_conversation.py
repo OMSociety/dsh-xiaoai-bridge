@@ -4,12 +4,12 @@ After a custom wake word triggers wakeup, this module drives either:
   - local VAD -> ASR -> backend -> TTS
   - XiaoAI native ASR -> backend -> TTS
 
-The selected input path runs independently of the XiaoZhi session state
-machine.
+The selected input path is self-contained and does not depend on any other
+session state machine.
 
 Key design decisions:
   - Uses per-session asyncio.Future objects so it never conflicts with the
-    XiaoZhi wakeup session state machine.
+    wakeup session state machine.
   - Never calls abort_xiaoai() (which would break the FileMonitor).
   - TTS playback is blocking (awaited), so the next listening round
     only starts after the response has finished playing.
@@ -66,10 +66,10 @@ class ExternalConversationController:
     LOCAL_ASR_INPUT = "local_asr"
     XIAOAI_ASR_INPUT = "xiaoai_asr"
     XIAOAI_ASR_TIMEOUT = "__timeout__"
-    CONFIG_PREFIX = "openclaw"
-    BACKEND_NAME = "OpenClaw"
-    LOG_MODULE = "OpenClaw Conv"
-    WAKEUP_SOURCE = "openclaw"
+    CONFIG_PREFIX = ""
+    BACKEND_NAME = "External"
+    LOG_MODULE = "External Conv"
+    WAKEUP_SOURCE = ""
     MANAGER = None
 
     def __init__(self):
@@ -123,7 +123,7 @@ class ExternalConversationController:
         return self.active
 
     async def start(self):
-        """Enter OpenClaw conversation mode."""
+        """Enter external backend conversation mode."""
         if self.active:
             logger.warning(f"[{self.LOG_MODULE}] Already active, ignoring start()")
             return
@@ -304,7 +304,7 @@ class ExternalConversationController:
     async def _wait_for_speech(self, vad) -> bytes | None:
         """Use VAD to detect speech and collect complete utterance.
 
-        Follows the same two-step pattern as the XiaoZhi wakeup session:
+        Follows the same two-step pattern as the wakeup session:
           1. resume("speech") → wait for on_speech (voice detected)
           2. resume("silence") → keep recording → wait for on_silence (user stopped)
 

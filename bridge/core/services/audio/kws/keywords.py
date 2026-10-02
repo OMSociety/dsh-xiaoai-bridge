@@ -25,28 +25,19 @@ def should_generate_keywords():
     """Return whether keyword generation should run."""
     import os
 
-    xiaozhi_enabled = os.environ.get("XIAOZHI_ENABLE", "").lower() in ("1", "true", "yes")
-    # 兼容 OPENCLAW_ENABLE (新) 和 OPENCLAW_ENABLED (旧)
-    openclaw_env = os.environ.get("OPENCLAW_ENABLE") or os.environ.get("OPENCLAW_ENABLED") or ""
-    openclaw_enabled = openclaw_env.lower() in ("1", "true", "yes")
     openai_enabled = os.environ.get("OPENAI_ENABLE", "").lower() in (
         "1",
         "true",
         "yes",
     )
-    qwenpaw_enabled = os.environ.get("QWENPAW_ENABLE", "").lower() in (
+    dsh_enabled = os.environ.get("DSH_ENABLE", "").lower() in (
         "1",
         "true",
         "yes",
     )
 
-    if (
-        not xiaozhi_enabled
-        and not openclaw_enabled
-        and not openai_enabled
-        and not qwenpaw_enabled
-    ):
-        return False, "XIAOZHI_ENABLE, OPENCLAW_ENABLE/OPENCLAW_ENABLED, OPENAI_ENABLE and QWENPAW_ENABLE are all disabled"
+    if not openai_enabled and not dsh_enabled:
+        return False, "OPENAI_ENABLE and DSH_ENABLE are all disabled"
 
     return True, ""
 
@@ -80,6 +71,10 @@ def main():
             module="KWS",
         )
         return 1
+
+    from core.utils.ort_dll import ensure_onnxruntime_dll_path
+
+    ensure_onnxruntime_dll_path()
 
     from sherpa_onnx import text2token
 

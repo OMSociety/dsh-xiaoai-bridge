@@ -9,12 +9,9 @@ services:
       - LOGLEVEL=INFO # 日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
       - API_SERVER_ENABLE=1 # 启用 HTTP API 服务（可选）
       - API_SERVER_HOST=0.0.0.0 # HTTP API 服务监听地址（默认监听 127.0.0.1）
-      - OPENCLAW_ENABLE=1       # 启用 OpenClaw（兼容旧值 OPENCLAW_ENABLED）
-      # - QWENPAW_ENABLE=1       # 启用 QwenPaw（可选）
-      # - XIAOZHI_ENABLE=1       # 启用小智 AI（可选）
+      - DSH_ENABLE=1            # 启用 DSH 后端
     volumes:
       - ./config.py:/app/config.py
-      - ./openclaw:/app/openclaw
       - ./models:/app/core/models
     stdin_open: true
     tty: true      

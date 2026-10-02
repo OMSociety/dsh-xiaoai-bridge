@@ -551,7 +551,7 @@ class DoubaoTTS:
             req_params["model"] = "seed-tts-1.1"
 
         return {
-            "user": {"uid": "xiaozhi_user"},
+            "user": {"uid": "open_xiaoai_user"},
             "req_params": req_params,
         }
 

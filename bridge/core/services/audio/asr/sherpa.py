@@ -1,6 +1,6 @@
 """Sherpa-ONNX offline ASR with configurable model backend.
 
-Provides local speech-to-text recognition for the OpenClaw conversation flow.
+Provides local speech-to-text recognition for the external conversation flow.
 The model is lazily loaded on first use to avoid blocking startup.
 
 Supported backends (set via APP_CONFIG["asr"]["model"]):
@@ -12,6 +12,11 @@ Supported backends (set via APP_CONFIG["asr"]["model"]):
 import os
 
 import numpy as np
+
+from core.utils.ort_dll import ensure_onnxruntime_dll_path
+
+ensure_onnxruntime_dll_path()
+
 import sherpa_onnx
 
 from core.utils.config import ConfigManager

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> 小爱音箱与外部 AI 服务（小智 AI、OpenClaw）的桥接器。
+> 小爱音箱与外部 AI 服务（DSH、OpenAI 兼容服务）的桥接器。
 > 接管音箱音频输入输出，实现与第三方 AI 的对话。
 
 ## 系统架构
@@ -12,40 +12,41 @@
 ```
 open-xiaoai-bridge/
 ├── main.py                        # 入口：解析环境变量，启动 MainApp
-├── config.py                      # 用户配置（唤醒词、路由钩子、TTS、OpenClaw 等）
+├── config.py                      # 用户配置（唤醒词、路由钩子、TTS、DSH、OpenAI 等）
 ├── core/
 │   ├── app.py                     # MainApp 主控制器（单例，管理生命周期）
 │   ├── xiaoai.py                  # XiaoAI 设备接入 / 事件桥接
 │   ├── xiaoai_conversation.py     # 小爱连续对话策略
-│   ├── xiaozhi.py                 # 小智 AI WebSocket 协议客户端
-│   ├── openclaw.py                # OpenClaw 网关客户端（连接、消息、TTS 播放）
-│   ├── openclaw_conversation.py   # OpenClaw 连续对话循环（VAD → ASR → Agent → TTS）
-│   ├── wakeup_session.py          # 小智唤醒会话状态机
+│   ├── dsh.py                     # DSH 后端客户端（连接、消息、TTS 播放）
+│   ├── dsh_conversation.py        # DSH 连续对话循环（VAD → ASR → 后端 → TTS）
+│   ├── external_conversation.py   # 外部后端连续对话基类
+│   ├── openai.py                  # OpenAI 兼容服务客户端
+│   ├── openai_conversation.py     # OpenAI 兼容服务连续对话循环
+│   ├── wakeup_session.py          # 唤醒会话状态机
 │   ├── ref.py                     # 全局引用注册表（get/set 依赖注入）
 │   ├── models/                    # 模型文件（KWS/VAD/ASR，.gitignore 排除）
 │   ├── assets/sounds/             # 音效（tts_notify.mp3 等）
 │   ├── services/
 │   │   ├── speaker.py             # SpeakerManager 音箱硬件控制
 │   │   ├── api_server.py          # HTTP REST API（aiohttp）
-│   │   ├── tts/router.py           # 统一 TTS provider 路由与播放
+│   │   ├── tts/router.py          # 统一 TTS provider 路由与播放
 │   │   ├── audio/
 │   │   │   ├── stream.py          # GlobalStream 全局音频流（多路输入广播）
-│   │   │   ├── codec.py           # 音频编解码
 │   │   │   ├── vad/silero.py      # Silero VAD 语音活动检测（ONNX）
 │   │   │   ├── kws/sherpa.py      # Sherpa KWS 关键词唤醒
 │   │   │   └── asr/sherpa.py      # Sherpa ASR 离线语音识别（SenseVoice）
 │   │   ├── tts/doubao.py          # 豆包 TTS 客户端（火山引擎）
-│   │   ├── tts/openai.py           # OpenAI-compatible TTS 协议客户端
-│   │   ├── tts/mlx_audio.py        # MLX-Audio TTS provider（复用 OpenAI 协议客户端）
+│   │   ├── tts/openai.py          # OpenAI-compatible TTS 协议客户端
+│   │   ├── tts/mlx_audio.py       # MLX-Audio TTS provider（复用 OpenAI 协议客户端）
 │   │   └── protocols/
-│   │       ├── websocket_protocol.py  # 小智 WebSocket 协议实现
-│   │       └── typing.py              # 协议类型定义
+│   │       └── typing.py          # 协议类型定义
 │   └── utils/
-│       ├── logger.py              # 彩色日志（XiaozhiLogger 单例）
+│       ├── logger.py              # 彩色日志（BridgeLogger 单例）
 │       ├── config.py              # ConfigManager（嵌套路径查询、热重载）
 │       ├── config_loader.py       # config.py 动态导入
 │       ├── base.py                # 基础工具
-│       └── file.py                # 文件工具
+│       ├── file.py                # 文件工具
+│       └── ort_dll.py             # Windows onnxruntime DLL 目录修正
 ├── native/                        # Rust PyO3 扩展（maturin 编译）
 │   └── src/
 │       ├── lib.rs                 # 模块入口：on_output_data, start_server, stop/start_recording, stop/start_playing
@@ -53,7 +54,6 @@ open-xiaoai-bridge/
 │       ├── python.rs              # Python 回调注册中心（HashMap）
 │       ├── macros.rs              # 辅助宏
 │       └── tts/                   # TTS 音频处理（流式、PCM 直通、MP3 解码）
-├── app/openclaw/                  # OpenClaw 设备身份存储（Ed25519 密钥）
 ├── skills/xiaoai-tts/             # Agent 工具：通过 HTTP API 控制小爱播放
 └── tests/                         # 测试脚本
 ```
@@ -64,12 +64,14 @@ open-xiaoai-bridge/
 
 应用主控制器，单例模式，管理全部服务生命周期。
 
-- `instance(enable_xiaozhi, enable_openclaw)` → 单例获取
+- `instance(enable_openai=False, enable_dsh=False)` → 单例获取
 - `run(enable_api_server)` → 启动各服务
 - `set_device_state(state)` → 管理设备状态（IDLE / LISTENING / SPEAKING / CONNECTING）
-- `send_text(text)` → 发送文本到小智
-- `send_to_openclaw(text, wait_response)` → 发送消息到 OpenClaw（返回 run_id 或回复文本）
-- `send_to_openclaw_and_play_reply(text, wait_response)` → 发送并 TTS 播放回复
+- `send_to_dsh(text, wait_response)` → 发送消息到 DSH（返回 run_id 或回复文本）
+- `send_to_dsh_and_play_reply(text, wait_response)` → 发送并 TTS 播放回复
+- `set_dsh_session_key(session_key)` → 运行时切换 DSH 会话
+- `send_to_openai(text, wait_response)` / `send_to_openai_and_play_reply(text, wait_response)` → OpenAI 兼容服务
+- `set_openai_session_key(session_key)` → 运行时切换 OpenAI 兼容服务会话
 - `schedule(callback)` → 主线程任务队列
 - `shutdown()` → 优雅关闭
 
@@ -77,6 +79,7 @@ open-xiaoai-bridge/
 - `MainApp` 是业务主循环和设备状态的单一入口
 - `device_state` 以 `MainApp` 为准，其他模块通过代理回写，不各自维护平行状态
 - `MainApp.loop` 是业务协程的主调度循环
+- 后端开关只有 `enable_openai` / `enable_dsh` 两个，OpenAI 后端不再额外暴露独立开关
 
 ### XiaoAI (core/xiaoai.py)
 
@@ -93,56 +96,43 @@ open-xiaoai-bridge/
 - 连续对话状态放在 `xiaoai_conversation.py`
 - `async_loop` 不应承载新的业务状态机
 
-### XiaoZhi (core/xiaozhi.py)
+### DshManager (core/dsh.py)
 
-小智 AI WebSocket 协议客户端，单例模式。
+DSH 后端客户端，管理本机 DeepSeek Harness xiaoai 桥接插件的 HTTP 连接、消息分发与 TTS 播放。
 
-- `connect()` / `disconnect()` → 连接管理
-- `send_audio(frames)` / `send_text(text)` → 发送音频 / 文本
-- `send_start_listening(mode)` / `send_abort_speaking(reason)` → 协议命令
-- 回调委托：`on_incoming_audio`, `on_incoming_json`, `on_network_error` 等
-
-**边界约束**:
-- 只负责协议收发，不负责唤醒策略和连续对话策略
-- `session_id` 必须由服务端消息更新，不能长期使用空值发送控制消息
-
-### OpenClawManager (core/openclaw.py)
-
-OpenClaw 网关客户端，管理 WebSocket 连接、消息分发、自动重连、TTS 播放。
-
-- `initialize_from_config(enabled)` → 从 config 初始化
-- `connect()` → 建立连接（Ed25519 设备身份认证）
+- `initialize_from_config(enabled)` / `reload_from_config(enabled)` → 从 config 初始化
+- `connect()` → 探测 `{base_url}/health`（失败只记录 `last_error`，不抛异常）
 - `send(text, wait_response)` → 发送消息，返回 run_id 或回复文本，失败返回 None
-- `send_and_play(text, wait_response)` → 发送并 TTS 播放回复
+- `send_and_play_reply(text, wait_response)` → 发送并 TTS 播放回复
 - `is_connected()` / `is_enabled()` → 状态查询
+- `set_session_key(session_key)` → 运行时切换会话
+- `get_tts_speaker_for_session_key(session_key)` → 按会话选择音色
 
 **内部机制**:
-- Ed25519 设备身份认证（密钥存储在 `app/openclaw/identity/`）
-- WebSocket ping/pong + tick 事件监控连接健康
-- 指数退避重连（初始 1s，最大 60s）
-- 请求 ID 映射 `_pending: dict[str, asyncio.Future]` 追踪响应
-- TTS 播放：通过共享 TTS Router 选择 `xiaoai`、`doubao`、`openai` 或 `mlx_audio` provider；缺省时保持 `tts_speaker` 的旧选择逻辑
+- HTTP 端点默认为 `http://127.0.0.1:19387/plugin/xiaoai`，token 走环境变量 `XIAOAI_API_TOKEN`
+- 请求 ID（run_id）映射追踪响应；`_submit_utterance()` 提交文本到 `/asr`
+- TTS 播放：通过共享 TTS Router 选择 `xiaoai`、`doubao`、`openai` 或 `mlx_audio` provider
 - Rust TTS 播放使用单一活动 `playback_token`：开始新的 Rust TTS 会使旧 token 失效；`stop_tts_playback(token)` 只应由持有该 token 的调用方定向停止自己的播放
+- 日志通过 `module=f"DSH({session_key})"` 输出，`user_speech` / `ai_response` 依赖该前缀
 
 **连接参数限制**:
-- `client.id`: 必须是 OpenClaw 预定义常量
-- `client.mode`: 必须是预定义常量
-- `session_key`: 只从 config.py 读取
+- `session_key`: 只从 config.py 的 `dsh.session_key` 读取（默认 `agent:main:open-xiaoai-bridge`）
+- `base_url`: 只从 config.py 的 `dsh.base_url` 读取
 
-### OpenClawConversationController (core/openclaw_conversation.py)
+### DshConversationController (core/dsh_conversation.py)
 
-OpenClaw 连续对话控制器。唤醒词触发后进入独立的 VAD → ASR → OpenClaw → TTS 循环。
+DSH 连续对话控制器，继承 `core/external_conversation.py` 的 `ExternalConversationController`。唤醒词触发后进入独立的 VAD → ASR → DSH → TTS 循环。
 
 - `start()` → 进入对话模式
 - `stop()` → 退出对话
 - `is_active()` → 状态查询
 
-**对话循环** (`_run_one_turn`):
+**对话循环** (`_run_one_turn_with_local_asr`):
 1. VAD 检测语音开始（`_wait_for_speech`）
 2. 录制完整语音（VAD 帧 hook）
 3. SherpaASR 离线识别
-4. 退出关键词检测
-5. 发送到 OpenClaw
+4. 退出关键词检测（config `dsh.exit_keywords`）
+5. 发送到 DSH
 6. TTS 播放回复（阻塞等待完成）
 7. 恢复监听
 
@@ -159,27 +149,27 @@ OpenClaw 连续对话控制器。唤醒词触发后进入独立的 VAD → ASR �
 **边界约束**:
 - 使用独立 VAD Future，不与 WakeupSessionManager 冲突
 - TTS 完全阻塞，播放完成后才继续监听
-- 自己持有并管理当前 TTS 的 `playback_token`；停止 OpenClaw 对话时应调用 `stop_tts_playback(token)`，不要在外层直接无 token 全局停止 Rust TTS
+- 自己持有并管理当前 TTS 的 `playback_token`；停止 DSH 对话时应调用 `stop_tts_playback(token)`，不要在外层直接无 token 全局停止 Rust TTS
 
 ### WakeupSessionManager (core/wakeup_session.py)
 
-小智唤醒会话状态机，协调 KWS → VAD → 小智/OpenClaw 的唤醒流程。
+唤醒会话状态机，协调 KWS → VAD → DSH / OpenAI 兼容服务的唤醒流程。
 
-- `wakeup(text, source)` → 处理唤醒（调用 `before_wakeup` 钩子，路由到 XiaoZhi 或 OpenClaw）
+- `wakeup(text, source)` → 处理唤醒（调用 `before_wakeup` 钩子，路由到 DSH 或 OpenAI 兼容服务）
 - `wait_next_step(timeout)` → 异步等待状态变化（带待决状态缓冲）
 - `update_step(step, step_data)` → 更新步骤
-- 事件回调：`on_interrupt()`, `on_wakeup()`, `on_tts_start()`, `on_tts_end()`, `on_speech()`, `on_silence()`
-- `on_interrupt()` → 小爱唤醒时：cancel OpenClaw task、停止设备音频播放、恢复录音通道、stop XiaoAI conversation
+- 事件回调：`on_interrupt()`, `on_tts_start()`, `on_tts_end()`, `on_speech()`, `on_silence()`
+- `on_interrupt()` → 小爱唤醒时：cancel 后端 task、停止设备音频播放、恢复录音通道、stop XiaoAI conversation
 
 **路由规则**（`before_wakeup` 返回值）:
-- `"xiaozhi"` → 走小智流程
-- `"openclaw"` → 走 OpenClaw 连续对话
+- `"dsh"` → 走 DSH 连续对话
+- `"openai"` → 走 OpenAI 兼容服务连续对话
 - `None` → 不处理（用户自行处理）
 
 **边界约束**:
-- 它是"小智唤醒会话状态机"，不是通用事件总线
+- 它是唤醒会话状态机，不是通用事件总线
 - 只允许缓存 `on_speech` / `on_silence` 等外部探测信号
-- 不要缓存 `on_wakeup` / `on_interrupt` 等控制步骤
+- 不要缓存 `on_interrupt` 等控制步骤
 
 ### XiaoAIConversationController (core/xiaoai_conversation.py)
 
@@ -191,9 +181,9 @@ OpenClaw 连续对话控制器。唤醒词触发后进入独立的 VAD → ASR �
 - `handle_playing_status(playing_status, speaker)` → TTS 完成后重新唤醒
 
 **边界约束**:
-- 小爱连续对话和小智唤醒 / 会话超时是两套独立机制
-- 只有在"小爱连续对话确实激活"时才允许停止
-- 小智超时退出时不应打印"小爱停止连续对话"日志
+- 小爱连续对话和外部后端唤醒 / 会话超时是两套独立机制
+- 只有在「小爱连续对话确实激活」时才允许停止
+- 外部后端超时退出时不应打印「小爱停止连续对话」日志
 
 ### SpeakerManager (core/services/speaker.py)
 
@@ -207,7 +197,7 @@ OpenClaw 连续对话控制器。唤醒词触发后进入独立的 VAD → ASR �
 - `run_shell(command, timeout)` → RPC shell
 
 **边界约束**:
-- `stop_device_audio()` 只负责"停播放"，不负责恢复录音；`start_recording()` 属于会话层恢复逻辑，应由 `WakeupSessionManager` / `OpenClawConversationController` 等上层按场景决定
+- `stop_device_audio()` 只负责「停播放」，不负责恢复录音；`start_recording()` 属于会话层恢复逻辑，应由 `WakeupSessionManager` / `DshConversationController` 等上层按场景决定
 
 ### APIServer (core/services/api_server.py)
 
@@ -255,26 +245,26 @@ uv run main.py
 - 不启动 KWS/VAD 初始化
 - `core/services/audio/kws/keywords.py` 在此模式下应直接退出成功
 
-### 模式 2: 小智 AI
+### 模式 2: DSH
 ```bash
-XIAOZHI_ENABLE=1 uv run main.py
+DSH_ENABLE=1 uv run main.py
 ```
-- 启动 VAD + KWS，唤醒后连接小智 AI
+- 启动 VAD + KWS，唤醒后进入 DSH 连续对话
 - KWS 初始化失败应视为启动失败
 
-### 模式 3: OpenClaw
+### 模式 3: OpenAI 兼容服务
 ```bash
-OPENCLAW_ENABLE=1 uv run main.py
+OPENAI_ENABLE=1 uv run main.py
 ```
-- 小爱指令拦截 → 转发到 OpenClaw → TTS 播放结果
+- 小爱指令拦截 → 转发到 OpenAI 兼容服务 → TTS 播放结果
 
-### 模式 4: 小智 + OpenClaw（混合）
+### 模式 4: DSH + OpenAI 兼容服务（混合）
 ```bash
-XIAOZHI_ENABLE=1 OPENCLAW_ENABLE=1 uv run main.py
+DSH_ENABLE=1 OPENAI_ENABLE=1 uv run main.py
 ```
-- config.py `before_wakeup` 按唤醒词路由到小智或 OpenClaw 连续对话
-- OpenClaw 连续对话：VAD → ASR → OpenClaw → TTS 循环
-- 退出关键词：config `openclaw.exit_keywords`
+- config.py `before_wakeup` 按唤醒词路由到 DSH 或 OpenAI 兼容服务
+- DSH 连续对话：VAD → ASR → DSH → TTS 循环
+- 退出关键词：config `dsh.exit_keywords`
 
 ### 启用 API Server
 ```bash
@@ -302,13 +292,13 @@ API_SERVER_ENABLE=1 uv run main.py
 - 唯一允许的裸输出：启动 ASCII banner
 
 ### 全局引用 (ref.py)
-- `set_app/get_app`, `set_xiaozhi/get_xiaozhi`, `set_xiaoai/get_xiaoai`
+- `set_app/get_app`, `set_xiaoai/get_xiaoai`
 - `set_vad/get_vad`, `set_kws/get_kws`, `set_speaker/get_speaker`
-- `set_audio_codec/get_audio_codec`, `set_speech_frames/get_speech_frames`
+- `set_speech_frames/get_speech_frames`
 
 ### 兼容约束
 - `CLI` 环境变量不再作为功能开关，不要引入依赖 `CLI` 的运行时分支
-- `XIAOZHI_ENABLE=0` 时必须允许跳过 KWS 初始化
+- `DSH_ENABLE` / `OPENAI_ENABLE` 未设置时必须允许跳过 KWS 初始化
 - `scripts/start.sh` 在仅小爱模式下不应检查 `core/models/` 下的模型文件
 
 ## 测试
@@ -319,9 +309,6 @@ python3 tests/test_tts_stream.py
 
 # 比较长文本 mp3/pcm 流式时延
 python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 8
-
-# OpenClaw 连通性测试
-python3 tests/test_openclaw_live_connectivity.py
 ```
 
 ## 音箱设备控制命令
@@ -359,13 +346,13 @@ python3 tests/test_openclaw_live_connectivity.py
 | 停止录音 | `open_xiaoai_server.stop_recording()` | 杀掉设备端 `arecord` 进程，麦克风静音 |
 | 恢复录音 | `open_xiaoai_server.start_recording()` | 重启 `arecord`，音频数据恢复流入 `GlobalStream` |
 
-**注意**：OpenClaw 对话中 TTS 播放时会 `stop_recording` 防止回声。如果在此期间触发中断（"小爱同学"），必须在中断处理中调用 `start_recording` 恢复录音，否则 KWS 将因无音频数据而永久失效。
+**注意**：DSH 对话中 TTS 播放时会 `stop_recording` 防止回声。如果在此期间触发中断（「小爱同学」），必须在中断处理中调用 `start_recording` 恢复录音，否则 KWS 将因无音频数据而永久失效。
 
 ### on_interrupt 中断处理要点
 
-`on_interrupt()` 触发时（用户喊"小爱同学"），需要完成以下步骤：
-1. Cancel OpenClaw asyncio task
-2. 让 OpenClaw controller 自己停止当前 TTS（使用自己持有的 `playback_token`）
+`on_interrupt()` 触发时（用户喊「小爱同学」），需要完成以下步骤：
+1. Cancel DSH asyncio task
+2. 让 DSH controller 自己停止当前 TTS（使用自己持有的 `playback_token`）
 3. `SpeakerManager.stop_device_audio()` — 停止阻塞 TTS / 非阻塞 TTS / PCM，并重置 PCM 通道
 4. `start_recording` — 恢复录音（KWS 依赖此通道）
 5. `XiaoAI.stop_conversation()` — 停止连续对话
@@ -374,7 +361,7 @@ python3 tests/test_openclaw_live_connectivity.py
 
 以下方式在实践中验证**不可靠或有副作用**：
 - `abort_xiaoai()`（重启 `mico_aivs_lab`）— 会导致小爱整体不可用，恢复需 1-2 秒
-- `pkill miplayer` — busybox `pkill` 无法匹配 `miplayer` 进程名
+- `pkill miplayer` — busybox `pkill` 无法匹配到 `miplayer` 进程名
 - `ubus call mediaplayer player_play_operation '{"action":"pause"}'` — 对 `mibrain text_to_speech` 触发的播放无效
 
 ### 相关讨论

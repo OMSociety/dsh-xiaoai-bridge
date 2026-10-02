@@ -25,10 +25,8 @@ class WakeupKeywordStartupTest(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "XIAOZHI_ENABLE": "",
-                "OPENCLAW_ENABLE": "",
-                "OPENCLAW_ENABLED": "",
                 "OPENAI_ENABLE": "1",
+                "DSH_ENABLE": "",
             },
             clear=False,
         ):
@@ -42,11 +40,11 @@ class WakeupKeywordStartupTest(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf8")
 
         self.assertIn("OPENAI_ENABLE_VALUE", start_sh)
-        self.assertIn("QWENPAW_ENABLE_VALUE", start_sh)
+        self.assertIn("DSH_ENABLE_VALUE", start_sh)
         self.assertIn('[[ "$OPENAI_ENABLE_VALUE" =~ ^(1|true|yes)$ ]]', start_sh)
-        self.assertIn('[[ "$QWENPAW_ENABLE_VALUE" =~ ^(1|true|yes)$ ]]', start_sh)
+        self.assertIn('[[ "$DSH_ENABLE_VALUE" =~ ^(1|true|yes)$ ]]', start_sh)
         self.assertIn('${OPENAI_ENABLE:-}', dockerfile)
-        self.assertIn('${QWENPAW_ENABLE:-}', dockerfile)
+        self.assertIn('${DSH_ENABLE:-}', dockerfile)
         self.assertIn('python core/services/audio/kws/keywords.py', dockerfile)
 
 

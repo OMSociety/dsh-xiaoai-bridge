@@ -5,8 +5,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import requests
-
 from core.utils.config_loader import (
     ensure_config_module_loaded,
     get_config_path,
@@ -40,16 +38,16 @@ class ConfigManager:
         ensure_config_module_loaded()
         self._app_config = self._load_app_config()
 
+        # 运行时配置槽位。DEVICE_ID / NETWORK 为历史遗留键名，
+        # 保留是为了兼容 get_device_id() / get_network_config() 等既有访问器。
         self._config = {
             "CLIENT_ID": None,
-            "DEVICE_ID": self.get_app_config("xiaozhi.DEVICE_ID"),
-            "NETWORK": self.get_app_config("xiaozhi", {}),
-            "MQTT_INFO": None,
+            "DEVICE_ID": None,
+            "NETWORK": {},
         }
 
         self._initialize_client_id()
         self._initialize_device_id()
-        self._initialize_mqtt_info()
 
     def _load_app_config(self) -> dict[str, Any]:
         """加载 config.py 中的 APP_CONFIG。"""
@@ -97,8 +95,6 @@ class ConfigManager:
             previous_config = self._app_config
             self._app_config = next_config
 
-            self._config["DEVICE_ID"] = self.get_app_config("xiaozhi.DEVICE_ID")
-            self._config["NETWORK"] = self.get_app_config("xiaozhi", {})
             self._initialize_device_id()
 
             listeners = list(self._reload_listeners)
@@ -213,84 +209,3 @@ class ConfigManager:
                 self.update_config_file("DEVICE_ID", device_hash)
             except Exception:
                 pass
-
-    def refresh_mqtt_info(self):
-        """刷新 MQTT 信息"""
-        if not self._config["MQTT_INFO"]:
-            self._initialize_mqtt_info()
-
-    def _initialize_mqtt_info(self):
-        try:
-            mqtt_info = self._get_ota_version()
-            if mqtt_info:
-                self.update_config("MQTT_INFO", mqtt_info)
-                return mqtt_info
-            else:
-                return self.get_config("MQTT_INFO")
-        except Exception:
-            return self.get_config("MQTT_INFO")
-
-    def _get_ota_version(self):
-        """获取OTA服务器的MQTT信息"""
-        MAC_ADDR = self.get_device_id()
-        OTA_URL = self.get_config("NETWORK.OTA_URL")
-        headers = {
-            "Activation-Version": "1",
-            "Device-Id": MAC_ADDR,
-            "Content-Type": "application/json",
-            "Accept-Language": "zh-CN",
-        }
-
-        # 构建设备信息 payload
-        payload = {
-            "mac_address": MAC_ADDR,
-            "board": {
-                "type": "lc-esp32-s3",
-                "name": "立创ESP32-S3开发板",
-                "features": ["wifi", "ble", "psram", "octal_flash"],
-                "ip": self.get_local_ip(),
-                "mac": MAC_ADDR,
-            },
-            "application": {
-                "name": "xiaozhi",
-                "version": "1.6.0",
-                "compile_time": "2025-4-16T12:00:00Z",
-                "idf_version": "v5.3.2",
-            },
-            "psram_size": 8388608,  # 8MB PSRAM
-            "minimum_free_heap_size": 7265024,  # 最小可用堆内存
-            "chip_model_name": "esp32s3",  # 芯片型号
-            "chip_info": {
-                "model": 9,  # ESP32-S3
-                "cores": 2,
-                "revision": 0,  # 芯片版本修订
-                "features": 20,  # WiFi + BLE + PSRAM
-            },
-            "partition_table": [],
-            "ota": {"label": "factory"},
-        }
-
-        try:
-            # 发送请求到OTA服务器
-            response = requests.post(
-                OTA_URL,
-                headers=headers,
-                json=payload,
-                timeout=10,
-            )
-
-            # 检查HTTP状态码
-            if response.status_code != 200:
-                raise ValueError(f"OTA服务器返回错误状态码: {response.status_code}")
-
-            # 解析JSON数据
-            response_data = response.json()
-
-            if "mqtt" in response_data:
-                return response_data["mqtt"]
-            else:
-                raise ValueError("OTA服务器返回的数据无效，请检查服务器状态或MAC地址！")
-        except requests.Timeout:
-            raise ValueError("OTA请求超时！请稍后重试。")
-        except requests.RequestException:
-            raise ValueError("无法连接到OTA服务器，请检查网络连接！")

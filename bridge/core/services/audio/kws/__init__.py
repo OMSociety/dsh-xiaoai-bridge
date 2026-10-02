@@ -3,11 +3,11 @@ import os
 import threading
 import time
 
-from core.ref import get_app, get_xiaoai, get_xiaozhi, set_kws
+from core.ref import get_app, get_xiaoai, set_kws
 from core.services.audio.kws.sherpa import SherpaOnnx
 from core.services.audio.stream import MyAudio
 from core.services.audio.vad.silero import Silero
-from core.services.protocols.typing import AudioConfig, DeviceState
+from core.services.protocols.typing import AudioConfig
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
 from core.wakeup_session import EventManager
@@ -88,15 +88,7 @@ class _KWS:
                 continue
 
             # 在说话和监听状态时，暂停 KWS
-            xiaozhi = get_xiaozhi()
-            if (
-                not frames
-                or self.paused
-                or (
-                    xiaozhi and xiaozhi.device_state
-                    in [DeviceState.LISTENING, DeviceState.SPEAKING]
-                )
-            ):
+            if not frames or self.paused:
                 time.sleep(0.01)
                 continue
 

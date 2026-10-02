@@ -46,6 +46,7 @@ class DshManager:
     _api_key = ""
     _session_key = "agent:main:open-xiaoai-bridge"
     _device_name = ""
+    _device_host = ""
     _timeout = 120
     _tts_provider: str | None = None
     _tts_speaker = None
@@ -100,6 +101,11 @@ class DshManager:
             config.get("session_key", "agent:main:open-xiaoai-bridge")
         )
         cls._device_name = str(config.get("device_name", "") or "")
+        # The plugin hands the speaker address down through the spawn
+        # environment, so one config.py can still serve several speakers.
+        cls._device_host = str(
+            get_env("XIAOAI_DEVICE_HOST") or config.get("device_host", "") or ""
+        )
         cls._timeout = int(config.get("response_timeout", 120))
 
         configured_provider = config.get("tts_provider")
@@ -309,6 +315,7 @@ class DshManager:
             "text": text,
             "session_key": cls._session_key,
             "device_name": cls._device_name,
+            "device_host": cls._device_host,
             "source": "kws",
         }
         reply: str | None = None

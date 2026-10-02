@@ -1,5 +1,5 @@
 """
-HTTP API Server for XiaoZhi
+HTTP API Server for the bridge
 Provides endpoints to play text/audio remotely
 """
 
@@ -19,7 +19,7 @@ from core.utils.logger import logger
 
 
 class APIServer:
-    """HTTP API Server to control XiaoZhi speaker remotely"""
+    """HTTP API Server to control the speaker remotely"""
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8080):
         self.host = host

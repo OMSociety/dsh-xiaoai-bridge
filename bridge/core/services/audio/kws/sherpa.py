@@ -1,4 +1,9 @@
 import numpy as np
+
+from core.utils.ort_dll import ensure_onnxruntime_dll_path
+
+ensure_onnxruntime_dll_path()
+
 import sherpa_onnx
 
 from core.utils.config import ConfigManager

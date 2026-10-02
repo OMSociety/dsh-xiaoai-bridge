@@ -30,10 +30,10 @@ class ColoredFormatter(logging.Formatter):
         
         return super().format(record)
 
-class XiaozhiLogger:
-    """小智日志记录器"""
+class BridgeLogger:
+    """桥接器日志记录器"""
     
-    def __init__(self, name: str = "xiaozhi"):
+    def __init__(self, name: str = "xiaoai-bridge"):
         self.logger = logging.getLogger(name)
         if not self.logger.handlers:
             self._setup_logger()
@@ -109,16 +109,18 @@ class XiaozhiLogger:
             message = f"🔥 触发唤醒: {keyword}"
         self.info(message, module=module)
     
-    def user_speech(self, text: str, module: str = "XiaoZhi"):
+    def user_speech(self, text: str, module: str = "DSH"):
         """用户语音日志"""
         self.info(f"💬 我说：{text}", module=module)
     
-    def ai_response(self, text: str, module: str = "XiaoZhi"):
+    def ai_response(self, text: str, module: str = "DSH"):
         """AI回复日志"""
-        if module.startswith("XiaoZhi"):
-          self.info(f"🤖 小智: {text}", module=module)
-        elif module.startswith("OpenClaw"):
-          self.info(f"🦞 OpenClaw: {text}", module=module)
+        if module.startswith("DSH"):
+            self.info(f"🤖 DSH: {text}", module=module)
+        elif module.startswith("OpenAI"):
+            self.info(f"✨ OpenAI: {text}", module=module)
+        else:
+            self.info(f"🤖 {text}", module=module)
     
     def vad_event(self, event: str, details: str = "", module: str = "VAD"):
         """VAD事件日志"""
@@ -146,4 +148,4 @@ class XiaozhiLogger:
         self.info(f"📱 状态: {state}", module=module)
 
 # 创建全局日志实例
-logger = XiaozhiLogger()
+logger = BridgeLogger()

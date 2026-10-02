@@ -26,109 +26,78 @@ async def before_wakeup(speaker, text, source, app):
         source  : 唤醒来源
                     'kws'    — 本地关键词唤醒（用户说了唤醒词）
                     'xiaoai' — 小爱同学收到用户语音指令
-        app     : MainApp 实例，可调用 send_to_openclaw / send_to_openai / send_to_qwenpaw 等方法
+        app     : MainApp 实例，可调用 send_to_dsh / send_to_openai 等方法
 
     返回值：
-        "openclaw" — 进入 OpenClaw 连续对话流程
+        "dsh"      — 进入 DSH 连续对话流程
         "openai"   — 进入 OpenAI 兼容服务连续对话流程（例如 Hermes Agent API Server）
-        "qwenpaw"  — 进入 QwenPaw 连续对话流程
-        "xiaozhi"  — 进入小智 AI 流程
-        None       — 不做额外处理（可在此自行调用 app.send_to_openclaw 等）
+        None       — 不做额外处理（可在此自行调用 app.send_to_dsh 等）
 
     ---
     动态切换 session_key：
         每次进入此函数前，框架会自动将 session_key 重置为配置文件中的默认值。
-        如需路由到其他 Agent，在 return "openclaw" 之前调用：
-            app.set_openclaw_session_key("agent:main:xxx")
-        不调用则自动使用 openclaw.session_key 的默认值，无需手动重置。
+        如需路由到其他 Agent，在 return "dsh" 之前调用：
+            app.set_dsh_session_key("agent:main:xxx")
+        不调用则自动使用 dsh.session_key 的默认值，无需手动重置。
     """
     if source == "kws":
         # --- 示例一：按唤醒词路由到不同 Agent ---
         # AGENT_SESSIONS = {
-        #     "龙虾": "agent:assistant:open-xiaoai-bridge",  # 说"你好龙虾" → 路由到 assistant Agent
         #     "小美": "agent:xiaomei:open-xiaoai-bridge",    # 说"你好小美" → 路由到 xiaomei Agent
         #     "管家": "agent:butler:open-xiaoai-bridge",     # 说"你好管家" → 路由到 butler Agent
         # }
         # for keyword, session_key in AGENT_SESSIONS.items():
         #     if keyword in text:
-        #         app.set_openclaw_session_key(session_key)
+        #         app.set_dsh_session_key(session_key)
         #         await speaker.play(text=f"{keyword}来了")
-        #         return "openclaw"
+        #         return "dsh"
 
         # --- 示例二：每次唤醒生成独立 Session ---
-        # if "龙虾" in text:
-        #     app.set_openclaw_session_key(new_session_key())
-        #     await speaker.play(text="龙虾来了")
-        #     return "openclaw"
+        # if "小爱小爱" in text:
+        #     app.set_dsh_session_key(new_session_key())
+        #     await speaker.play(text="来了")
+        #     return "dsh"
 
-        # --- 示例三：进入 OpenClaw 前播放服务端本地开场白 ---
-        # if "龙虾" in text:
-        #     await speaker.play(server_file="/path/to/openclaw_intro.wav")
-        #     return "openclaw"
-
-        # Route to OpenClaw Agent by wake word
-        if "龙虾" in text:
-            await speaker.play(text="龙虾来了")
-            return "openclaw"
+        # --- 示例三：进入 DSH 前播放服务端本地开场白 ---
+        # if "小爱小爱" in text:
+        #     await speaker.play(server_file="/path/to/dsh_intro.wav")
+        #     return "dsh"
 
         if "小黑" in text:
             await speaker.play(text="小黑来了")
             return "openai"
 
-        if "小爪" in text:
-            await speaker.play(text="小爪来了")
-            return "qwenpaw"
-
-        if "小智" in text:
-            await speaker.play(text="小智来了")
-            return "xiaozhi"
+        # dsh 唤醒词由下方 APP_CONFIG 的 dsh.wakeup_keywords 配置
+        for keyword in APP_CONFIG.get("dsh", {}).get("wakeup_keywords", []):
+            if keyword and keyword in text:
+                await speaker.play(text="小爱来了")
+                return "dsh"
 
         return None
 
     if source == "xiaoai":
         # --- 示例四：小爱指令按用户名路由到不同 Session ---
         # if text == "召唤小美":
-        #     app.set_openclaw_session_key("agent:xiaomei:open-xiaoai-bridge")
+        #     app.set_dsh_session_key("agent:xiaomei:open-xiaoai-bridge")
         #     await speaker.abort_xiaoai()
-        #     return "openclaw"
-
-        if text == "召唤龙虾":
-            await speaker.abort_xiaoai()
-            return "openclaw"  # OpenClaw continuous conversation
+        #     return "dsh"
 
         if text == "召唤小黑":
             await speaker.abort_xiaoai()
             return "openai"  # OpenAI-compatible service continuous conversation
-
-        if text == "召唤小爪":
-            await speaker.abort_xiaoai()
-            return "qwenpaw"  # QwenPaw continuous conversation
-
-        if text == "召唤小智":
-            await speaker.abort_xiaoai()
-            return "xiaozhi"  # XiaoZhi AI
-
-        if "让龙虾" in text:
-            await speaker.abort_xiaoai()
-            # One-shot: send to OpenClaw and play the reply via TTS
-            await app.send_to_openclaw_and_play_reply(text.replace("让龙虾", ""))
-            return None  # No further handling by the framework
-
-        if "告诉龙虾" in text:
-            await speaker.abort_xiaoai()
-            # Fire-and-forget: let the Agent decide when/how to reply
-            await app.send_to_openclaw(text.replace("告诉龙虾", ""))
-            return None
 
         if "让小黑" in text:
             await speaker.abort_xiaoai()
             await app.send_to_openai_and_play_reply(text.replace("让小黑", ""))
             return None
 
-        if "让小爪" in text:
-            await speaker.abort_xiaoai()
-            await app.send_to_qwenpaw_and_play_reply(text.replace("让小爪", ""))
-            return None
+        # dsh 唤醒词由下方 APP_CONFIG 的 dsh.wakeup_keywords 配置
+        for keyword in APP_CONFIG.get("dsh", {}).get("wakeup_keywords", []):
+            if keyword and text == keyword:
+                await speaker.abort_xiaoai()
+                return "dsh"
+
+    return None
 
 
 async def after_wakeup(speaker, source=None, session_key=None):
@@ -136,17 +105,14 @@ async def after_wakeup(speaker, source=None, session_key=None):
     退出唤醒状态
 
     - source: 退出来源
-        - 'xiaozhi': 小智对话超时退出
-        - 'openclaw': OpenClaw 连续对话退出
+        - 'dsh': DSH 连续对话退出
         - 'openai': OpenAI 兼容服务连续对话退出
-        - 'qwenpaw': QwenPaw 连续对话退出
-    - session_key: 当前 OpenClaw/OpenAI/QwenPaw 后端 session_key
+    - session_key: 当前 DSH/OpenAI 后端 session_key
         可据此区分是哪个 Agent 退出，例如播放不同的退出提示语
     """
-    if source == "openclaw":
-        # 示例：退出 OpenClaw 时播放服务端本地结束语
-        # await speaker.play(server_file="/path/to/openclaw_bye.wav")
-
+    if source == "openai":
+        await speaker.play(text="小黑，再见")
+    if source == "dsh":
         # 示例：按 agentId 区分退出提示语
         # 所有后端的 session_key 已统一为 agent:<agentId>:<rest> 格式，第二段即 agentId。
         # 仍建议做越界防护，以兼容自定义的非标准 session_key。
@@ -154,31 +120,18 @@ async def after_wakeup(speaker, source=None, session_key=None):
         # agent_id = parts[1] if len(parts) > 1 else None
         # if agent_id == "assistant":
         #     await speaker.play(text="助手，再见")
-        # elif agent_id == "xiaomei":
-        #     await speaker.play(text="小美，再见")
         # else:
-        #     await speaker.play(text="再见")
-        await speaker.play(text="龙虾，再见")
-    if source == "openai":
-        await speaker.play(text="小黑，再见")
-    if source == "qwenpaw":
-        await speaker.play(text="小爪，再见")
-    if source == "xiaozhi":
-        await speaker.play(text="小智，再见")
+        #     await speaker.play(text="小爱，再见")
+        await speaker.play(text="小爱，再见")
+
 
 APP_CONFIG = {
     "wakeup": {
         # 自定义唤醒词列表（英文字母要全小写）
         "keywords": [
-            "你好小智",
-            "小智小智",
-            "hi open claw",
-            "你好龙虾",
-            "龙虾你好",
             "你好小黑",
             "小黑你好",
-            "你好小爪",
-            "小爪你好",
+            "小爱小爱",
         ],
         # 静音多久后自动退出唤醒（秒）
         "timeout": 20,
@@ -234,13 +187,6 @@ APP_CONFIG = {
             "max_wait_seconds": 20,
         },
     },
-    "xiaozhi": {
-        "OTA_URL": "http://127.0.0.1:8003/xiaozhi/ota/",
-        "WEBSOCKET_URL": "ws://127.0.0.1:8000/xiaozhi/v1/",
-        "WEBSOCKET_ACCESS_TOKEN": "", #（可选）一般用不到这个值
-        "DEVICE_ID": "", #（可选）默认自动生成
-        "VERIFICATION_CODE": "", # 首次登陆时，验证码会在这里更新
-    },
     "xiaoai": {
         "continuous_conversation_mode": True,
         "exit_command_keywords": ["停止", "退下", "退出", "下去吧"],
@@ -261,42 +207,28 @@ APP_CONFIG = {
             "stream": True,  # 推荐默认值：边合成边播放，首音延迟更低
         }
     },
-    # OpenClaw Configuration
-    "openclaw": {
-        "url": "ws://127.0.0.1:18789",  # OpenClaw WebSocket 地址
-        "token": "your_openclaw_token",  # OpenClaw 认证令牌
-        # 输入模式：
-        #   - "local_asr": 现有链路，使用本地 VAD + SherpaASR
-        #   - "xiaoai_asr": 实验链路，唤醒小爱后接管原生 ASR 结果给 OpenClaw
-        "input_mode": "local_asr",
+    # DSH (DeepSeek Harness) Bridge Configuration
+    # 由 DSH 桌面端的 dsh-xiaoai-bridge 插件托管，端点始终是本机回环地址。
+    # 语音回复由 DSH 侧主动调用 API Server 播放，桥接器不会自行播放回复。
+    "dsh": {
+        "base_url": "http://127.0.0.1:19387/plugin/xiaoai",  # DSH 插件 HTTP 端点
+        "token": "",  # API Token；运行时优先使用环境变量 XIAOAI_API_TOKEN
         # session_key 格式：agent:<agentId>:<rest>
-        #   agentId: OpenClaw 中配置的 Agent ID（默认为 main）
-        #   rest:    会话标识，可自由命名，用于区分不同来源/场景 （默认为 open-xiaoai-bridge)
-        # 也可在运行时动态切换（下一条消息即刻生效，无需重连）：
-        #   app.set_openclaw_session_key("agent:assistant:open-xiaoai-bridge")
         "session_key": "agent:main:open-xiaoai-bridge",
-        "identity_path": "/app/openclaw/identity/device.json",  # 设备身份文件路径；容器部署时建议挂载持久化目录
-        "tts_speed": 1.0,  # TTS 语速 (0.5-2.0)，仅豆包 TTS 生效，小爱原生 TTS 不支持调速
-        "tts_speaker": "xiaoai",  # "xiaoai" = 小爱原生 TTS；填豆包音色 ID 则用豆包 TTS；不设置则使用 tts.doubao.default_speaker
-        # 可按 agentId 单独覆盖音色，优先级高于 tts_speaker
-        # agentId 来自 session_key，格式为：agent:<agentId>:<rest>
-        # 示例：
-        # "agent_tts_speakers": {
-        #     "assistant": "zh_female_vv_uranus_bigtts",
-        #     "xiaomei": "zh_female_shuangkuaisisi_moon_bigtts",
-        #     "butler": "xiaoai",
-        # },
-        "agent_tts_speakers": {},
-        "response_timeout": 120,  # 等待 OpenClaw agent 响应的超时时间（秒）
+        "device_name": "",  # 可选：上报给 DSH 的设备名
+        "response_timeout": 120,
+        "tts_provider": None,  # None = 交给 tts.router 选择默认 provider
+        "tts_speaker": "xiaoai",  # "xiaoai" = 小爱原生 TTS；填豆包音色 ID 则用豆包 TTS
+        "session_tts_speakers": {},  # 按 session_key 覆盖音色
+        "tts_speed": 1.0,  # TTS 语速 (0.5-2.0)，仅豆包 TTS 生效
+        # 输入模式：
+        #   - "local_asr": 使用本地 VAD + SherpaASR
+        #   - "xiaoai_asr": 接管小爱原生 ASR 结果
+        "input_mode": "local_asr",
         "exit_keywords": ["退出", "停止", "再见"],  # 退出连续对话的关键词
-        # rule_prompt: 用于「自动播放」和「连续对话」场景
-        #   - send_to_openclaw_and_play_reply() 会自动追加
-        #   - OpenClawConversationController 会自动追加
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
-        # rule_prompt_for_skill: 用于「Agent 自主播报」场景（方式三）
-        #   - send_to_openclaw() 会自动追加
-        #   - 告诉 Agent 需要调用 xiaoai-tts skill 来播报，因为服务端不会自动播放
-        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字，调用 `xiaoai-tts` skill 播报出来。字数控制在300字以内"
+        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
+        "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话
     },
     # OpenAI-compatible Service Configuration
     # 可接入 Hermes Agent API Server、OpenAI、Ollama、LM Studio 等兼容 /v1/chat/completions 的服务
@@ -327,37 +259,5 @@ APP_CONFIG = {
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
         "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
         "extra_body": {},
-    },
-    # QwenPaw Configuration
-    # 需先启动 QwenPaw: qwenpaw app
-    "qwenpaw": {
-        "base_url": "http://127.0.0.1:8088",
-        # agent_id 仅作为回退：当 session_key 不含 agentId 时才使用。
-        # 正常情况下 agentId 直接从 session_key 的第二段解析，无需单独配置。
-        "agent_id": "default",
-        "user_id": "open-xiaoai-bridge",
-        # 输入模式：
-        #   - "local_asr": 使用本地 VAD + SherpaASR
-        #   - "xiaoai_asr": 接管小爱原生 ASR 结果
-        "input_mode": "local_asr",
-        # session_key 采用 agent:<agentId>:<sessionId> 格式：
-        #   - 第二段 agentId 作为 X-Agent-Id 请求头发给服务端
-        #   - 第三段起为 sessionId，作为请求体 session_id 发给服务端
-        # 例如 agent:default:open-xiaoai-bridge -> agent=default, session=open-xiaoai-bridge
-        "session_key": "agent:default:open-xiaoai-bridge",
-        # QwenPaw 当前推荐使用后台任务接口：
-        # POST /api/console/chat/task -> GET /api/console/chat/task/{task_id}
-        "send_path": "/api/console/chat/task",
-        "task_status_path": "/api/console/chat/task/{task_id}",
-        # 认证（可选）：非空时默认使用 Authorization 认证头
-        "auth_token": "",
-        "response_timeout": 120,
-        "poll_interval": 0.5,
-        "tts_speed": 1.0,
-        "tts_speaker": "xiaoai",
-        "session_tts_speakers": {},
-        "exit_keywords": ["退出", "停止", "再见"],
-        "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
-        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送给 QwenPaw 的，他看不到你回复的文字。字数控制在300字以内",
     },
 }
