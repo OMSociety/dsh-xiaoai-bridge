@@ -19,7 +19,7 @@ const { createSpokenLog, spokenLogPath, SPOKEN_LOG_FILE } = await import(new URL
 const { truncateSpokenText, resolveReplyerRoute, buildReplyerPrompts, replyerMessages, buildCondensePrompts, createReplyer } = await import(
   new URL('../lib/replyer.js', import.meta.url).href
 );
-const { createAutoSpeak, DEFAULT_FAILURE_TEXT } = await import(new URL('../lib/auto-speak.js', import.meta.url).href);
+const { createAutoSpeak, DEFAULT_FAILURE_TEXT, DEFAULT_APPROVAL_TEXT } = await import(new URL('../lib/auto-speak.js', import.meta.url).href);
 const { createSpeakTool, SPEAK_TOOL_NAME, SPEAK_TOOL_DESCRIPTION } = await import(new URL('../lib/tools.js', import.meta.url).href);
 
 const dataDir = mkdtempSync(join(tmpdir(), 'xiaoai-speak-check-'));
@@ -381,6 +381,73 @@ h10.autoSpeak.onTurnEnd('session-speak-10');
 await check('dispose drops every tracked turn', () => {
   assert.deepEqual(h10.autoSpeak.snapshot(), []);
   assert.deepEqual(h10.bridge.spoken, []);
+});
+
+// --- approvals: the one line, never the payload -----------------------------
+console.log('approvals');
+
+const a1 = harness({ approvalText: '到电脑上点一下' });
+const A1 = 'session-approval-1';
+a1.autoSpeak.onUtterance({ sessionId: A1, deviceKey: 'dev-a1', text: '帮我把那个临时文件删了' });
+a1.autoSpeak.onAssistantText(A1, '我要运行 rm --force /tmp/x，请批准');
+a1.autoSpeak.onApprovalAsked(A1, { id: 'ap-1', toolName: 'Bash', reason: 'rm --force /tmp/x' });
+await until(() => a1.records.length === 1, 'the approval line');
+await check('an approval says only where to go, never the payload', () => {
+  assert.deepEqual(a1.bridge.spoken, ['到电脑上点一下']);
+  assert.deepEqual(a1.calls, [], 'the approval line is not reworded by the reply generator');
+  assert.deepEqual(a1.records[0], {
+    time: a1.records[0].time,
+    device: 'dev-a1',
+    intent: 'approval: Bash',
+    spoken: '到电脑上点一下',
+    provider: '',
+    model: '',
+    source: 'approval',
+  });
+});
+a1.autoSpeak.onApprovalAsked(A1, { id: 'ap-2', toolName: 'Bash', reason: 'rm --force /tmp/y' });
+await check('a second approval in the same turn does not send the user twice', () => {
+  assert.deepEqual(a1.bridge.spoken, ['到电脑上点一下']);
+  assert.equal(a1.records.length, 1);
+});
+a1.autoSpeak.onAssistantText(A1, '删掉了');
+a1.autoSpeak.onTurnEnd(A1);
+await until(() => a1.records.length === 2, 'the post-approval answer');
+await check('the pre-approval draft is dropped and the answer after it is spoken', () => {
+  assert.deepEqual(a1.bridge.spoken, ['到电脑上点一下', '说：删掉了']);
+  assert.equal(a1.records[1].source, 'replyer');
+  assert.equal(a1.records[1].intent, '删掉了');
+});
+
+const a2 = harness();
+const A2 = 'session-approval-2';
+a2.autoSpeak.onUtterance({ sessionId: A2, deviceKey: 'dev-a2', text: '你好' });
+a2.autoSpeak.onAssistantText(A2, '这句不该被念出来');
+a2.autoSpeak.onApprovalAsked(A2, { id: 'ap-3', toolName: 'Write' });
+a2.autoSpeak.onTurnEnd(A2);
+await until(() => a2.records.length === 1, 'the built-in approval line');
+await check('the built-in approval line is used when the setting is blank', () => {
+  assert.equal(DEFAULT_APPROVAL_TEXT, '需要你到电脑上确认一下');
+  assert.deepEqual(a2.bridge.spoken, ['需要你到电脑上确认一下']);
+  assert.equal(a2.records[0].source, 'approval');
+  assert.equal(a2.calls.length, 0, 'an approval-only turn never reaches the reply generator');
+});
+
+const a3 = harness({ autoSpeak: false });
+const A3 = 'session-approval-3';
+a3.autoSpeak.onUtterance({ sessionId: A3, deviceKey: 'dev-a3', text: '你好' });
+a3.autoSpeak.onApprovalAsked(A3, { id: 'ap-4', toolName: 'Bash' });
+a3.autoSpeak.onTurnEnd(A3);
+await check('with autoSpeak off an approval stays silent too', () => {
+  assert.deepEqual(a3.bridge.spoken, []);
+  assert.deepEqual(a3.records, []);
+});
+
+const a4 = harness();
+a4.autoSpeak.onApprovalAsked('session-never-heard', { id: 'ap-5', toolName: 'Bash' });
+await check('an approval from a session the speaker never opened is ignored', () => {
+  assert.deepEqual(a4.bridge.spoken, []);
+  assert.deepEqual(a4.records, []);
 });
 
 // --- the tool shares that turn state ---------------------------------------

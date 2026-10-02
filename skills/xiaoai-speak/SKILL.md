@@ -59,9 +59,11 @@ uses the asynchronous one.
    once and let the conversation carry the rest.
 2. Never speak secrets, tokens, credentials or anything the user marked as
    private.
-3. Approval prompts are not spoken. If a tool call needs the user to approve
-   something on screen, say only that they need to confirm on the computer —
-   never read the approval payload aloud.
+3. Approval prompts are never spoken, and in a voice session you do not have to
+   announce them: the plugin says "you need to confirm on the computer" through
+   the speaker by itself the moment a tool call starts waiting. In text, say the
+   same and keep it to one line — never read the approval payload, the command,
+   the diff or the reason aloud.
 4. If `xiaoai_speak` reports that the speaker is unavailable, say so in text and
    carry on; do not retry in a loop.
 5. A spoken answer is still a normal answer: keep the full detail in the

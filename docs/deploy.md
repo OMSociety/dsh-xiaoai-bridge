@@ -251,6 +251,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.2 连续对话开关（设置页「连续对话」，默认关闭 = 一句话一次唤醒；
       `lib/render-config.js` 渲染 `dsh.continuous_conversation`；桥接器侧
       `keeps_listening()`；见 §12.23；`tests/test_dsh_single_turn.py` 7 条）
+- [x] 4.3 审批提示语（`approval/asked` → 只念「需要你到电脑上确认一下」，
+      审批正文永不出口；设置项 `approvalText`；见 §12.24；
+      `scripts/check-speak.mjs` 的「approvals」6 条）
 
 ## 9. 第 1 期实现决策
 
@@ -1253,4 +1256,41 @@ def keeps_listening(self) -> bool:
 表现成「单跑绿、全量跑必红」（`core/external_conversation.py:430` 的 `TimeoutError`）。
 修法是在 `_GateTestCase.setUp()` 里把**已经**导入过该名字的模块一并换掉、`tearDown()`
 还原；两个方向的文件顺序都验证通过。
+
+### 12.24 审批提示语：只说去哪儿，不念正文（4.3）
+
+工具调用需要用户在屏幕上点了才继续时，音箱只出一句「需要你到电脑上确认一下」
+（设置项 `approvalText`，`lib/config.js` 的 `DEFAULTS.approvalText` 与
+`lib/auto-speak.js` 的 `DEFAULT_APPROVAL_TEXT` 都写死这一句，设置留空即回到它）。
+
+**触发点是 `approval/asked`，不是 `turn/end` 的 `reason.kind === 'blocked'`。**
+会话事件表（`dsh-api-session-controller` 的 `lib/typert.host.js` 里 `SessionEventMap`）把
+审批拆成三条：`approval/asked: { id, toolName, callId?, reason? }`、`approval/decided:
+{ id, outcome }`、`approval/policy: { policy, source? }`。而 `TurnEndReasonMap` 里的
+`blocked` 还包含「循环没法继续」这种根本没有请求的情况（归档会话闸门：
+`which the loop ends as blocked without a request`），对着它念「到电脑上确认」是错的。
+`reason` 字段里就是审批正文（命令、路径之类），**一个字都不进音箱**，只进日志。
+
+**为什么不等 `approval/decided` 再念。** 决定可能在片刻之后才来，而用户此刻可能不在电脑
+前；报错的代价是「多提醒一次」，沉默的代价是「这一轮永远卡着，而房间里一点动静都没有」。
+如果策略替用户直接批了，确实会白念一句——这是选定的牺牲。
+
+**一句话最多一次。** 同一个回合里两个工具同时等审批（不同 `id`），也只需要用户走一趟，
+所以用 `state.approvalAnnounced` 标记：回合内的第二次审批只记日志不发声。标记在
+`onUtterance()` 与 `onTurnEnd()` 复位（后者在读 `awaiting` 之前复位，这样没被唤醒的会话
+也会在回合边界重新获得一次机会）。
+
+**序与竞态。** 审批行走的是和回合末播报同一条队列（`state.pending`，新覆盖旧），
+`drain()` 里按 `job.verbatim` 分流：审批行**逐字念**，不经过回复器（回复器是给「话」润色的，
+不是给提示语润色的），`noteSpoken()` 记 `source: 'approval'`。因为审批行不是「回答」，
+排队时顺手清掉 `state.draft`：审批之前写的那段文字（很可能正是「我要执行 X，请批准」）
+不会被念出来；审批之后模型再写的话会重新填进 `draft`，在 `turn/end` 正常播报。
+`autoSpeak` 关闭时整条路径同样安静（判断仍在 `drain()` 里），而桌面会话在
+`lib/index.js` 的监听器里就因为「没有设备」被跳过了——坐在电脑前的人不需要被告知去电脑前。
+
+**测试**：`scripts/check-speak.mjs` 的「approvals」6 条 —— 只念提示语且带 `source:
+'approval'`、`calls` 为空（没过回复器）；同回合同一 session 的第二次审批不重复；关掉
+`autoSpeak` 全静默；审批前的草稿被丢弃、审批后写的话照常播报；设置留空时用
+`DEFAULT_APPROVAL_TEXT`；插件从未见过的 session 不发声。
+
 
