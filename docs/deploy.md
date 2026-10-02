@@ -454,6 +454,7 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
 | `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，13 项断言，含 §12.6 坑三的回归） |
+| `scripts/check-supervisor.mjs` | 进程收养单测（10 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
 | `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` 三项） |
 
 四个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
@@ -622,7 +623,22 @@ DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」
 注意这不是它的职责：`lib/tools.js` 里 `xiaoai_speak` 的 description 也写了同样的引导，
 但**提示词里的话术比工具描述更能决定模型是否调工具**，两处都要保留。
 
-### 12.8 已知遗留
+### 12.8 坑五：收养孤儿进程会连它的旧代码一起收养
+
+`lib/process.js` 的 pidfile 收养是为了「DSH 崩溃退出后不再撞端口」，但收养的代价是
+**连带收养它的 Python 模块**——`.py` 代码不热重载（只有 `config.py` 会）。结果是：
+改了代码、重启 DSH、看起来一切正常，实际跑的还是旧模块。
+
+修法是给收养加一个前置判据 `adoptedCodeIsStale()`：把 pidfile 的 mtime 和
+`bridge/main.py` + `bridge/core/**/*.py`（跳过 `.venv` / `models` / `__pycache__`
+/ `logs`）里最新的 mtime 比一比，源码更新就说明磁盘上的代码已经不是它跑的那份 ——
+此时不走收养，改为 `killTree(stale)` 杀掉再重新 spawn，日志会留下
+`bridge sources changed since pid=<n> started; replacing it`。
+
+回归测试 `node scripts/check-supervisor.mjs`（10 项）在临时目录里各起一个假
+`main.py`（`pythonPath` 指向 node 自身）覆盖两条分支，不会碰到真实的音箱连接。
+
+### 12.9 已知遗留
 
 - `lib/process.js` 的 `childEnv()` 会 `delete env.OPENAI_ENABLE`：OpenAI 兼容后端
   代码保留但插件托管下不可达（它只是可被手工启动的参考实现）。这是刻意的，
