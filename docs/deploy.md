@@ -265,6 +265,19 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       等历史、未知文件只上报；`lib/ports.js` 探测 4399/9092 是否真的释放；
       `POST /data/wipe` 用 `{"confirm":"wipe"}` 显式清空；见 §12.27；
       `scripts/check-cleanup.mjs` 的新断言）
+- [x] 4.7 README（**单一中文 README.md**，按 github-dev §3.1 与 dsh-fishpai 的写法：
+      Hero + 5 枚可点盾牌 + 锚点导航、这是什么 / 核心特性 / 工作原理（Mermaid）/
+      快速开始（方式一 clone、方式二 GitHub 装）/ 模型工具 / 配置项 / 数据放在哪 /
+      排错 / 开发，底部三节；零 emoji、不写 `---`；见 §12.28）
+- [x] 4.8 CHANGELOG（`CHANGELOG.md` 改成 github-dev §3.2 的中英双语：
+      标准长式头部、版本标题中英共用、中文分类在上英文分类在下、逐条 1:1 直译；
+      见 §12.28）
+- [x] 4.9 许可证与署名（`LICENSE` 保留上游 `Del Wang` / `coderzc` 两行并追加
+      `Copyright (c) 2026 OMSociety`；README 底部「支持与致谢」「许可证与作者」
+      两节点明上游链路；`DISCLAIMER.md` 原样保留；见 §12.28）
+- [x] 4.10 合规自查（`package.json` 补 `@deepseek-ai/dsh-client-ui-primitives`
+      peer、`files` 纳入 `bridge/` 与三份文档；确认 `pnpm-lock.yaml`、
+      `bridge/device.json`、渲染产物与凭据都不入库；见 §12.28）
 
 ## 9. 第 1 期实现决策
 
@@ -1499,6 +1512,89 @@ junction 守卫（链接消失、被指向的 `precious.txt` 还在；无权限�
 `plugin-smoke.mjs` 另加两条：`{"confirm":"please"}` → 400，
 `{"confirm":"wipe"}` → 200 且 `removed` 是数组（临时 `DSH_HOME` 里没有残片，
 所以为空数组）。
+
+## 12.28 README / CHANGELOG / 署名 / 合规自查（4.7–4.10）
+
+### 12.28.1 一份中文 README，不是双语
+
+用户原话（m06364）：「就一个中文readme就行了。这插件外国人谁用啊」——因此放弃
+「`README.md` + `README.zh.md` + 语言导航」的双语方案，只保留根目录一份中文
+`README.md`。写法按 `github-dev` 技能的 §3.1 与同伴仓库 `D:\WorkSpace\Github\dsh-fishpai\README.md`
+（用户点名参考）：Hero（`<div align="center">` + `<h1>` + 两行标语 + 5 枚可点盾牌 +
+`•` 分隔的锚点导航）、`## 这是什么`、`## 核心特性`（两列表，首列纯加粗）、
+`## 工作原理`、`## 快速开始`、`## 模型工具`、`## 配置项`、`## 数据放在哪`、
+`## 排错`、`## 开发`，底部收成恰好三节（更新日志 / 支持与致谢 / 许可证与作者）。
+全文零 emoji、不写 `---`（GitHub 给 h2 自带下边框，写了反而多一条横线）。
+
+### 12.28.2 图片：只有徽章，原理图用 Mermaid
+
+用户选择「不要图片文件：架构图用 Mermaid」，所以仓库里没有 logo、没有截图：
+`## 工作原理` 用 Mermaid flowchart（GitHub 原生渲染）。Hero 按 §3.1 本该放 logo
+（fishpai 放的是 `raw.githubusercontent.com/OMSociety/dsh-fishpai/main/logo.png`），
+本仓库跳过——没有可指向的图片，也不为一张 logo 往仓库塞二进制；要补就是加一个
+`docs/logo.svg` 再把绝对 raw URL 写进 Hero。
+
+5 枚盾牌的取舍：Version / DSH / License 用 `img.shields.io/badge/...` **静态**徽章
+（与仓库是否存在无关，现在就能显示；版本号与 `package.json` 手写同步）；Stars /
+Issues 用 `github/stars`、`github/issues` 动态徽章指向 `OMSociety/dsh-xiaoai-bridge`
+——该仓库**尚未创建**（2026-10-03 实测 `https://github.com/OMSociety/dsh-xiaoai-bridge`
+是 404，`img.shields.io` 对不存在的仓库返回 `version: repo not found`），
+所以这两枚在推送之前显示为「repo not found」，推上去即恢复。DSH 徽章写
+`>=0.2.0-rc.1`，对齐 `package.json` 的 `peerDependencies` 线。
+
+### 12.28.3 快速开始的两条路
+
+- **方式一（推荐）clone 到本地再装**：Python 那一半需要一份可写 checkout——
+  `bridge/.venv` 与 `bridge/core/models/` 都落在里面。命令是
+  `uv sync --no-install-project` + `uv sync`（Rust 扩展现场编译，本机第一次约十几分钟，
+  见 §5.0 的 0.8 记录）。
+- **方式二 `dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#v0.2.8"`**：
+  只装插件那一半。为了让这条真的可用，`package.json` 的 `files` 补了 `bridge/`
+  （92 个 tracked 文件、约 1 MB；`.venv` 与 `**/models` 被 `.gitignore` 挡住不会进包），
+  否则 GitHub 装出来的插件永远起不了桥接器。虚拟环境与模型包仍需自行准备。
+- profile 一律写 `desktop`：本机 `%USERPROFILE%\.dsh\profiles\desktop\node_modules`
+  下确实装着 `dsh-xiaoai-bridge`（`headless` 没有）。
+
+### 12.28.4 CHANGELOG 改成中英双语
+
+按 `github-dev` §3.2：标准长式头部（`# Changelog` + 中英各一句 + 中英格式说明，
+链到 keepachangelog 的 zh-CN / en 与 semver 的 zh-CN / en 页），版本标题
+`## [x.y.z] - YYYY-MM-DD` 中英共用，`## [Unreleased]` 不带日期，**中文分类在上、
+英文分类在下**，不加 `### 中文` / `### English` 包裹标题，英文与中文逐条 1:1。
+头部另保留两段项目事实（中英各一段）：本文件只记根目录的插件（版本从 `0.1.0` 起）、
+`bridge/` 是上游 fork 并保留上游历史与 tag、**插件自己的版本没有打 tag**。
+历史版本（0.1.0–0.2.8）的英文是从既有中文条目直译补的，事实与日期不动。
+
+### 12.28.5 署名与许可
+
+`LICENSE` 的上游两行（`Copyright (c) 2024 Del Wang`、`Copyright (c) 2025-present
+coderzc`）原样保留，第 5 行追加 `Copyright (c) 2026 OMSociety`。README 底部
+「支持与致谢」列三个上游（coderzc/open-xiaoai-bridge、idootop/open-xiaoai、
+deepseek-ai/dsh），「许可证与作者」点明三行版权各自的归属。`DISCLAIMER.md`
+不改（中文免责 + License Notice），Hero 下方保留一条引用块指向它。
+
+### 12.28.6 合规自查（4.10）
+
+- **依赖对齐**：`lib/client.js:47` 真的 `require("@deepseek-ai/dsh-client-ui-primitives")`，
+  此前该包只在宿主运行时里存在、清单里没声明 → 补进 `peerDependencies`
+  （`^0.2.0-rc.1`）。宿主侧 `lib/index.js:43` 的 `inject`（tools / skills / settings /
+  credentials / agents）加上 `lib/index.js:479` 的 `ctx.inject(['webServer'])`，
+  与实际调用一致；`workspaceRegistry` 与 `llm` 是软查找（`ctx.get`），故意不进 `inject`。
+- **包内容**：`files` 纳入 `bridge/`、`CONTRIBUTING.md`、`DISCLAIMER.md`
+  （README 链到的文档必须随包走）。
+- **不入库复核**：`git ls-files` 里没有 `bridge/device.json`（`.gitignore:79`）、
+  `pnpm-lock.yaml`（`.gitignore:69`）、渲染产物 `config.py.rendered`、`*.token`
+  与任何凭据文件；`bridge/config.py` 是上游模板，必须入库。
+- 新增 `CONTRIBUTING.md`（计划目录树里列了它）：环境、提交前要跑的八个 checker 与
+  pytest、改东西去哪、文档纪律（零 emoji、不写 `---`、只写最终状态、版本号变更先报备）
+  与上游同步方式。
+
+### 12.28.7 验证
+
+文档类改动不动代码，回归仍以八个 checker、`bridge` 的 pytest 与
+`plugin-smoke.mjs` 为准，结果记在提交信息里。README 的锚点按 §3.1 的
+`id="user-content-([^"]+)"` 逐个核对（中文标题的锚点就是标题本身，如 `#排错`）。
+
 
 
 
