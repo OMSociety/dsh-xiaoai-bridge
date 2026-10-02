@@ -10,12 +10,14 @@ than text on screen:
 - "让小爱说 ...", "用音箱播报一下 ...", "语音念一下 ...", "读出来"
 - "say it out loud", "announce ... on the speaker", "read this back to me"
 - a spoken summary, reminder, alert or notification
-- a hands-free follow-up in a conversation that was started by saying the wake
-  word to the speaker
+- **a conversation that arrived through the speaker** — the user said the wake
+  word, spoke, and is now waiting to hear an answer. In that case the user
+  cannot see this window: if the reply stays on screen, they hear nothing.
 
-Do not use it for ordinary chat replies: those belong in the conversation, not
-on the speaker. Only speak when the user asked for speech or when a task
-explicitly ends with an announcement.
+Do not use it for ordinary chat replies typed into the window: those belong in
+the conversation, not on the speaker. Only speak when the user asked for speech,
+when the message came in through the speaker, or when a task explicitly ends
+with an announcement.
 
 ## How to call it
 
@@ -24,9 +26,11 @@ Call the `xiaoai_speak` tool with the exact text to speak:
 - `text` (required): what to say. Write it the way it should be heard — no
   Markdown, no code blocks, no bullet lists, no URLs read out character by
   character. Keep it short; a speaker has no scrollbar.
-- `blocking` (optional, default `false`): `false` returns as soon as playback
-  starts, which is what interactive work wants. `true` waits for playback to
-  finish; use it when the next step must not be heard over the previous one.
+
+The call returns as soon as playback has been handed to the speaker, so a long
+sentence does not hold the turn open. There is no blocking option: the bridge's
+synchronous playback path is unreliable on this device, so the plugin always
+uses the asynchronous one.
 
 ## Rules
 
@@ -39,5 +43,5 @@ Call the `xiaoai_speak` tool with the exact text to speak:
    never read the approval payload aloud.
 4. If `xiaoai_speak` reports that the speaker is unavailable, say so in text and
    carry on; do not retry in a loop.
-5. `blocking: true` on a long utterance keeps the turn busy. Prefer the
-   non-blocking default and chain only when ordering genuinely matters.
+5. A spoken answer is still a normal answer: keep the full detail in the
+   conversation and put only the hearable summary on the speaker.
