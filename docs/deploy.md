@@ -454,7 +454,7 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
 
-三个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
+四个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
 
 1. **投递必须用 `agent.followup(message)`**。`agent.inject()` 不唤醒 agent，
    空闲 agent 收到消息后一动不动。
@@ -462,6 +462,8 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
    插件用惰性 `import('@deepseek-ai/dsh-llm')`，解析不到时手搓同形状对象兜底。
 3. **`source.kind` 不能是裸 `'plugin'`**。我们写 `plugin:dsh-xiaoai-bridge`
    （裸值会让会话当场可写、之后永久不可读）。
+4. **`agents.create` / `agents.resume` 必须带 `agentOptions` + `setup`**，
+   否则第一条消息会以 `prompt variable "{{model}}" has no value` 收尾（§12.7 坑三）。
 
 ### 12.3 两个真坑（重启前修掉）
 
@@ -498,10 +500,12 @@ core/models/keywords.txt  181 字节 → 93 字节
   `GET /api/health` → `{"success": true, "data": {"status": "healthy", "speaker_ready": true}}`、
   `GET /api/status` → `{"success": true, "data": {"status": "idle"}}`。
 - 插件烟测（`_oxb-wheels/plugin-smoke.mjs`，已加 `autoStart:false` 以免真的拉起桥接器）：
-  `effects: 4`、`tools: 1`、`skills: xiaoai-speak`、`GET /health` 200、
+  `effects: 5`、`tools: 1`、`skills: xiaoai-speak (2086 chars)`、`GET /health` 200、
   `GET/POST /config` 200、`GET /bridge/status` 200、
   `POST /asr` 无 bearer → 401、空文本 → 400、无 agents 服务 → 503、
   跨域 → 403、未知路由 → 404。
+- 会话桥接单测（`scripts/check-session.mjs`）：交付结果、`source.kind`、content 数组形状、
+  设备库落盘、第二次投递复用活 agent、无默认模型时的降级告警、空文本拒绝。
 
 ### 12.5 未验证（需要用户重启 DSH）
 
@@ -512,6 +516,71 @@ core/models/keywords.txt  181 字节 → 93 字节
 3. 模型调用 `xiaoai_speak`，音箱念出该文本；
 4. 说退出词「退出」/「停止」/「再见」能打断并恢复监听；
 5. 无重复播报。
+
+### 12.7 第 1 次实机联调（2026-10-02 23:20）
+
+链路的前半段**一次通过**：`bridge.log` 依次出现
+
+```
+[KWS] 🔥 触发唤醒: 小爱小爱
+[Wakeup] before_wakeup returned: dsh
+[DSH Conv] 🎙️ 进入 DSH 连续对话模式
+[DSH(agent:main:open-xiaoai-bridge)] 💬 我说：你是多。
+[DSH Conv] 👋 退出 DSH 连续对话模式
+```
+
+`GET /plugin/xiaoai/health` 显示 `bridge.running = true / pid = 8668 / managed = true`，
+`GET /devices` 显示设备键 `192.168.1.191`（说明 §12.3 的坑二已修好）与会话 id。
+解开会话落盘（`session.v4.jsonl.zstd`，4 个 zstd frame 串接；Node 的
+`zstdDecompressSync` 只解第一个 frame，需要 `_oxb-wheels/zstd-jsonl.mjs` 手工逐 frame 解）
+后看到事件序列：
+
+```
+seq 4  agent/inbox/spliced  { target: "next-turn", inserted: [{ role: "user",
+         content: [{type:"text",text:"你是多。\n注意：…"}],
+         source: { kind: "plugin:dsh-xiaoai-bridge" } }] }
+seq 5  turn/start
+seq 6  agent/inbox/spliced  { removedCount: 1 }        ← 消息被消费
+seq 7  step/start
+seq 8  step/end
+seq 9  turn/end  reason: { kind: "error", error: {
+         message: 'prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")' } }
+```
+
+即：**投递链路完全正确**（`followup` 唤醒、inbox 被消费、`source.kind` 合规），
+失败发生在第一条 LLM 请求之前。原因是 `agents.create({sessionId, meta})` 没传
+`agentOptions`，agent 没有 provider/model，部署人设的 `{{model}}` 变量无法填充
+（`sessionStats.llmMs = 0`，请求根本没发出去）。
+
+**坑三（最隐蔽的一个）：`agents.create` / `agents.resume` 必须带
+`agentOptions` + `setup`。**
+
+- `agentOptions: {provider, model}` 只解决**路由**。`dsh-agent-loop/lib/index.js:1185`
+  的守卫是
+  `if (!proposedConfig.provider || !proposedConfig.model) throw new Error('agent "..." has no provider/model: set AgentOptions.provider and AgentOptions.model or supply both via the agent/request waterfall')`。
+- 提示词变量 `{{model}}` / `{{provider}}` 另有人提供：全仓库**只有**
+  `installModelSelection`（`@deepseek-ai/dsh-agent` 导出；定义在
+  `dsh-agent/lib/types/model-selection.js:45`，打包副本在 `dsh-agent/lib/index.js:166`）
+  的 `system-prompt/assemble` 监听器会写入
+  `variables: { ...assembled.variables, provider, model }`。不装它，人设段就渲染不出来。
+- 宿主权威配方在 `dsh-headless/lib/index.js:302-321`：
+  `const selection = ctx.agentDefaultModel.currentSelection();`
+  → `agentOptions = {provider: selection.provider, model: selection.model}`
+  → `setup = (agentCtx) => installModelSelection(agentCtx, {current: selection, assembled: void 0})`。
+- `setup` 由 `dsh-agent-loop/lib/index.js:1889`
+  `(await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id))?.commit()` 调用，
+  返回值可以是 disposer 也可以是 `undefined`。
+- 另有一条**只有实机才踩得到的坑**：插件进程（就是 DSH 宿主本身）没重启时，
+  `agents.get(sessionId)` 仍会返回**用旧参数创建的活 agent**，改代码不生效。
+  必须重启 DSH（重启后走 `agents.resume` + 新参数），或删掉
+  `<dataDir>/devices.json` 让它新建会话。
+
+修法落在 `lib/session.js`：`currentSelection(ctx)` 每次投递都重读
+`ctx.get('agentDefaultModel').currentSelection()`（用户可能中途换模型），
+`resolveModelInstaller()` 只缓存一次 `import('@deepseek-ai/dsh-agent')` 的结果；
+两者拼成 `factoryOptions()`，同时展开进 `agents.resume({resumeSessionId, ...factory})`
+与 `agents.create({sessionId, meta, ...factory})`。宿主包解析不到时退回一个只注册
+`system-prompt/assemble` 的最小兜底（`{{model}}` 正是致命的那一半，路由另有 `agentOptions`）。
 
 ### 12.6 已知遗留
 

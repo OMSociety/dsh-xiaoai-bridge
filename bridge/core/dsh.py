@@ -100,7 +100,9 @@ class DshManager:
         cls._session_key = str(
             config.get("session_key", "agent:main:open-xiaoai-bridge")
         )
-        cls._device_name = str(config.get("device_name", "") or "")
+        cls._device_name = str(
+            get_env("XIAOAI_DEVICE_NAME") or config.get("device_name", "") or ""
+        )
         # The plugin hands the speaker address down through the spawn
         # environment, so one config.py can still serve several speakers.
         cls._device_host = str(
