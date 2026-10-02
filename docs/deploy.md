@@ -1648,7 +1648,11 @@ README / CHANGELOG / CONTRIBUTING 三份文档交给一个只做事实核对、�
 
 `OMSociety/dsh-xiaoai-bridge` 由用户手动 fork 并脱离 fork 网络（public、默认分支
 `main`、`isFork = false`）。本地 `main` 的基点 `b2d8384` 与之相同、领先 26 个提交，
-所以第一次推送是快进；推送后 README 的 Stars / Issues 两枚动态徽章恢复真实数值。
+所以第一次推送是快进（实测 `b2d8384..391ae8b main -> main`，远端 `main` 与本地
+一致，`git ls-remote … refs/heads/main` 也解析到同一个提交——README 的 `#main`
+因此真的可装）。推送后 Issues 徽章立即变成真实数值；Stars 徽章因为 shields 把
+「仓库不存在」这个负结果缓存了一段时间，仍旧显示 `repo not found`（用
+`&cacheSeconds=1` 实测已经不是负结果），等缓存过期自会恢复，不必改 URL。
 **实机验收（第 4 期那六条）仍待用户重启 DSH**：插件在 profile 里是
 `link:D:/WorkSpace/Github/dsh-xiaoai-bridge`，重启即载入当前工作树，无需重新安装。
 
