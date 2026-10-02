@@ -234,7 +234,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 3.12 半双工闸门：播报期间不听自己（`core/utils/playback_gate.py` + 7 个调用点 +
       `tests/test_playback_gate.py` 15 条，见 §12.16）
 - [ ] 3.10 多设备设计验证（`device_host` 已全链路透传，多台实机验证待用户有第二台音箱）
-- [ ] 3.11 fork 自加 API Server bearer 鉴权（上游 9 个端点仍无鉴权；loopback 限定，待排期）
+- [x] 3.11 fork 自加 API Server bearer 鉴权（`core/services/api_auth.py` 的 aiohttp
+      中间件；loopback 放行、远端必须带 token、没配 token 时远端 fail closed，
+      见 §12.21）
 - [x] 3.13 人格提示词 + replyer 模型（三个字段 + 回复器 + 自动接管播报 + `spoken.jsonl` 留痕，
       见 §12.17/§12.18/§12.19；`scripts/check-speak.mjs` 约 40 条断言，**实机待验证**）
 - [x] 3.14 会话分组：按工作区登记音箱会话（`attachToWorkspace()`，见 §12.20）；
@@ -313,6 +315,9 @@ uv run --no-sync python -u main.py
 | `GET /api/status` | `{"success": true, "data": {"status": "idle"}}` |
 | `POST /api/play/text` `{"text": "...", "blocking": false}` | `{"success": true, "message": "Playing text in background"}`（走 `ubus call mibrain text_to_speech`，小爱原生音色） |
 | `POST /api/play/text` `{"text": "...", "blocking": true}` | `{"success": false}` —— **假失败**，见下 |
+
+> 上表是第 1 期从 loopback 打的原始记录。自 3.11 起，**非 loopback** 调用方还要带
+> `Authorization: Bearer <token>`，`/api/health` 的 data 里也多了 `auth` 字段（见 §12.21）。
 
 **坑三：`blocking=true` 恒报失败（上游 bug）。** `core/services/speaker.py:71-78` 走
 `/usr/sbin/tts_play.sh '<text>'` 并要求 `res.exit_code == 0`；但该脚本最后一句是
@@ -902,7 +907,8 @@ HTTP 失败时它**已经返回 "continue" 了**。因此兜底必须由唯一�
   设备 ID 落到 `<CONFIG_PATH 同目录>/device.json`（临时文件 + `os.replace`），
   旧的 `update_config_file()` 已删除。原先它即使 `re.sub` 空操作也会抬高模板 mtime，
   可能让「源码比 pidfile 新」的判定误报。
-- 桥接器的 API Server（9092）**目前仍无鉴权**，计划第 3 期（3.11）加 bearer。
+- 桥接器的 API Server（9092）的九个端点自 3.11 起统一走 bearer 中间件：
+  **loopback 调用方放行，其他地址必须带 token**（见 §12.21）。
 - `afterConfigWrite()` 在**设置页保存时**渲染（保存即生效）；桥接器启动时也会渲染一次
   （`supervisor.renderConfig()`），所以手工删掉 `<dataDir>/config.py` 后重启插件能自愈。
 - 烟测 `plugin-smoke.mjs` 会真的渲染一次 `<dataDir>/config.py`（用的是桩里的默认值），
@@ -1083,4 +1089,49 @@ profile 级的 `ctx.systemPrompt.section()` 会漏进**所有**桌面会话 —�
 
 **代价**：插件不再自动建工作区。用户要一个「音箱专用」分组，就得先在侧栏把那个
 目录建成工作区，然后在这里选中它 —— 这正是 m04557 否掉「没有就自动注册」的原因。
+
+### 12.21 API Server 的鉴权：loopback 信任 + 远端 bearer
+
+上游的九个端点（`/api/health`、`/api/status`、`/api/play_text|url|file`、
+`/api/wakeup`、`/api/interrupt`、`/api/tts/doubao`、`/api/tts/voices`）**一个都不鉴权**，
+唯一的防线是监听地址（`API_SERVER_HOST`，默认 `127.0.0.1`，但它是设置项，可以改成
+`0.0.0.0`）。
+
+**规则**（`bridge/core/services/api_auth.py`，作为 aiohttp 中间件装在
+`web.Application(middlewares=[bearer_auth])` 上，所以**没有路由能绕过去**）：
+
+- peer 是 loopback（`ipaddress.ip_address(peer).is_loopback`）→ 放行，不需要 token；
+- 非 loopback → `Authorization: Bearer <token>`，与配置的 token 用
+  `hmac.compare_digest` 比对（防时序侧信道）；
+- **没配 token 时非 loopback 一律 401**：fail closed。没有可比对的秘密，放行就是裸奔。
+
+**为什么不对 loopback 也强制 token**：能连 `127.0.0.1` 的本机进程本来就能读到凭据库，
+强制只会打断那些学不到秘密的本地脚本（`skills/xiaoai-tts` 里那几个），而安全边界一点
+没变。真正的威胁面是「监听地址被改成 `0.0.0.0`」，那条路已经被堵住了。插件自己走
+loopback 且**本来就带 token**（`lib/bridge.js` 从第 2 期起就带），所以常态是已鉴权。
+
+**token 从哪来**（**每次请求现读**，改配置不必重启）：环境变量 `XIAOAI_API_TOKEN`
+优先，其次渲染后的 `config.py` 的 `dsh.token` —— 与 `core/dsh.py` 的既有惯例一致
+（env 优先、config 兜底）。插件托管时 `lib/process.js` 会把 `ensureToken()` 供给的
+token 塞进子进程 env，所以正常安装就是「已配置 token」。
+
+**失败形态**：只回 `{"success": false, "error": "unauthorized"}`（401），
+**原因只进日志**：
+
+```
+[APIServer] refused POST /api/play_text from 192.168.3.9:39120: no API token is configured (XIAOAI_API_TOKEN or dsh.token)
+```
+
+`GET /api/health` 的 data 多一个 `auth` 字段（`bearer` / `loopback-only`），
+启动日志也带（`HTTP server started at http://127.0.0.1:9092 (auth: bearer)`），
+给第 4 期的状态卡用。
+
+**刻意没做的事**：插件**不把**自己供给的 token 渲染进 `config.py`。秘密只留在 DSH
+凭据库里；`dsh.token` 仍然只服务手工场景（模板里的值不会被覆盖层抹掉，见 §12.11）。
+理由是渲染器 `lib/render-config.js` 是纯函数、`renderConfig()` 是同步的，为了把同一个
+秘密多写一份而把整条渲染链改成异步不划算。
+
+**测试**：`tests/test_api_server_auth.py` 12 条（决策表 / header 解析 / token 来源 /
+中间件确实挂在真 `APIServer` 上且九条路由都在门后）、`tests/test_skill_api_client.py`
+11 条（环境变量优先、配置文件兜底、坏配置不致命、401 提示）。
 

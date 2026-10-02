@@ -13,6 +13,7 @@ from typing import Any
 import open_xiaoai_server
 from aiohttp import web
 from core.ref import get_speaker, get_xiaoai
+from core.services.api_auth import auth_mode, bearer_auth
 from core.services.tts.doubao import DoubaoTTS
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
@@ -26,7 +27,10 @@ class APIServer:
         self.host = host
         self.port = port
         self.config = ConfigManager.instance()
-        self.app = web.Application()
+        # Every route sits behind the bearer gate (see core/services/api_auth.py):
+        # upstream shipped all nine endpoints open, which is only acceptable while
+        # the listener is loopback.
+        self.app = web.Application(middlewares=[bearer_auth])
         self.runner = None
         self.site = None
         self._setup_routes()
@@ -67,7 +71,15 @@ class APIServer:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, self.host, self.port)
         await self.site.start()
-        logger.info(f"[APIServer] HTTP server started at http://{self.host}:{self.port}")
+        mode = auth_mode()
+        logger.info(
+            f"[APIServer] HTTP server started at http://{self.host}:{self.port} (auth: {mode})"
+        )
+        if mode != "bearer" and self.host not in ("127.0.0.1", "::1", "localhost"):
+            logger.warning(
+                "[APIServer] listening on "
+                f"{self.host} without an API token: only loopback callers will be served here"
+            )
 
     async def stop(self):
         """Stop the HTTP server"""
@@ -384,7 +396,11 @@ class APIServer:
             "success": True,
             "data": {
                 "status": "healthy",
-                "speaker_ready": get_speaker() is not None
+                "speaker_ready": get_speaker() is not None,
+                # "bearer" = non-loopback callers need the token;
+                # "loopback-only" = no token is configured, so only this machine
+                # is served (see core/services/api_auth.py).
+                "auth": auth_mode()
             }
         })
 
