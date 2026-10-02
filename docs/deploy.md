@@ -1582,6 +1582,16 @@ deepseek-ai/dsh），「许可证与作者」点明三行版权各自的归属�
   与实际调用一致；`workspaceRegistry` 与 `llm` 是软查找（`ctx.get`），故意不进 `inject`。
 - **包内容**：`files` 纳入 `bridge/`、`CONTRIBUTING.md`、`DISCLAIMER.md`
   （README 链到的文档必须随包走）。
+- **打包实测（新加 `.npmignore`）**：`files` 白名单只保证「列了什么」，
+  不保证「列进去的目录里被 `.gitignore` 挡掉的东西不进来」。2026-10-03 实测：
+  `pnpm pack`（12.6.0）在本仓库产出的 tarball 是 **753,788,062 字节**，
+  含 `bridge/.venv`（6,654 项）、`__pycache__`（784 项）与 `bridge/core/models`；
+  加 `.npmignore` 之后**数值一模一样**（pnpm 在 `files` 白名单下不读它）。
+  本机 `npm pack` 直接坏掉（`Exit handler never called!`），没法用 npm 复核。
+  两条文档化的安装路径都不经过打包：本地安装记成
+  `"dsh-xiaoai-bridge": "link:D:/WorkSpace/Github/dsh-xiaoai-bridge"`（软链，不复制），
+  GitHub 安装取的是 git 树里 tracked 的文件。`.npmignore` 留着是给
+  npm 侧打包/发布用的守卫（npm 的 packlist 读它），注释里写明了这次实测。
 - **不入库复核**：`git ls-files` 里没有 `bridge/device.json`（`.gitignore:79`）、
   `pnpm-lock.yaml`（`.gitignore:69`）、渲染产物 `config.py.rendered`、`*.token`
   与任何凭据文件；`bridge/config.py` 是上游模板，必须入库。

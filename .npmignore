@@ -1,0 +1,25 @@
+# What must never end up in a published tarball.  `files` in package.json
+# whitelists the plugin and the bridge source; the entries below are generated
+# locally, so packing from a working checkout would drag the virtualenv, the
+# model package and the caches along.
+#
+# Measured 2026-10-03: npm cannot run in this environment ("Exit handler never
+# called!"), and pnpm 12.6.0 ignores this file — `pnpm pack` with `files`
+# listing `bridge/` produced 753,788,062 bytes including `bridge/.venv`
+# (6,654 entries), `__pycache__` (784) and `bridge/core/models`.  Both
+# documented install paths are unaffected: a local install records
+# `link:<checkout>` (nothing is copied) and a git install takes tracked files
+# only.  Keep this file as the guard for npm-style packing and publishing.
+.venv/
+**/__pycache__/
+**/*.pyc
+**/core/models/
+.pytest_cache/
+node_modules/
+pnpm-lock.yaml
+bridge/config.py.rendered
+**/device.json
+**/devices.json
+*.token
+token.txt
+credentials.json

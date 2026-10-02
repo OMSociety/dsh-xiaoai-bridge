@@ -24,6 +24,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - `CHANGELOG.md` 改成中英双语。
 - `LICENSE` 追加本 fork 的版权行（`OMSociety`），上游版权行原样保留。
 - `package.json`：`files` 纳入 `bridge/`；补上客户端实际 require 的 `@deepseek-ai/dsh-client-ui-primitives` peer 依赖。
+- 新增 `.npmignore`：发布打包时排除虚拟环境、缓存与模型目录。
 
 ### Added
 
@@ -35,6 +36,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - `CHANGELOG.md` is now bilingual (Chinese first, English below).
 - `LICENSE` gains this fork's copyright line (`OMSociety`); the upstream lines are kept as-is.
 - `package.json`: `files` now includes `bridge/`; the `@deepseek-ai/dsh-client-ui-primitives` peer dependency the client really requires is declared.
+- Added `.npmignore`, so a published tarball leaves out the virtualenv, the caches and the model package.
 
 ## [0.2.8] - 2026-10-03
 
