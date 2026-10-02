@@ -231,8 +231,11 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 3.7 唤醒词变化 → 重生成 `keywords.txt` 并重建 spotter（`scripts/check-keywords.mjs` 全绿）
 - [x] 3.8 降级层一：音箱侧「自定义训练」固定答复（与 DSH 生命周期解耦，仅文档化，见 §12.13）
 - [x] 3.9 降级层二：桥接器活着但插件不可达 → 播兜底文本（`dsh.fallback_text`，4 个单测，见 §12.13）
+- [x] 3.12 半双工闸门：播报期间不听自己（`core/utils/playback_gate.py` + 7 个调用点 +
+      `tests/test_playback_gate.py` 15 条，见 §12.16）
 - [ ] 3.10 多设备设计验证（`device_host` 已全链路透传，多台实机验证待用户有第二台音箱）
 - [ ] 3.11 fork 自加 API Server bearer 鉴权（上游 9 个端点仍无鉴权；loopback 限定，待排期）
+- [ ] 3.13 人格提示词 + replyer 模型（planner/replyer 拆分，待与用户确定设置项后落地）
 
 ## 9. 第 1 期实现决策
 
@@ -548,7 +551,13 @@ core/models/keywords.txt  181 字节 → 93 字节
 
 ### 12.4 已验证（离线）
 
-- `python -m pytest -q` → `45 passed`（新增 `bridge/tests/test_dsh_fallback.py` 4 条，见 §12.13）。
+- `bridge\.venv\Scripts\python.exe -m pytest -q` → `60 passed`
+  （`test_dsh_fallback.py` 4 条见 §12.13，`test_playback_gate.py` 15 条见 §12.16）。
+  **配方变了**：pytest 现在装在桥接器自己的 venv 里
+  （`uv pip install --python bridge\.venv\Scripts\python.exe pytest`；注意 `uv sync` 会把它清掉，
+  重装一次即可）。旧的「系统 python + `PYTHONPATH` 指 venv 的 site-packages」只在纯 Python
+  模块上成立：本机系统 python 是 3.13、venv 是 3.12，测试一旦 import numpy / onnxruntime 就会
+  以 `No module named 'numpy._core._multiarray_umath'` 死在导入阶段。
 - 桥接器冷启动冒烟（`DSH_ENABLE=1 API_SERVER_ENABLE=1 AUDIO_INPUT_ENABLE=1`，带
   `XIAOAI_DEVICE_HOST=192.168.1.191` / `XIAOAI_API_TOKEN=smoke-test-token`）：
   `0.0.0.0:4399 LISTENING`、`127.0.0.1:9092 LISTENING`、
@@ -892,4 +901,60 @@ HTTP 失败时它**已经返回 "continue" 了**。因此兜底必须由唯一�
   （`supervisor.renderConfig()`），所以手工删掉 `<dataDir>/config.py` 后重启插件能自愈。
 - 烟测 `plugin-smoke.mjs` 会真的渲染一次 `<dataDir>/config.py`（用的是桩里的默认值），
   跑它等于把用户当前的设置覆盖成默认值。默认值本身是可用配置，但**跑完烟测值得提醒用户**。
+
+### 12.16 半双工闸门：播报期间不听自己
+
+**症状（2026-10-03 实机）**：`bridge.log` 里出现 `我说：你好，我是小爱，是小爱音箱的智能助手…`
+—— 那是音箱把**自己刚播出去的开场白**又识别了一遍；紧接着还有 TTS 与人声混叠的乱码句。
+DSH 会话里也能看到模型在**同一轮**里连调约 6 次 `xiaoai_speak`（自问自答的产物）。
+
+**根因**：DSH 的回合是**提交型**的 —— `core/dsh_conversation.py` 把语句投给插件就立刻
+`return "continue"`，`_conversation_loop` 随即把 VAD 重新武装；而回复是插件异步反调
+`POST /api/play/text {text, blocking:false}` 播出去的。于是**播报期间麦克风是开着的**，
+听到的是我们自己。
+
+**设计**：新增 `bridge/core/utils/playback_gate.py` —— 一个跨线程的关闸信号
+（`threading.Lock` + `time.monotonic()` 截止时刻），模块级单例 `PlaybackGate`。
+
+| 机制 | 语义 |
+|---|---|
+| `hold()` / `release()` / `with PlaybackGate:` | 引用计数式占用。一次播放可能嵌套多层（回复 + 提示音），少释放一层都不能提前开闸 |
+| `hold_for(seconds)` | 按预计时长关闸，到期自开。用于「调用立刻返回、声音还在后面放」的路径 |
+| `set_device_playing(bool)` | 同步音箱 `AudioPlayer` 事件（`core/xiaoai.py` 的 `playing` 分支）。**只用来延长，从不用来提前打开** —— 设备可能在播放刚开始时报一次 `idle` |
+| `closed` | `计数 > 0` 或 `设备在播` 或 `距上次释放不足 RELEASE_TAIL_SECONDS(0.5s)` |
+
+时长估算只能按文本：`ubus call mibrain text_to_speech` 在设备**收下**文本后就返回。
+`estimate_speech_seconds(text)` = `字数 / 4.0` 夹在 `[1.5s, 180s]`，**故意往长了估**
+（关久一点只是少听一会儿，开早了回声就回来了）。
+
+**七个调用点（缺一个就漏回声）**：
+
+1. `core/services/tts/router.py` 的 `TTSRouter.play()`：整个 provider 分派（含豆包的
+   `open_xiaoai_server.tts_play`，它绕过了 SpeakerManager）包在 `with PlaybackGate:` 里。
+   这是**所有回复播报的收口点**（DSH 与 OpenAI 两条链都走它）。
+2. `core/services/speaker.py` 的 `play()`：`blocking=True` 用 `with PlaybackGate:` 包住
+   `run_shell(tts_play.sh ...)`（脚本活到放完）；`blocking=False` 用
+   `hold_for(estimate_speech_seconds(text))`；`buffer=` 按 PCM 长度估
+   （`len/2/24000`，int16 24kHz）；`play_server_file(blocking=True)` 同样用 `with`。
+3. `core/services/api_server.py` 的 `/api/tts/doubao`：外部客户端也能让音箱说话，
+   同样开合闸门（阻塞分支用 `with`，异步分支用 `hold_for`）。
+4. `core/services/audio/vad/__init__.py`：`_detection_loop` 拆出 `_process_frames()` ——
+   **关闸期间整帧丢弃**（不跑 Silero、不进入检测状态），并在进入/离开静音时各
+   `stream.clear_input()` 一次，把攒下的回声与半截录音清干净（`playback_muted` 保证日志与清理各只发生一次）。
+5. `core/wakeup_session.py` 的 `consume_xiaoai_asr_result()`：**小爱自己的识别**同样会听到
+   我们刚播出去的话，所以关闸期间的识别结果直接 `return False` 丢掉。
+6. `core/xiaoai.py`：把设备的 `playing/paused/idle` 事件喂给 `set_device_playing()`。
+7. `core/external_conversation.py` 的 `_await_utterance()`（新，替掉原来的
+   `asyncio.wait_for(self._vad_future, timeout=self.timeout)`）：**播报期间不消耗用户的聆听窗口**，
+   音箱闭嘴后才给一整个 `timeout`（否则一段长回复会在自己念到一半时把对话等超时）。
+   延长总量封顶 `MAX_ASYNC_HOLD_SECONDS`，避免「设备永远报 playing」把会话挂死。
+
+**测试**：`bridge/tests/test_playback_gate.py`（15 条）—— 闸门自身的引用计数/到期/尾音、
+设备事件只延长、估算边界、VAD 关闸丢帧且只清一次、在途 ASR 结果被丢、
+`SpeakerManager` 的 blocking/async/PCM 三条路径确实关闸、聆听窗口不被播报吃掉但仍会超时。
+
+**未覆盖**：`bridge/core/xiaoai_conversation.py`（音箱原生对话）与 `external_conversation._play_tts`
+的兜底分支走的是 `speaker.play(text=...)` 默认 `blocking=True`，由第 2 条天然覆盖；
+但**真正判断「音箱还在响吗」只有设备事件与估算两种间接证据**，没有拿到 Rust 侧播放结束回调。
+如果实机上仍有回声，第一个要调的是 `RELEASE_TAIL_SECONDS` 与 `SPEAKING_RATE_CPS`。
 

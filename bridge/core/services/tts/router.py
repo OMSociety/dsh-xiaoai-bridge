@@ -10,6 +10,7 @@ from core.services.tts.mlx_audio import MLXAudioTTS
 from core.services.tts.openai import PLAYBACK_SUPPORTED_FORMATS, OpenAITTS
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
+from core.utils.playback_gate import PlaybackGate
 
 
 class TTSRouter:
@@ -48,35 +49,38 @@ class TTSRouter:
     ) -> None:
         """Synthesize and play text, falling back to XiaoAI native TTS."""
         provider = cls.resolve_provider(configured_provider, tts_speaker)
-        try:
-            if provider == "xiaoai":
-                from core.ref import get_speaker
+        # 所有回复播报的收口点，包括绕过 SpeakerManager 的豆包通道
+        # （`tts_play` 直接推流），所以闸门要在这里再关一层。
+        with PlaybackGate:
+            try:
+                if provider == "xiaoai":
+                    from core.ref import get_speaker
 
-                speaker = get_speaker()
-                if speaker:
-                    await speaker.play(text=text, blocking=True)
-                return
+                    speaker = get_speaker()
+                    if speaker:
+                        await speaker.play(text=text, blocking=True)
+                    return
 
-            if provider == "doubao":
-                await cls._play_doubao(
+                if provider == "doubao":
+                    await cls._play_doubao(
+                        text,
+                        tts_speaker=tts_speaker,
+                        tts_speed=tts_speed,
+                        playback_token=playback_token,
+                    )
+                    return
+
+                await cls._play_openai_compatible(
                     text,
+                    provider=provider,
                     tts_speaker=tts_speaker,
-                    tts_speed=tts_speed,
-                    playback_token=playback_token,
                 )
-                return
-
-            await cls._play_openai_compatible(
-                text,
-                provider=provider,
-                tts_speaker=tts_speaker,
-            )
-        except Exception as exc:
-            logger.error(
-                f"[{log_prefix}] Error playing response with TTS: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            await cls._fallback_to_xiaoai(text, log_prefix=log_prefix)
+            except Exception as exc:
+                logger.error(
+                    f"[{log_prefix}] Error playing response with TTS: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                await cls._fallback_to_xiaoai(text, log_prefix=log_prefix)
 
     @classmethod
     async def _play_doubao(

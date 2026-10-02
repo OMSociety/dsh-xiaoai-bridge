@@ -22,6 +22,7 @@ import open_xiaoai_server
 
 from core.ref import get_speaker, get_vad
 from core.utils.config import ConfigManager
+from core.utils.playback_gate import MAX_ASYNC_HOLD_SECONDS, PlaybackGate
 
 _NOTIFY_SOUND_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -363,7 +364,7 @@ class ExternalConversationController:
 
         try:
             vad.resume("speech")
-            result = await asyncio.wait_for(self._vad_future, timeout=self.timeout)
+            result = await self._await_utterance()
             return result
 
         except asyncio.TimeoutError:
@@ -377,6 +378,42 @@ class ExternalConversationController:
             vad._handle_speech_frame = _orig_handle_speech
             vad._handle_silence_frame = _orig_handle_silence
             self._vad_future = None
+
+    async def _await_utterance(self) -> bytes:
+        """Wait for the user, without billing our own speaking time to them.
+
+        The listening window belongs to the user: while the speaker is playing
+        the gate keeps the microphone out of the loop, so the user cannot be
+        talking then. Counting that time would let a long reply time the
+        conversation out in the middle of its own sentence, so the clock only
+        starts once the speaker shuts up.
+
+        The wait is capped: a device that reports "playing" forever (or a leaked
+        hold) must not turn into a conversation that never ends.
+        """
+        deadline = None
+        extension_budget = MAX_ASYNC_HOLD_SECONDS
+
+        while True:
+            if PlaybackGate.closed and extension_budget > 0:
+                # 播报期间用户插不上话：这一片完全不计入聆听窗口，
+                # 等音箱闭嘴后再给用户一整个 timeout。
+                extension_budget -= 0.25
+                deadline = None
+                wait_seconds = 0.25
+            else:
+                now = self._loop.time()
+                if deadline is None:
+                    deadline = now + self.timeout
+                if now >= deadline:
+                    raise asyncio.TimeoutError
+                wait_seconds = max(0.0, min(deadline - now, 0.25))
+
+            done, _pending = await asyncio.wait(
+                {self._vad_future}, timeout=wait_seconds
+            )
+            if self._vad_future in done:
+                return self._vad_future.result()
 
     def _cancel_vad_future(self):
         """Cancel any pending VAD future."""

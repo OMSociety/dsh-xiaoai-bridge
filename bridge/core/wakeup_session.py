@@ -81,6 +81,14 @@ class WakeupSessionManager:
         is_vad_begin,
     ) -> bool:
         """Route XiaoAI native ASR results to the active external backend controller."""
+        from core.utils.playback_gate import PlaybackGate
+
+        if PlaybackGate.closed:
+            # 小爱自己的识别同样会听到我们刚播出去的回复，播报期间的结果一律
+            # 不算用户输入，否则就会自问自答。
+            logger.debug(f"[Wakeup] 忽略播报期间的识别结果: {text!r}")
+            return False
+
         for controller in (
             self._openai_controller,
             self._dsh_controller,

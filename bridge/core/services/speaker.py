@@ -7,6 +7,7 @@ import open_xiaoai_server
 from core.ref import get_xiaoai, set_speaker
 from core.utils.base import json_decode, json_encode
 from core.utils.logger import logger
+from core.utils.playback_gate import PlaybackGate, estimate_speech_seconds
 
 
 class CommandResult:
@@ -66,6 +67,8 @@ class SpeakerManager:
             )
 
         if buffer is not None:
+            # PCM 缓冲区按 24kHz int16 估时长：推完流调用就返回了，设备还在放。
+            PlaybackGate.hold_for(len(buffer) / 2 / 24000)
             return get_xiaoai().on_output_data(buffer)
 
         if blocking:
@@ -74,7 +77,9 @@ class SpeakerManager:
                 if url
                 else f"/usr/sbin/tts_play.sh '{text.replace("'", "'\\''") or '你好'}'"
             )
-            res = await self.run_shell(command, timeout=timeout)
+            # tts_play.sh 会一直活着直到放完，所以闸门跟着这次调用即可。
+            with PlaybackGate:
+                res = await self.run_shell(command, timeout=timeout)
             return res.exit_code == 0
 
         if url:
@@ -83,6 +88,9 @@ class SpeakerManager:
         else:
             data = json_encode({"text": text or "你好", "save": 0})
             command = f"ubus call mibrain text_to_speech '{data}'"
+
+        # 异步播报：命令立刻返回，声音还在后面慢慢放，只能按文本估时长。
+        PlaybackGate.hold_for(estimate_speech_seconds(text if not url else ""))
 
         res = await self.run_shell(command, timeout=timeout)
         return '"code": 0' in res.stdout if res else False
@@ -106,9 +114,13 @@ class SpeakerManager:
         )
 
         if blocking:
-            await open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
+            with PlaybackGate:
+                await open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
             return True
 
+        # 异步播放本机文件时闸门无从估算时长，只保证最短关闸时间；
+        # 需要严格半双工的调用方应使用 blocking=True。
+        PlaybackGate.hold_for(estimate_speech_seconds(""))
         asyncio.create_task(
             open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
         )

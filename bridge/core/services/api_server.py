@@ -16,6 +16,7 @@ from core.ref import get_speaker, get_xiaoai
 from core.services.tts.doubao import DoubaoTTS
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
+from core.utils.playback_gate import PlaybackGate, estimate_speech_seconds
 
 
 class APIServer:
@@ -467,6 +468,12 @@ class APIServer:
             )
 
             use_stream = tts_config.get("stream", False)
+
+            # 半双工：这条播报同样会进麦克风，闸门要跟着开合。异步播报的
+            # 调用会立刻返回，所以只能按文本估时长。
+            if not blocking:
+                PlaybackGate.hold_for(estimate_speech_seconds(text))
+
             if use_stream:
                 async def play_tts_stream():
                     play_fn = (
@@ -488,7 +495,8 @@ class APIServer:
                     )
 
                 if blocking:
-                    await play_tts_stream()
+                    with PlaybackGate:
+                        await play_tts_stream()
                 else:
                     await play_tts_stream()
             else:
@@ -514,7 +522,8 @@ class APIServer:
 
                 if blocking:
                     try:
-                        await play_tts_audio()
+                        with PlaybackGate:
+                            await play_tts_audio()
                     except Exception as e:
                         return web.json_response(
                             {"success": False, "error": f"TTS playback failed: {str(e)}"},

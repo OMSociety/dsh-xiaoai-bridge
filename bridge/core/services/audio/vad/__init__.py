@@ -7,6 +7,7 @@ from core.services.audio.vad.silero import Silero
 from core.services.protocols.typing import AudioConfig
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
+from core.utils.playback_gate import PlaybackGate
 from core.wakeup_session import EventManager
 
 
@@ -35,6 +36,9 @@ class _VAD:
         self.silence_frames = []  # 静音片段
         self.speech_frames = []  # 语音片段
         self.target = None  # 检测目标 speech/silence
+
+        # 音箱正在播报时为 True：此期间麦克风听到的是我们自己
+        self.playback_muted = False
 
         self.apply_runtime_config()
         self.config_manager.add_reload_listener(self._on_config_reload)
@@ -165,6 +169,24 @@ class _VAD:
         except Exception:
             pass
 
+    def _enter_playback_mute(self):
+        """进入「音箱在说话」状态：丢掉手上的半截录音与积压的音频。"""
+        if self.playback_muted:
+            return
+        self.playback_muted = True
+        self._reset_state()
+        self.stream.clear_input()
+        logger.info("音箱正在播报，暂时不识别麦克风输入", module="VAD")
+
+    def _leave_playback_mute(self):
+        """音箱播报结束：清掉这段时间攒下的回声，从干净的窗口重新开始。"""
+        if not self.playback_muted:
+            return
+        self.playback_muted = False
+        self._reset_state()
+        self.stream.clear_input()
+        logger.info("音箱播报结束，恢复识别麦克风输入", module="VAD")
+
     def _detection_loop(self):
         """VAD检测主循环"""
         while True:
@@ -179,15 +201,26 @@ class _VAD:
                 time.sleep(0.01)
                 continue
 
-            # 检测是否是语音
-            speech_prob = Silero.vad(frames, self.sample_rate) or 0
-            is_speech = speech_prob >= self.threshold
-            if is_speech:
-                self._handle_speech_frame(frames)
-            else:
-                self._handle_silence_frame(frames)
-
+            self._process_frames(frames)
             time.sleep(0.01)
+
+    def _process_frames(self, frames):
+        """处理一帧音频：闸门关着时整帧丢弃，不跑检测。"""
+        if PlaybackGate.closed:
+            # 半双工：音箱放音期间麦克风听到的是我们自己，直接丢帧，
+            # 既不能进入检测状态，也不能被上层录进用户语句。
+            self._enter_playback_mute()
+            return
+
+        self._leave_playback_mute()
+
+        # 检测是否是语音
+        speech_prob = Silero.vad(frames, self.sample_rate) or 0
+        is_speech = speech_prob >= self.threshold
+        if is_speech:
+            self._handle_speech_frame(frames)
+        else:
+            self._handle_silence_frame(frames)
 
 
 VAD = _VAD()

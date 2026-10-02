@@ -13,6 +13,7 @@ from core.xiaoai_conversation import XiaoAIConversationController
 from core.utils.base import json_decode
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
+from core.utils.playback_gate import PlaybackGate
 
 ASCII_BANNER = """
 ▄▖      ▖▖▘    ▄▖▄▖
@@ -260,6 +261,11 @@ class XiaoAI:
             playing_status = event_data.lower()
             
             get_speaker().status = playing_status
+
+            # 设备自己在报播放状态，是比按文本估时长更准的半双工信号。
+            # 只用来延长关闸时间：设备可能在播放刚开始时报一次 idle。
+            PlaybackGate.set_device_playing(playing_status == "playing")
+
             await cls.conversation.handle_playing_status(
                 playing_status,
                 get_speaker(),
