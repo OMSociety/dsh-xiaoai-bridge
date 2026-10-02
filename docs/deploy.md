@@ -1535,12 +1535,14 @@ junction 守卫（链接消失、被指向的 `precious.txt` 还在；无权限�
 `docs/logo.svg` 再把绝对 raw URL 写进 Hero。
 
 5 枚盾牌的取舍：Version / DSH / License 用 `img.shields.io/badge/...` **静态**徽章
-（与仓库是否存在无关，现在就能显示；版本号与 `package.json` 手写同步）；Stars /
-Issues 用 `github/stars`、`github/issues` 动态徽章指向 `OMSociety/dsh-xiaoai-bridge`
-——该仓库**尚未创建**（2026-10-03 实测 `https://github.com/OMSociety/dsh-xiaoai-bridge`
-是 404，`img.shields.io` 对不存在的仓库返回 `version: repo not found`），
-所以这两枚在推送之前显示为「repo not found」，推上去即恢复。DSH 徽章写
-`>=0.2.0-rc.1`，对齐 `package.json` 的 `peerDependencies` 线。
+（与仓库是否存在无关，版本号与 `package.json` 手写同步）；Stars / Issues 用
+`github/stars`、`github/issues` 动态徽章指向 `OMSociety/dsh-xiaoai-bridge`。
+写这一节时该仓库还不存在（2026-10-03 实测 404，`img.shields.io` 对不存在的仓库
+返回 `stars: repo not found` 的兜底徽章——是图不是破图），随后**用户手动 fork
+并脱离了 fork 网络**，仓库现在是 public、默认分支 `main`、`isFork = false`；
+本地 `main` 的基点 `b2d8384`（上游 `feat: 添加 OpenAI-compatible TTS / MLX-Audio
+TTS provider (#28)`）正是该仓库 `main` 的当前提交，本地领先 26 个提交，
+推送即快进。DSH 徽章写 `>=0.2.0-rc.1`，对齐 `package.json` 的 `peerDependencies` 线。
 
 ### 12.28.3 快速开始的两条路
 
@@ -1548,10 +1550,15 @@ Issues 用 `github/stars`、`github/issues` 动态徽章指向 `OMSociety/dsh-xi
   `bridge/.venv` 与 `bridge/core/models/` 都落在里面。命令是
   `uv sync --no-install-project` + `uv sync`（Rust 扩展现场编译，本机第一次约十几分钟，
   见 §5.0 的 0.8 记录）。
-- **方式二 `dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#v0.2.8"`**：
+- **方式二 `dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"`**：
   只装插件那一半。为了让这条真的可用，`package.json` 的 `files` 补了 `bridge/`
-  （92 个 tracked 文件、约 1 MB；`.venv` 与 `**/models` 被 `.gitignore` 挡住不会进包），
+  （92 个 tracked 文件、约 1 MB）；git 路径只取 tracked 的文件，所以 `.venv` 与
+  `**/models` 不会跟着走（打包那条路的实测与陷阱见 12.28.6）。
   否则 GitHub 装出来的插件永远起不了桥接器。虚拟环境与模型包仍需自行准备。
+  **ref 用分支 `#main` 而不是 `#v0.2.8`**：仓库里唯一的 tag 全是上游的
+  （`v1.0.0`…`v1.0.7`、`baseline`、`vad-kws-asr-models`），插件的版本从来没有打过 tag
+  （`CHANGELOG.md` 头部明说），写一个不存在的 ref 会直接报 no matching ref。
+  将来要按版本固定安装，就先给插件版本打 tag，再改这一行。
 - profile 一律写 `desktop`：本机 `%USERPROFILE%\.dsh\profiles\desktop\node_modules`
   下确实装着 `dsh-xiaoai-bridge`（`headless` 没有）。
 
@@ -1604,6 +1611,46 @@ deepseek-ai/dsh），「许可证与作者」点明三行版权各自的归属�
 文档类改动不动代码，回归仍以八个 checker、`bridge` 的 pytest 与
 `plugin-smoke.mjs` 为准，结果记在提交信息里。README 的锚点按 §3.1 的
 `id="user-content-([^"]+)"` 逐个核对（中文标题的锚点就是标题本身，如 `#排错`）。
+另有两个一次性脚本做过机器校验（放在仓库外的 `D:\WorkSpace\_oxb-wheels\`）：
+`doc-check.mjs`（emoji、独立 `---`、表格列数、README 锚点与标题对照）与
+`changelog-check.mjs`（版本标题与日期格式、中文分类必须在英文分类之前、
+中英条目数 1:1）。
+
+### 12.28.8 子代理复核（4.11）
+
+README / CHANGELOG / CONTRIBUTING 三份文档交给一个只做事实核对、不改文件的子代理，
+按十类逐条对代码与 git 历史：配置键与默认值（对 `lib/config.js:98-177` 的 `DEFAULTS`
+与 `lib/config.js:189+` 的 schema）、四组 HTTP 路由（`lib/http.js:184` / `:196` /
+`:211` / `:374` / `:334-360`）、八个诊断编码（`lib/diagnostics.js:24-41` 与 README
+同序）、八个 checker（`package.json` 的 `scripts.check` 只跑 client，文档逐条列是对的）、
+模型工具（`lib/tools.js:12` 的 `SPEAK_TOOL_NAME` 只声明 `text`）、端口与数据位置
+（`lib/ports.js:17` `SPEAKER_PORT = 4399` 与 `bridge/native/src/server.rs:89` 的
+`"0.0.0.0:4399"`、`lib/cleanup.js` 的 GENERATED/HISTORY 切分）、零 emoji 与无 `---`、
+相对链接存在性、版本标题与提交映射（0.2.8 对 80d8df2 … 0.1.0 对 `9ddb541` 等三个提交）。
+
+**8/10 类干净，报了两条 minor、两条 nit**，逐条落地如下：
+
+- **`#v0.2.8` 这个 ref 不存在（真问题，已改）**：见 12.28.3，改成 `#main`。
+- **「`scripts/check-speak.mjs` 记错版本」（复核实为误报，不改）**：复核说 0.2.7 那条
+  把 checker 归错了版本。实测 `git show --stat 057afba` 只动了
+  `scripts/check-client.mjs` 与 `scripts/check-diagnostics.mjs`，而 `CHANGELOG.md`
+  的 0.2.7 段写的是 `check-diagnostics.mjs`（正确）；提到 `check-speak.mjs` 的只有
+  0.2.5 段，`git log -- scripts/check-speak.mjs` 恰好是 `0724a0f`（0.2.5）、
+  `b782e93`（0.2.3）、`a9929dd`（0.2.0）——与文档一致。故不改。
+- **`sessionCwd` 的措辞（nit，已改）**：实际回退链是
+  `lib/session.js:285-304`（配置值 → `workspaceRegistry.list()[0].path` →
+  `process.cwd()` → `homedir()`），README 原写「空则用 DSH 默认」；改成与插件设置页
+  提示一致的说法「空则用第一个工作区」（`lib/client.js:178`）。
+- **`ttsProvider` 的选项文案（nit，已改）**：改成与 `lib/client.js:144-146` 相同的
+  「跟随音色 / 小爱原生 / MiMo（预留，暂不生效）」。
+
+### 12.28.9 推送与实机验收的状态
+
+`OMSociety/dsh-xiaoai-bridge` 由用户手动 fork 并脱离 fork 网络（public、默认分支
+`main`、`isFork = false`）。本地 `main` 的基点 `b2d8384` 与之相同、领先 26 个提交，
+所以第一次推送是快进；推送后 README 的 Stars / Issues 两枚动态徽章恢复真实数值。
+**实机验收（第 4 期那六条）仍待用户重启 DSH**：插件在 profile 里是
+`link:D:/WorkSpace/Github/dsh-xiaoai-bridge`，重启即载入当前工作树，无需重新安装。
 
 
 

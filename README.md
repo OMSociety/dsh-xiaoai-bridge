@@ -92,7 +92,7 @@ dsh plugin --profile desktop add D:\WorkSpace\dsh-xiaoai-bridge
 只装插件那一半（`bridge/` 源码随包一起走，虚拟环境与模型包装好后自己补）：
 
 ```powershell
-dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#v0.2.8"
+dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 ```
 
 > 装好后**重启 DSH**：宿主侧插件与客户端产物都在启动时加载，只刷新页面不够。桥接器不想放在插件目录里，就在设置页把 `bridgeDir` 指向你的 checkout。
@@ -151,7 +151,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#v0.2.8"
 | `exitReplyText` | 文本 | `小爱，再见` | 对话结束时念的一句 |
 | `wakeupTimeout` | 数字 | `20` | 静默多少秒后结束对话 |
 | `continuousConversation` | 布尔 | 关 | 开：一次唤醒可接着说；关：一句一次唤醒 |
-| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 强制小爱原生 / MiMo（预留，暂不生效） |
+| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / MiMo（预留，暂不生效） |
 | `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS |
 | `asrBackend` | 枚举 | `sense_voice` | 桥接器使用的语音识别后端 |
 | `mimoBaseUrl`、`mimoApiKeyCredential`、`mimoModel`、`mimoVoice` | 文本 | 空 | MiMo 预留占位；凭据只存名字，目前不发给桥接器 |
@@ -160,7 +160,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#v0.2.8"
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用 DSH 默认 |
+| `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
 | `sessionKey` | 文本 | `agent:main:open-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>` |
 | `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
 | `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
