@@ -229,6 +229,10 @@ APP_CONFIG = {
         #   - "xiaoai_asr": 接管小爱原生 ASR 结果
         "input_mode": "local_asr",
         "exit_keywords": ["退出", "停止", "再见"],  # 退出连续对话的关键词
+        # 一次唤醒之后听多久：
+        #   - False（默认）：只听一句，说完就退出，下句要重新唤醒
+        #   - True：一直听着，直到静默超时或说出退出词
+        "continuous_conversation": False,
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
         "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发来的语音。你的回复正文会被自动念出来（念之前会先做一次口语化润色），所以直接把要说的话写成回复正文就好：不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL，尽量 300 字以内。只有当你要逐字念出、不要润色的内容时，才调用 xiaoai_speak 工具",  # 追加在每条语音输入后面；插件设置页可覆盖
         "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话

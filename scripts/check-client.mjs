@@ -188,7 +188,7 @@ if (captured !== null) {
             '启用插件', '音箱名称', '音箱地址', '唤醒词', '语音识别后端', '会话工作区',
             '桥接器目录', 'Python 解释器', '随插件启动桥接器', '日志级别',
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
-            '对话保持时长（秒）', '朗读音箱插件', '唤醒应答', '退出应答', '退出词',
+            '对话保持时长（秒）', '连续对话', '朗读音箱插件', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
             '自动念出回复', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
             '回复器失败提示语', '人格设定', '说话风格', '行动准则', '输出限制', '语音消息附加提示',
@@ -234,7 +234,7 @@ if (captured !== null) {
             check(typeof field.resetLabel === 'string', `value field ${field.id} has no resetLabel`);
             check(typeof field.overriddenLabel === 'string', `value field ${field.id} has no overriddenLabel`);
           }
-          check(seen.switches.length === 4, `expected 4 Switch controls, got ${seen.switches.length}`);
+          check(seen.switches.length === 5, `expected 5 Switch controls, got ${seen.switches.length}`);
           for (const control of seen.switches) {
             check(typeof control.checked === 'boolean', 'a Switch has no checked value');
             check(typeof control.onChange === 'function', 'a Switch has no onChange');
@@ -262,6 +262,16 @@ if (captured !== null) {
           }
           check(source.includes('healthFacts.workspaces'), 'the picker must read the workspace list out of the /health facts');
           check(source.includes('field.sessionCwd.follow'), 'the picker needs a "follow the default" option label');
+
+          // 8. The single-shot switch is a plain checkbox with an explanation
+          //    on both languages; the page itself has no conditional logic, so
+          //    the wording is what tells the user what it does.
+          check(
+            source.includes('{ key: "continuousConversation", section: "voice", kind: "boolean", hint: "hint.continuousConversation" }'),
+            'the continuous-conversation switch is not wired into the voice section',
+          );
+          check(source.includes('field.continuousConversation'), 'the switch has no field label');
+          check(source.includes('hint.continuousConversation'), 'the switch has no hint');
         } catch (err) {
           failures.push('component render threw: ' + String(err?.message ?? err));
         }

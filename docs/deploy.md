@@ -248,6 +248,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `ensureStarted()` 按需拉起；`lib/tools.js` 的 `speakWithRevive()`；见 §12.22；
       `scripts/check-supervisor.mjs` case C–E 与 `scripts/check-speak.mjs`
       的「proactive speech」5 条）
+- [x] 4.2 连续对话开关（设置页「连续对话」，默认关闭 = 一句话一次唤醒；
+      `lib/render-config.js` 渲染 `dsh.continuous_conversation`；桥接器侧
+      `keeps_listening()`；见 §12.23；`tests/test_dsh_single_turn.py` 7 条）
 
 ## 9. 第 1 期实现决策
 
@@ -1193,4 +1196,61 @@ case E（`restartDelaysMs: [10, 20]` 的崩循环 → `watchdogGaveUp === true` 
 `the watchdog stopped after 2 restarts`；随后显式 `start()` 清掉标记并真的跑起来）；
 `scripts/check-speak.mjs` 新增「proactive speech」5 条（按需拉起后重试成功、拉起失败时
 报原因、HTTP 错误不重启、超时到 `reviveWaitMs` 就收手、没有 `ensureBridge` 时行为不变）。
+
+### 12.23 连续对话开关：默认一句话一次唤醒（4.2）
+
+设置页的「连续对话」是一个布尔开关，默认**关闭**。关闭时一次唤醒只对应一句话：桥接器把
+这轮语音交给插件后立刻退出对话模式，想再说一句要重新喊唤醒词。打开后才回到上游那种
+「一直听着，直到静默超时或说出退出词」的行为。
+
+**为什么默认是单次**：DSH 的回复是异步来的（桥接器只提交，插件稍后通过 API Server
+播报，见 §12.5），提交完这一轮之后麦克风其实无事可做。上游要它继续听，是因为上游在
+同一个循环里等待并播放回复；我们不需要，让麦克风一直开着只会多一份「听到自己刚播出去
+的话」的风险（`PlaybackGate` 只在**播放期间**抑制识别，等待回复的那段时间并没有闸门）。
+
+**插件侧**：`lib/config.js` 的 `DEFAULTS.continuousConversation = false` 与同名 schema
+字段；`lib/client.js` 把它放在「唤醒与语音」区，中英标签 + 提示各一条；`lib/render-config.js`
+把它渲染成 `dsh.continuous_conversation`。这一项**总是**写进生成的 `config.py`（包括
+`False`），因为它有明确的插件侧默认值——不写就等于「模板说什么就是什么」，而模板的
+默认值只是给不用插件的裸跑用户看的。
+
+**桥接器侧**：`core/external_conversation.py` 新增钩子
+
+```python
+def keeps_listening(self) -> bool:
+    return True
+```
+
+`_conversation_loop()` 在 `result == "continue"` 之后问它一次：返回 False 就 `break`，
+**不播退出应答**。这一点是有意的——每说完一句就听见「小爱，再见」很荒唐；退出应答只留给
+真正的退出路径（说退出词 / 静默超时）。`core/dsh_conversation.py` 覆盖它：
+
+```python
+@property
+def continuous_conversation(self) -> bool:
+    return bool(self._cfg("continuous_conversation", False))
+
+def keeps_listening(self) -> bool:
+    return self.continuous_conversation
+```
+
+基类默认 True，所以共用一个循环的 OpenAI 兼容后端不受影响；`dsh.continuous_conversation`
+在模板 `config.py` 里的默认值也是 `False`，裸跑桥接器（不经插件）同样是一句一次唤醒。
+
+**测试**：`tests/test_dsh_single_turn.py` 7 条 —— 模板默认值是 `False`、默认单次、开关打开
+后继续听、手改的 `"yes"` 也算真；再用探针驱动**真实**的 `_conversation_loop()`：单次模式下
+第一轮 `continue` 就离开（`_call_after_wakeup` 不触发、`_stop_recording` 恰好一次），
+连续模式下说完三轮才因 `exit` 退出并播一次退出应答，基类默认仍是 `True`。
+`scripts/check-config.mjs` 断言默认渲染出 `{"continuous_conversation": False}` Python 字面量、
+打开时桥接器加载到的是真正的布尔值；`scripts/check-client.mjs` 断言补上「连续对话」标签、
+`kind: "boolean"` + hint 的接线，以及开关数量从 4 变 5。
+
+**顺带修掉一个测试顺序坑**：`bridge/core/external_conversation.py:25` 是
+`from core.utils.playback_gate import PlaybackGate`——导入期就把名字绑死在本模块里，
+而 `tests/test_playback_gate.py` 原来只替换 gate 模块自己的那个名字；这招只对「在这之后才
+导入」的模块有效。新的 `tests/test_dsh_single_turn.py` 字母序在前、先把
+`core.external_conversation` 导入了，于是监听窗口测试读回真的单例、窗口按 0.3s 正常过期，
+表现成「单跑绿、全量跑必红」（`core/external_conversation.py:430` 的 `TimeoutError`）。
+修法是在 `_GateTestCase.setUp()` 里把**已经**导入过该名字的模块一并换掉、`tearDown()`
+还原；两个方向的文件顺序都验证通过。
 

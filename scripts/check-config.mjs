@@ -70,9 +70,10 @@ eq(splitList(undefined), [], 'absent text');
 
 console.log('render-config: overrides');
 const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', asrBackend: '' });
-// `wakeup.timeout` is the one key always written: the plugin owns it with a
-// concrete default, and the bridge template's own value is the same 20 seconds.
-eq(bare, { wakeup: { timeout: DEFAULTS.wakeupTimeout } }, 'emptied fields fall back to the template default');
+// Two keys are always written because the plugin owns them outright: the
+// conversation timeout (same 20 seconds as the template) and the single-shot
+// switch, whose false default is the documented behavior.
+eq(bare, { wakeup: { timeout: DEFAULTS.wakeupTimeout }, dsh: { continuous_conversation: DEFAULTS.continuousConversation } }, 'emptied fields fall back to the template default');
 const full = buildOverrides({
   ...DEFAULTS,
   wakeKeywords: '你好小智\n小爱小爱',
@@ -96,6 +97,12 @@ eq(full.dsh.wakeup_reply, '在呢', 'dsh.wakeup_reply');
 eq(full.dsh.exit_reply, '拜拜', 'dsh.exit_reply');
 eq(full.dsh.fallback_text, '电脑睡了', 'dsh.fallback_text');
 eq(full.dsh.rule_prompt_for_skill, DEFAULTS.voiceRuleText, 'dsh.rule_prompt_for_skill');
+eq(full.dsh.continuous_conversation, false, 'dsh.continuous_conversation follows the page default');
+eq(
+  buildOverrides({ ...DEFAULTS, continuousConversation: true }).dsh.continuous_conversation,
+  true,
+  'dsh.continuous_conversation flips with the switch',
+);
 eq(full.asr.model, 'paraformer', 'asr.model');
 
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-'));
@@ -116,6 +123,7 @@ try {
       exitReplyText: '拜拜',
       fallbackText: '电脑睡了',
       asrBackend: 'paraformer',
+      continuousConversation: true,
     },
   });
   ok(existsSync(target), `config written to ${target}`);
@@ -140,6 +148,7 @@ print(json.dumps({
     "dsh_wakeup_reply": module.APP_CONFIG["dsh"]["wakeup_reply"],
     "dsh_exit_reply": module.APP_CONFIG["dsh"]["exit_reply"],
     "dsh_fallback_text": module.APP_CONFIG["dsh"]["fallback_text"],
+    "dsh_continuous_conversation": module.APP_CONFIG["dsh"]["continuous_conversation"],
     "asr_model": module.APP_CONFIG["asr"]["model"],
     "hooks": [callable(module.before_wakeup), callable(module.after_wakeup)],
     "untouched_default": module.APP_CONFIG["kws"]["keywords_score"],
@@ -167,6 +176,7 @@ print(json.dumps({
   eq(loaded.dsh_wakeup_reply, '在呢', 'dsh.wakeup_reply');
   eq(loaded.dsh_exit_reply, '拜拜', 'dsh.exit_reply');
   eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
+  eq(loaded.dsh_continuous_conversation, true, 'the switch reaches the bridge as a real boolean');
   eq(loaded.asr_model, 'paraformer', 'asr.model');
   eq(loaded.hooks, [true, true], 'both wake hooks survive the overlay');
   eq(loaded.hook_globals_match, true, 'the hooks see the overridden values, not the template ones');
@@ -188,6 +198,7 @@ print(json.dumps({
   // `rule_prompt` (the text channel's wording) is template-only: the plugin
   // writes `rule_prompt_for_skill` and must leave the other one alone.
   ok(!sparseSource.includes('"rule_prompt"'), 'template-only keys are never restated in the generated file');
+  ok(sparseSource.includes('"continuous_conversation": False'), 'a false switch is still written, as a Python literal');
   ok(!sparseSource.includes('response_timeout'), 'template-only keys are never restated in the generated file');
   ok(!sparseSource.includes('doubao'), 'untouched sections stay out of the generated file');
 } finally {

@@ -66,7 +66,22 @@ class _GateTestCase(unittest.TestCase):
         # 两处都要换，才能保证被测代码拿到这个小闸门。
         self.gate_module.PlaybackGate = self.gate
 
+        # `core.external_conversation` 在模块层 `from … import PlaybackGate`
+        # （第 25 行），所以「换掉 gate 模块里的名字」只对**之后**才导入它的
+        # 模块有效。别的测试文件（例如 test_dsh_single_turn.py）可能先一步导入，
+        # 那时监听窗口读到的还是真的单例 —— 窗口会照常过期，测试就会莫名其妙
+        # 红掉。这里把已经导入过的模块里的绑定也一起换掉，tearDown 再放回去。
+        self._patched_modules = []
+        for name in ("core.external_conversation",):
+            module = sys.modules.get(name)
+            if module is not None and hasattr(module, "PlaybackGate"):
+                self._patched_modules.append((module, module.PlaybackGate))
+                module.PlaybackGate = self.gate
+
     def tearDown(self):
+        for module, original in self._patched_modules:
+            module.PlaybackGate = original
+        self._patched_modules = []
         self.gate.reset()
         self.gate_module.PlaybackGate = self._singleton
 

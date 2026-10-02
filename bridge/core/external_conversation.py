@@ -118,6 +118,16 @@ class ExternalConversationController:
     def uses_xiaoai_asr(self) -> bool:
         return self.input_mode == self.XIAOAI_ASR_INPUT
 
+    def keeps_listening(self) -> bool:
+        """Whether another turn starts without a new wake word.
+
+        Subclasses narrow this. When it returns False the loop leaves
+        conversation mode as soon as one turn has been delivered, which is
+        what single-shot ("每次唤醒只说一句") means. Timeout and exit
+        keywords are unaffected by it: they end the session either way.
+        """
+        return True
+
     # ---- public API ----
 
     def is_active(self) -> bool:
@@ -197,6 +207,17 @@ class ExternalConversationController:
                 await self._call_after_wakeup()
                 break
             elif result == "error":
+                break
+            elif not self.keeps_listening():
+                # Single-shot: the turn is on its way to the backend and the
+                # reply will be spoken by DSH over the API Server later, so
+                # there is nothing left to listen for. The exit reply is *not*
+                # played here — saying goodbye after every single sentence
+                # would be absurd.
+                logger.info(
+                    f"[{self.LOG_MODULE}] Single-shot turn delivered, leaving conversation mode",
+                    module=self.LOG_MODULE,
+                )
                 break
 
     async def _run_one_turn_with_local_asr(self) -> str:

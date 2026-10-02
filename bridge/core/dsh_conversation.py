@@ -28,6 +28,20 @@ class DshConversationController(ExternalConversationController):
     WAKEUP_SOURCE = "dsh"
     MANAGER = DshManager
 
+    @property
+    def continuous_conversation(self) -> bool:
+        """Whether one wake word covers a whole back-and-forth.
+
+        False (the default, and what the settings page ships) is single-shot:
+        the utterance is delivered and the session ends right away, so the
+        reply that arrives later from the plugin never runs into a live
+        microphone, and a second question needs its own wake word.
+        """
+        return bool(self._cfg("continuous_conversation", False))
+
+    def keeps_listening(self) -> bool:
+        return self.continuous_conversation
+
     async def _run_one_turn_with_local_asr(self) -> str:
         """Submit one utterance to DSH without waiting for a reply.
 
