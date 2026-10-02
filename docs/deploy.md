@@ -257,6 +257,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.4 MiMo TTS 预留（设置页「语音合成方式」：跟随音色 / 小爱原生 / MiMo（预留）；
       MiMo 四个占位字段只存不写；见 §12.25；`scripts/check-config.mjs` 与
       `scripts/check-client.mjs` 的新断言）
+- [x] 4.5 状态卡（`lib/diagnostics.js` 记录最近错误；`/health` 增发实时探测的
+      `bridgeApi` 与 `diagnostics`；设置页「运行状态」显示接口连通、鉴权方式、
+      令牌是否配置、看门狗重启次数与最近错误；见 §12.26；
+      `scripts/check-diagnostics.mjs` 与 `plugin-smoke.mjs` 的新断言）
 
 ## 9. 第 1 期实现决策
 
@@ -1348,6 +1352,71 @@ spec 可以带 `optionLabels: { 值: i18n key }`，取值时 `translate()`，没
 `scripts/check-client.mjs` —— 段控件数量 2 → 3，`xiaoai-ttsProvider` 的选项值/标签是
 `["=跟随音色", "xiaoai=小爱原生", "mimo=MiMo（预留）"]` 且未播种时 `value` 是空串，
 没有 `optionLabels` 的枚举仍然用原始值当标签。
+
+
+### 12.26 状态卡：看得见连接、鉴权与最近错误（4.5）
+
+设置页「运行状态」原来只答「进程在不在」。可语音链路的失败恰好都发生在没人看的地方：
+桥接器起来了但没在服务、令牌换了、有人拿着旧令牌调 `/asr`、看门狗已经放弃重启。
+第 4.5 项补三样东西：**实时探测、错误记忆、以及把两者画到卡片上**。
+
+**一、`lib/diagnostics.js`：最近错误的记忆。** `createDiagnostics({ logger, limit = 20, now })`
+返回 `{ note, recent, last, clear }`。条目只有两段信息：
+
+| 字段 | 是什么 |
+| --- | --- |
+| `code` | 稳定标识（`DIAGNOSTIC_CODES` 七个之一），由页面翻译成中英文本 |
+| `detail` | 原始技术串（截 300 字），原样显示 |
+| `time` / `count` | ISO 时间；同一 `code + detail` 重复出现时收敛成一条并累加 `count` |
+
+**为什么是「代码 + 原文」而不是直接存一句中文。** 页面本来就有中英两套文案，写死中文等于
+在英文界面里塞中文；而 `detail` 是给人看的现场证据（`POST /api/play/text: HTTP 401:
+unauthorized`），翻译它只会丢信息。收敛成一条是给播放循环准备的：每句都失败时，卡片应该
+说「桥接器没有响应（×37）」而不是把 37 条相同的行灌满、把真正的第一条错误挤出去。
+`note()` 与 `recent()` 都**不抛**（`recent()` 返回逐条拷贝）：描述故障的代码不能成为新的故障。
+
+**二、谁往里写。** 四个位置，都是已经知道答案的地方：
+
+| 位置 | 代码 | 触发 |
+| --- | --- | --- |
+| `lib/bridge.js` 的 `request()` | `bridge-rejected` | 桥接器答了 401/403（令牌不被接受） |
+| 同上 | `bridge-error` | 其他非 2xx |
+| 同上 | `bridge-unreachable` | 连不上（进程没跑、地址端口不对） |
+| 同上 | `bridge-timeout` | 请求发出去了但没回来 |
+| `lib/http.js` 的 `/asr` | `plugin-rejected` | 有人用错令牌调本插件（**bearer 不匹配的现场**） |
+| `lib/index.js` 自动启动 | `start-failed` | `supervisor.start()` 失败或被抛异常 |
+| `lib/index.js` 收集事实时 | `watchdog-gave-up` | 看门狗把退避预算用完了（§12.22） |
+
+**三、`/health` 增发 `bridgeApi` 与 `diagnostics`。** 连接状态不是「进程在不在」而是
+**当场问一次**：`collectFacts()` 调 `bridge.health({ timeoutMs: 1500 })`，得到
+
+```
+bridgeApi = { state, url, auth, error, checkedAt }
+state = connected | unauthorized | unreachable | disabled
+```
+
+`connected` 就是 `/api/health` 回了 200（`auth` 取桥接器自报的 `bearer` / `loopback-only`，
+见 §12.21），`unauthorized` 是 401/403，`unreachable` 是其余，`disabled` 是设置里关掉了
+API Server（此时根本不探测）。探测超时特意收紧到 1500 ms：卡片回答的是「在不在」，
+不该让人对着设置页等满一个播放超时（15 s）。**进程活着 ≠ 在服务** —— 还在 import 的
+Python 半边、fork 之后崩掉的半边，都会显示成「进程在、接口不答」，这正是要区分的那一幕。
+
+**卡片新增行**：桥接器接口（已连接/未连接/令牌被拒绝/已关闭）、服务地址、鉴权方式
+（需要令牌/仅限本机）、访问令牌（已配置/未配置）、看门狗重启次数（仅在非零或已放弃时出现）、
+已放弃重启时的 `lastError`、下次重启时间，以及**最近错误**块（最多三条，最新一条带
+`status.lastError` 标签，重复的带 `×N`），没有错误时明确写「没有记录到错误」而不是留白。
+目前跑着的桥接器进程是 3.11 之前启动的，所以 `auth` 会显示 `—`：重启一次即带上该字段。
+
+**测试**：`scripts/check-diagnostics.mjs`（32 条）—— 存储、时间戳、镜像日志、收敛重复、
+上限截断、长 detail 截断、空 code 不存、`clear()`、`recent()` 返回拷贝；再用假 `fetch`
+分别喂 401 / 500 / 200 / `ECONNREFUSED` / 永不返回（靠 `AbortError` 结束），断言四种
+code 与「探测成功时不记录」；最后断言七种 code 都在 `DIAGNOSTIC_CODES` 里。
+`scripts/check-client.mjs` 新增第 9 组：源码级断言卡片确实引用了 `facts.bridgeApi`、
+`facts.diagnostics`、每个 `status.*` 与 `diagnostic.*` 文案，并把 `lib/diagnostics.js` 里
+列出的每个 code 与页面文案对账（漏一个就红）。`plugin-smoke.mjs` 则在**打过一次无令牌
+`/asr` 之后**再拉 `/health`，断言 `bridgeApi` 四个取值之一 + `diagnostics` 里出现
+`plugin-rejected`，也就是「bearer 不匹配真的会在卡片上留下痕迹」。
+
 
 
 

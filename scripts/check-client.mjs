@@ -296,6 +296,38 @@ if (captured !== null) {
           );
           check(source.includes('field.continuousConversation'), 'the switch has no field label');
           check(source.includes('hint.continuousConversation'), 'the switch has no hint');
+
+          // 9. The status card reports the API Server probe and the diagnostics
+          //    list. The harness never lets /health answer (useEffect is a no-op,
+          //    useState never updates), so the rows themselves cannot render
+          //    here: assert the wiring by name, and assert separately that every
+          //    diagnostic code the host can store has wording in both languages.
+          for (const needle of [
+            'status.api',
+            'status.apiUrl',
+            'status.apiAuth',
+            'status.token',
+            'status.watchdog',
+            'status.lastError',
+            'status.diagnostics',
+            'status.noErrors',
+            'facts.bridgeApi',
+            'facts.diagnostics',
+            'diagnostic.',
+          ]) {
+            check(source.includes(needle), `the status card never mentions ${JSON.stringify(needle)}`);
+          }
+          const diagnosticSource = readFileSync(join(PACKAGE_ROOT, 'lib', 'diagnostics.js'), 'utf8');
+          const codes = [...diagnosticSource.matchAll(/'([a-z][a-z-]*[a-z])'/g)]
+            .map((match) => match[1])
+            .filter((value) => value.includes('-'));
+          check(codes.length >= 5, `expected the diagnostics module to list its codes, found ${codes.length}`);
+          for (const code of codes) {
+            check(
+              source.includes(`"diagnostic.${code}"`),
+              `lib/diagnostics.js reports ${JSON.stringify(code)} but the page has no wording for it`,
+            );
+          }
         } catch (err) {
           failures.push('component render threw: ' + String(err?.message ?? err));
         }
