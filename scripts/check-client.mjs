@@ -16,6 +16,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
+import { DEFAULTS } from '../lib/config.js';
+
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLIENT_FILE = join(PACKAGE_ROOT, 'lib', 'client.js');
 const MANIFEST_FILE = join(PACKAGE_ROOT, 'package.json');
@@ -181,12 +183,20 @@ if (captured !== null) {
             '启用插件', '音箱名称', '音箱地址', '唤醒词', '语音识别后端', '会话工作区',
             '桥接器目录', 'Python 解释器', '随插件启动桥接器', '日志级别',
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
+            '对话保持时长（秒）', '朗读音箱插件', '唤醒应答', '退出应答', '退出词',
+            '兜底播报文本', '会话键',
           ];
           for (const label of configFields) {
             check(page.includes(label), `page view is missing the field ${JSON.stringify(label)}`);
           }
-          for (const heading of ['基本', '唤醒与语音', '桥接器进程', '本地 API 服务', '运行状态']) {
+          for (const heading of ['基本', '唤醒与语音', '应答与兜底', '桥接器进程', '本地 API 服务', '运行状态']) {
             check(page.includes(heading), `page view is missing the section ${JSON.stringify(heading)}`);
+          }
+
+          // Every settings key the host can store must have a control here;
+          // otherwise a value exists that the user can only change by hand.
+          for (const key of Object.keys(DEFAULTS)) {
+            check(source.includes(`key: "${key}"`), `lib/config.js defines ${JSON.stringify(key)} but lib/client.js renders no control for it`);
           }
 
           // 5. The official form frame must be driven with the shape SettingsForm

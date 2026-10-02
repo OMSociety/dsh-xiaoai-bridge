@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 
 from core.utils.ort_dll import ensure_onnxruntime_dll_path
@@ -11,7 +13,11 @@ from core.utils.file import get_model_file_path
 
 
 class _SherpaOnnx:
-    def start(self):
+    def __init__(self):
+        # 检测线程与配置重载线程会并发读写 spotter/stream，用锁串行化
+        self._lock = threading.Lock()
+
+    def _build_spotter(self):
         config = ConfigManager.instance()
         keywords_score = config.get_app_config("kws.keywords_score", 2.0)
         keywords_threshold = config.get_app_config("kws.keywords_threshold", 0.2)
@@ -31,21 +37,32 @@ class _SherpaOnnx:
         )
         self.stream = self.keyword_spotter.create_stream()
 
+    def start(self):
+        with self._lock:
+            self._build_spotter()
+
+    def reload(self):
+        """重建 spotter，使 keywords.txt / 阈值改动立即生效。"""
+        with self._lock:
+            self._build_spotter()
+
     def reset(self):
         """Reset the stream to discard any partial recognition state."""
-        self.stream = self.keyword_spotter.create_stream()
+        with self._lock:
+            self.stream = self.keyword_spotter.create_stream()
 
     def kws(self, frames):
         # print(f"kws....., {len(frames)}")
         samples = np.frombuffer(frames, dtype=np.int16)
         samples = samples.astype(np.float32) / 32768.0
-        self.stream.accept_waveform(16000, samples)
-        while self.keyword_spotter.is_ready(self.stream):
-            self.keyword_spotter.decode_stream(self.stream)
-            result = self.keyword_spotter.get_result(self.stream)
-            if result:
-                self.keyword_spotter.reset_stream(self.stream)
-                return result.lower()
+        with self._lock:
+            self.stream.accept_waveform(16000, samples)
+            while self.keyword_spotter.is_ready(self.stream):
+                self.keyword_spotter.decode_stream(self.stream)
+                result = self.keyword_spotter.get_result(self.stream)
+                if result:
+                    self.keyword_spotter.reset_stream(self.stream)
+                    return result.lower()
 
 
 SherpaOnnx = _SherpaOnnx()

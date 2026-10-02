@@ -33,6 +33,7 @@ class _KWS:
 
         self.apply_runtime_config()
         self.config_manager.add_reload_listener(self._on_config_reload)
+        self.applied_keywords = self.keyword_signature()
 
     def apply_runtime_config(self):
         """同步最新 KWS 相关配置。"""
@@ -42,9 +43,62 @@ class _KWS:
         min_silence_ms = kws_config.get("min_silence_duration", 480)
         self.vad_min_silence_frames = int(min_silence_ms / self.frame_duration_ms)
 
+    def keyword_signature(self):
+        """唤醒词 + KWS 阈值的指纹，用于判断是否需要重建 spotter。"""
+        keywords = self.config_manager.get_app_config("wakeup.keywords", [])
+        if not isinstance(keywords, list):
+            keywords = []
+        return (
+            tuple(str(item) for item in keywords),
+            self.config_manager.get_app_config("kws.keywords_score", 2.0),
+            self.config_manager.get_app_config("kws.keywords_threshold", 0.2),
+        )
+
     def _on_config_reload(self, *_args):
-        """配置重载后刷新运行时参数。"""
+        """配置重载后刷新运行时参数；唤醒词变化时重建 KWS。"""
         self.apply_runtime_config()
+
+        signature = self.keyword_signature()
+        if signature == self.applied_keywords:
+            return
+        self.applied_keywords = signature
+        self.refresh_keywords()
+
+    def refresh_keywords(self):
+        """重新生成 keywords.txt 并重建 spotter，让新唤醒词立即生效。
+
+        keywords.txt 由 sherpa_onnx.text2token 从这里面的唤醒词编码而来
+        （上游只在 scripts/start.sh / Dockerfile 里生成），spotter 又只在
+        start() 时读一次该文件，所以两者都得在这里刷新。
+        """
+        keywords, keywords_score, keywords_threshold = self.applied_keywords
+        try:
+            from core.services.audio.kws.keywords import main as generate_keywords
+
+            generate_keywords()
+        except Exception as exc:
+            logger.error(
+                f"[KWS] 唤醒词文件生成失败: {type(exc).__name__}: {exc}",
+                module="KWS",
+            )
+            return
+
+        try:
+            SherpaOnnx.reload()
+        except Exception as exc:
+            logger.error(
+                f"[KWS] 唤醒词重建失败: {type(exc).__name__}: {exc}",
+                module="KWS",
+            )
+            return
+
+        logger.info(
+            (
+                f"唤醒词已热重载: {list(keywords)}"
+                f" (score:{keywords_score}, threshold:{keywords_threshold})"
+            ),
+            module="KWS",
+        )
 
     def start(self):
         self.audio = MyAudio.create()

@@ -219,6 +219,20 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       见 §12.9；`sessionCwd()` 四级兜底 + `DEVICE_STORE_VERSION` 1→2 退役旧会话）
 - [x] 2.17 设置页重写 + 插件名 i18n（原生表单件 + `{ops,revision}` 写路由 + 包内 `locale/*.json`，
       见 §12.10；待用户重启 DSH 后在插件页确认渲染与保存）
+- [x] 3.0 字段→组件映射（新增 `wakeupTimeout` / `ttsSpeaker` / `wakeupReplyText` / `exitReplyText` /
+      `exitKeywords` / `fallbackText` / `sessionKey` 七个字段与「应答与兜底」分区；
+      `scripts/check-client.mjs` 现在断言 `lib/config.js` 的每个键在客户端都有控件）
+- [x] 3.1 设备/会话相关项进入设置页（名称、地址、唤醒词、退出词、会话键、工作区、音色、兜底文本）
+- [x] 3.2 全局项（API Server 端口、鉴权凭据名、日志级别 —— 均已在页面上）
+- [x] 3.3 凭据托管（`apiServerTokenCredential` 只存**凭据名**、首启动自动签发 token，见 §12.4）
+- [x] 3.4 `lib/render-config.js` 渲染 `config.py`（覆盖层 + 临时文件 + `renameSync` 原子替换，见 §12.12）
+- [x] 3.5 托管进程传 `CONFIG_PATH=<dataDir>/config.py`（`lib/process.js` 的 `childEnv()`）
+- [x] 3.6 热生效单一路径（设置页写入 → 原子替换 → 桥接器 1s 轮询 mtime → `reload_app_config()`）
+- [x] 3.7 唤醒词变化 → 重生成 `keywords.txt` 并重建 spotter（`scripts/check-keywords.mjs` 全绿）
+- [x] 3.8 降级层一：音箱侧「自定义训练」固定答复（与 DSH 生命周期解耦，仅文档化，见 §12.13）
+- [x] 3.9 降级层二：桥接器活着但插件不可达 → 播兜底文本（`dsh.fallback_text`，4 个单测，见 §12.13）
+- [ ] 3.10 多设备设计验证（`device_host` 已全链路透传，多台实机验证待用户有第二台音箱）
+- [ ] 3.11 fork 自加 API Server bearer 鉴权（上游 9 个端点仍无鉴权；loopback 限定，待排期）
 
 ## 9. 第 1 期实现决策
 
@@ -324,16 +338,17 @@ D:\WorkSpace\Github\dsh-xiaoai-bridge\        # 2026-10-03 从 D:\WorkSpace\dsh-
   lib\process.js        # 桥接器子进程托管 + pidfile 收养
   lib\session.js        # 设备→DSH 会话桥（agents.create/resume、设备库落盘）
   lib\tools.js          # xiaoai_speak 工具定义
+  lib\render-config.js  # 设置 → 桥接器 config.py（覆盖层 + 原子替换）
   lib\types\*.d.ts
   locale\{zh,en}.json   # 插件名 i18n，由 dsh-app-boot 的 readPluginMeta 解析
   skills\xiaoai-speak\SKILL.md
-  scripts\{check-client,check-session,check-supervisor}.mjs
+  scripts\{check-client,check-session,check-supervisor,check-config,check-keywords}.mjs
   docs\deploy.md
   bridge\               # fork 后的上游桥接器（含 core\models\、target\，均被 gitignore）
 ```
 
 `git remote`：只有 `upstream = https://github.com/coderzc/open-xiaoai-bridge`（**没有 origin**，
-等用户提供 fork URL）。基线 tag：`baseline`；HEAD 已在 fork 之后的本地提交线上（最新 `9ddb541`）。
+等用户提供 fork URL）。基线 tag：`baseline`；HEAD 已在 fork 之后的本地提交线上。
 
 ### 11.2 安装记录
 
@@ -486,9 +501,12 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/session.js` | 一台音箱一个会话；`agents.resume` 优先、`agents.create` 兜底；**投递用 `agent.followup()`** |
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
+| `lib/render-config.js` | 把设置渲染成桥接器读的 `config.py`；**覆盖层 + 原子替换**（见 §12.11） |
 | `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，7 组 23 项断言，含 §12.6 坑三与 §12.9 坑六的回归） |
 | `scripts/check-supervisor.mjs` | 进程收养单测（12 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
-| `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` / 官方表单件形状 / 14 个字段与 5 个分区 / `locale/*.json` 契约） |
+| `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` / 官方表单件形状 / 21 个字段与 6 个分区 / `lib/config.js` 每个键都有控件 / `locale/*.json` 契约） |
+| `scripts/check-config.mjs` | 渲染器单测 + **真机验证**：用 `bridge/.venv` 的解释器加载渲染结果，断言覆盖值与两个钩子（见 §12.11） |
+| `scripts/check-keywords.mjs` | 唤醒词热重载验收：换 `CONFIG_PATH` → `reload_app_config()` → 断言 `keywords.txt` 重编码 + spotter 重建（见 §12.12） |
 
 五个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
 
@@ -530,7 +548,7 @@ core/models/keywords.txt  181 字节 → 93 字节
 
 ### 12.4 已验证（离线）
 
-- `python -m pytest -x -q` → `41 passed`。
+- `python -m pytest -q` → `45 passed`（新增 `bridge/tests/test_dsh_fallback.py` 4 条，见 §12.13）。
 - 桥接器冷启动冒烟（`DSH_ENABLE=1 API_SERVER_ENABLE=1 AUDIO_INPUT_ENABLE=1`，带
   `XIAOAI_DEVICE_HOST=192.168.1.191` / `XIAOAI_API_TOKEN=smoke-test-token`）：
   `0.0.0.0:4399 LISTENING`、`127.0.0.1:9092 LISTENING`、
@@ -543,14 +561,19 @@ core/models/keywords.txt  181 字节 → 93 字节
   `POST /asr` 无 bearer → 401、空文本 → 400、无 agents 服务 → 503、
   跨域 → 403、未知路由 → 404。
 - 配置写路由两种形态都对：`{patch,revision}` → 200、`{ops,revision}` → 200；
+  两者都返回 `config: {ok:true, path:"<dataDir>\\config.py"}`（写路由顺带渲染，见 §12.11）；
   `{patch,ops}` 同时给 → 400、空 `ops` → 400、非法 op → 400、过期 revision → 409。
 - 会话桥接单测（`scripts/check-session.mjs`，7 组 23 项）：交付结果、`source.kind`、
   content 数组形状、`meta.cwd` 为绝对路径、设备库落盘（`version: 2`）、第二次投递复用活 agent、
   无默认模型时的降级告警、空文本拒绝、**v1 遗产设备库退役重建**、
   工作区兜底 / 配置生效 / 相对路径回退三条 `sessionCwd` 路径。
-- 进程收养单测（`scripts/check-supervisor.mjs`，12 项）与客户端 bundle 校验
-  （`scripts/check-client.mjs`：官方表单件形状、14 个字段与 5 个分区标题、
-  `locale/*.json` 的存在性/语言 id/`meta.title|description` 非空、`exports` 与 `files` 是否放行 locale）。
+- 进程收养单测（`scripts/check-supervisor.mjs`，12 项）、渲染器单测 + 真机加载
+  （`scripts/check-config.mjs`，含「钩子看到的是覆盖值」与「未拥有的键保持模板默认」）、
+  唤醒词热重载（`scripts/check-keywords.mjs`，见 §12.12）与客户端 bundle 校验
+  （`scripts/check-client.mjs`：官方表单件形状、21 个字段与 6 个分区标题、
+  `lib/config.js` 每个键都有控件、`locale/*.json` 的存在性/语言 id/`meta.title|description` 非空、
+  `exports` 与 `files` 是否放行 locale）。
+- 兜底播报（`bridge/tests/test_dsh_fallback.py`，4 项，见 §12.13）。
 - locale 解析实测（在 profile 目录里跑）：
   `require.resolve('dsh-xiaoai-bridge/locale/en.json')` → `D:\WorkSpace\Github\dsh-xiaoai-bridge\locale\en.json`，
   即 `exports` 的 `"./locale/*"` 已生效（`readPluginMeta` 走的就是同一个 Node 解析器）。
@@ -772,14 +795,101 @@ DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」
 以及 locale 文件的存在性、语言 id 合法性、`meta.title|description` 非空、
 `exports`/`files` 是否放行。
 
-### 12.11 已知遗留
+### 12.11 第 3 期：生成的 `config.py` 是**覆盖层**，不是副本
+
+设置页不再只写 DSH 的 settings，它同时把配置渲染成桥接器能读的 `config.py`
+（`lib/render-config.js`，写 `<dataDir>/config.py`，`lib/process.js` 用
+`CONFIG_PATH` 把它交给子进程）。**关键决策**：生成的文件不是模板的拷贝，而是
+
+```python
+_template = _load_template(...)          # 用 importlib 加载仓库里的 bridge/config.py
+APP_CONFIG = _template.APP_CONFIG        # 共用同一个 dict 对象
+before_wakeup = _template.before_wakeup  # 两个钩子直接复用上游定义
+after_wakeup = _template.after_wakeup
+_deep_merge(APP_CONFIG, { ...overrides })  # 只覆盖插件拥有的键
+```
+
+理由（三条，缺一不可）：
+
+1. **默认值只有一份**。上游 200+ 行默认值不会被复制进插件，也就不会悄悄过期；
+   「清空某个字段」= 不写该键 = 用上游默认，而不是写一个空值。
+2. **钩子必须看到覆盖值**。`before_wakeup` / `after_wakeup` 直接读模块级
+   `APP_CONFIG`，所以生成文件必须让 `APP_CONFIG` 就是被覆盖的那个对象；
+   拷贝一份再改，钩子看到的还是原值（`scripts/check-config.mjs` 里
+   `the hooks see the overridden values` 一项就是钉这个的）。
+3. **写盘必须原子**。桥接器每秒轮询 mtime，半写文件会让它 `reload` 到语法错误；
+   写入走「临时文件 + `renameSync`」。
+
+`wakeup.timeout` 是唯一**恒定写入**的键 —— 它是插件拥有的字段且有具体默认值
+（20 秒，与模板默认相同），所以「全部字段清空」时仍会写出 `{wakeup:{timeout:20}}`。
+这不是 bug，`check-config.mjs` 里连这条都断言了。
+
+### 12.12 唤醒词热生效（硬需求①的可执行验收）
+
+链路：设置页保存 → `lib/http.js` 写回 → `afterConfigWrite()` 调
+`supervisor.renderConfig()` → `<dataDir>/config.py` 原子替换 → 桥接器
+`_watch_config_file()` 1s 轮询发现 mtime 变化 → `reload_app_config()` →
+`ConfigManager` 的监听器 → `_KWS._on_config_reload()`：先 `apply_runtime_config()`，
+**指纹（唤醒词 + kws 两个阈值）没变就返回**，变了才 `refresh_keywords()` ——
+先进程内调用 `core/services/audio/kws/keywords.py:main()` 重新编码
+`core/models/keywords.txt`，再 `SherpaOnnx.reload()` 在锁内重建
+`KeywordSpotter` + stream。
+
+**为什么必须有 `reload()`**：`_SherpaOnnx.start()` 只在 `_detection_loop` 里调用一次，
+唤醒词文件于是只在进程启动时读一次 —— 光重生成 `keywords.txt` 不重启进程是**不生效**的。
+
+`scripts/check-keywords.mjs` 用桥接器自己的解释器跑真链路：渲染 A（`小爱小爱`）→
+加载 → `SherpaOnnx.start()` → 把 `CONFIG_PATH` 换成渲染 B（`你好小智` + `测试唤醒词`）→
+`reload_app_config()`，断言编码后的 `keywords.txt` 是
+
+```
+你 好 小 智 @你好小智
+测 试 唤 醒 词 @测试唤醒词
+```
+
+（新词在、旧词 `@小爱小爱` 已消失）、spotter 对象被重建、`applied_keywords` 跟着换，
+并在 `finally` 里还原仓库里的 `keywords.txt`（生成物，gitignore）。
+
+### 12.13 两层降级（3.8 / 3.9）
+
+- **层一（音箱侧，与 DSH 生命周期无关）**：小爱 App 里对这台音箱的「自定义训练」
+  可以把某个词绑到一句固定答复。电脑关机、DSH 没开、桥接器没跑时它都还能响。
+  这层**不写代码**，只存在于音箱固件/App 里，所以在此文档化即可。
+- **层二（桥接器活着、插件不可达）**：`DshManager._play_fallback()` 说
+  `dsh.fallback_text`（设置页「兜底播报文本」渲染，留空用内置默认），
+  `bridge/tests/test_dsh_fallback.py` 四条覆盖「用了配置里的词 / 空设置用内置 / 没有
+  speaker 不报错 / speaker 抛异常不外溢」。
+
+**一个容易看错的点**：DSH 这轮对话是 fire-and-forget 的，`DshManager.send()` 在
+`wait_response=False` 时**投递前**就返回 `run_id`，所以
+`dsh_conversation.py:78` 的 `if run_id is None` 只管「后端被禁用」这一种情况，
+HTTP 失败时它**已经返回 "continue" 了**。因此兜底必须由唯一知道投递失败的
+`_submit_utterance()` 触发 —— 它 `except` 分支里调 `_play_fallback()`。
+
+### 12.14 烟测抓到的一个作用域 bug（教训）
+
+`lib/http.js` 里新加的 `afterConfigWrite()` 一开始定义在 `mountHttp()` 内部，
+而两处调用点在模块级的 `handle()` 里 —— 于是**每次保存设置都 500**
+（`internal error: afterConfigWrite is not defined`）。`node --check` 通过、
+`check-client.mjs` 通过、`check-config/keywords/session/supervisor` 全通过，
+**只有 `plugin-smoke.mjs` 打到了这条**（它真的发 `POST /config`）。
+修法是把 helper 提到模块级并显式收 `deps`。
+
+**教训：新增的 HTTP 路径改动，`plugin-smoke.mjs` 不是可选项。** 离线单测各自只覆盖
+自己那一层，作用域/装配类错误只有端到端那一条能看见。
+
+### 12.15 已知遗留
 
 - `lib/process.js` 的 `childEnv()` 会 `delete env.OPENAI_ENABLE`：OpenAI 兼容后端
   代码保留但插件托管下不可达（它只是可被手工启动的参考实现）。这是刻意的，
   写在此处以免日后误判为 bug。
-- `core/utils/config.py` 的 `_initialize_device_id()` 仍会
-  `update_config("DEVICE_ID", mac)`，但 `update_config_file()` 是对 `config.py` 文本做
-  `re.sub(r'"DEVICE_ID"\s*:\s*"[^"]*"', ...)`，而本次已删掉含该字面键的 `"xiaozhi"` 段
-  → **回写实际变成 no-op**。第 3 期若按新结构重新引入 `DEVICE_ID` 字面键，回写行为会复活。
+- `core/utils/config.py` 的 `_initialize_device_id()` 现在**不再回写 `config.py`**：
+  设备 ID 落到 `<CONFIG_PATH 同目录>/device.json`（临时文件 + `os.replace`），
+  旧的 `update_config_file()` 已删除。原先它即使 `re.sub` 空操作也会抬高模板 mtime，
+  可能让「源码比 pidfile 新」的判定误报。
 - 桥接器的 API Server（9092）**目前仍无鉴权**，计划第 3 期（3.11）加 bearer。
+- `afterConfigWrite()` 在**设置页保存时**渲染（保存即生效）；桥接器启动时也会渲染一次
+  （`supervisor.renderConfig()`），所以手工删掉 `<dataDir>/config.py` 后重启插件能自愈。
+- 烟测 `plugin-smoke.mjs` 会真的渲染一次 `<dataDir>/config.py`（用的是桩里的默认值），
+  跑它等于把用户当前的设置覆盖成默认值。默认值本身是可用配置，但**跑完烟测值得提醒用户**。
 

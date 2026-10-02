@@ -1,3 +1,5 @@
+import json
+import os
 import re
 import socket
 import threading
@@ -10,7 +12,8 @@ from core.utils.config_loader import (
     get_config_path,
     load_config_module,
 )
-from core.utils.file import read_file, write_file
+
+MAC_PATTERN = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
 
 
 class ConfigManager:
@@ -150,18 +153,38 @@ class ConfigManager:
             except Exception:
                 return False
 
-    def update_config_file(self, path: str, value: Any):
+    def device_file_path(self) -> Path:
+        """DEVICE_ID 的持久化文件位置。
+
+        历史上设备 ID 是被回写进 `config.py` 的，但 `config.py` 现在由
+        DSH 插件渲染生成：回写会同时改写生成文件与模板文件的 mtime，
+        前者触发 `_watch_config_file` 反复重载，后者让插件误判源码已更新。
+        所以改为写在配置文件同目录的 `device.json` 里。
         """
-        更新 config.py 文件中的特定配置项
-        """
-        write_file(
-            "config.py",
-            re.sub(
-                r'"{}"\s*:\s*"[^"]*"'.format(path),
-                f'"{path}": "{value}"',
-                read_file("config.py"),
-            ),
-        )
+        return get_config_path().parent / "device.json"
+
+    def read_persisted_device_id(self) -> Optional[str]:
+        """读取持久化的设备 ID，失败返回 None。"""
+        try:
+            data = json.loads(self.device_file_path().read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        value = data.get("device_id") if isinstance(data, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    def persist_device_id(self, value: str) -> None:
+        """原子写入设备 ID（临时文件 + rename）。"""
+        path = self.device_file_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.tmp")
+            tmp.write_text(
+                json.dumps({"device_id": value}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        except Exception:
+            pass
 
     @classmethod
     def instance(cls):
@@ -196,16 +219,21 @@ class ConfigManager:
 
     def _initialize_device_id(self):
         """确保存在设备ID"""
+        # 先从 device.json 恢复（config.py 是插件渲染的生成物，不再被回写）
+        if not self._config["DEVICE_ID"]:
+            persisted = self.read_persisted_device_id()
+            if persisted:
+                self._config["DEVICE_ID"] = persisted
+
         if self._config["DEVICE_ID"]:
             # 检查设备 ID 是否符合 MAC 地址格式(如 a6:85:b4:9c:09:66)
-            mac_pattern = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
-            if not mac_pattern.match(self._config["DEVICE_ID"]):
+            if not MAC_PATTERN.match(self._config["DEVICE_ID"]):
                 self._config["DEVICE_ID"] = None
 
         if not self._config["DEVICE_ID"]:
             try:
                 device_hash = self.get_mac_address()
                 self.update_config("DEVICE_ID", device_hash)
-                self.update_config_file("DEVICE_ID", device_hash)
+                self.persist_device_id(device_hash)
             except Exception:
                 pass

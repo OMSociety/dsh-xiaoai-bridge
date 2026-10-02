@@ -68,9 +68,10 @@ async def before_wakeup(speaker, text, source, app):
             return "openai"
 
         # dsh 唤醒词由下方 APP_CONFIG 的 dsh.wakeup_keywords 配置
-        for keyword in APP_CONFIG.get("dsh", {}).get("wakeup_keywords", []):
+        dsh_config = APP_CONFIG.get("dsh", {})
+        for keyword in dsh_config.get("wakeup_keywords", []):
             if keyword and keyword in text:
-                await speaker.play(text="小爱来了")
+                await speaker.play(text=dsh_config.get("wakeup_reply") or "小爱来了")
                 return "dsh"
 
         return None
@@ -122,7 +123,9 @@ async def after_wakeup(speaker, source=None, session_key=None):
         #     await speaker.play(text="助手，再见")
         # else:
         #     await speaker.play(text="小爱，再见")
-        await speaker.play(text="小爱，再见")
+        await speaker.play(
+            text=APP_CONFIG.get("dsh", {}).get("exit_reply") or "小爱，再见"
+        )
 
 
 APP_CONFIG = {
@@ -229,6 +232,9 @@ APP_CONFIG = {
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
         "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发来的语音，他看不到你回复的文字。你必须调用 xiaoai_speak 工具把要说的内容念出来，否则主人什么都听不到。字数控制在300字以内",
         "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话
+        "wakeup_reply": "小爱来了",  # 唤醒成功后的播报语；留空用默认值
+        "exit_reply": "小爱，再见",  # 退出连续对话时的播报语；留空用默认值
+        "fallback_text": "连不上电脑，请稍后再试",  # 桥接器在跑、但 DSH 插件联系不上时的播报语；留空用默认值
     },
     # OpenAI-compatible Service Configuration
     # 可接入 Hermes Agent API Server、OpenAI、Ollama、LM Studio 等兼容 /v1/chat/completions 的服务

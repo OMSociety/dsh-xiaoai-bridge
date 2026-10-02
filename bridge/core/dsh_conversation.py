@@ -79,7 +79,14 @@ class DshConversationController(ExternalConversationController):
             logger.warning("Failed to deliver utterance to DSH", module=self.LOG_MODULE)
             speaker = get_speaker()
             if speaker:
-                await speaker.play(text="抱歉，我连不上电脑端的服务")
+                # Layer 2 of the fallback design: the bridge is alive but the
+                # plugin is gone, so say so out loud instead of going silent.
+                # The wording comes from the settings page.
+                from core.dsh import FALLBACK_SPEECH
+
+                await speaker.play(
+                    text=getattr(self.backend, "_fallback_text", "") or FALLBACK_SPEECH
+                )
             return "continue"
 
         # Brief pause so the "sent" cue does not run into the next VAD window.

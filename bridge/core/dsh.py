@@ -32,6 +32,9 @@ from core.utils.config import ConfigManager
 from core.utils.logger import logger
 
 DEFAULT_BASE_URL = "http://127.0.0.1:19387/plugin/xiaoai"
+# Spoken when the plugin cannot be reached at all (plan layer 2). The settings
+# page renders `dsh.fallback_text`; this is only the last resort.
+FALLBACK_SPEECH = "连不上电脑，请稍后再试"
 
 
 class DshManager:
@@ -54,6 +57,7 @@ class DshManager:
     _tts_speed = 1.0
     _rule_prompt = ""
     _rule_prompt_for_skill = ""
+    _fallback_text = ""
     _sessions: dict[str, list[dict[str, str]]] = {}
     _response_events: dict[str, asyncio.Future] = {}
     _response_texts: dict[str, str] = {}
@@ -127,6 +131,11 @@ class DshManager:
         cls._tts_speed = float(config.get("tts_speed", 1.0))
         cls._rule_prompt = str(config.get("rule_prompt", "") or "")
         cls._rule_prompt_for_skill = str(config.get("rule_prompt_for_skill", "") or "")
+        # Spoken only when the plugin cannot be reached. The settings page owns
+        # the wording; the fallback keeps a manual run intelligible.
+        cls._fallback_text = str(
+            config.get("fallback_text", "") or FALLBACK_SPEECH
+        )
 
         if cls._enabled:
             logger.info(f"[DSH] Enabled, base_url={cls._base_url}")
@@ -306,6 +315,26 @@ class DshManager:
     # ---- http ----
 
     @classmethod
+    async def _play_fallback(cls):
+        """Say the fallback line when the plugin cannot be reached.
+
+        Layer 2 of the fallback design: the bridge is up, the DSH plugin is
+        not, and silence is the worst answer because the speaker was just
+        woken. The wording is rendered from the settings page.
+        """
+        from core.ref import get_speaker
+
+        speaker = get_speaker()
+        if not speaker:
+            logger.warning("[DSH] No speaker available for the fallback line")
+            return
+        try:
+            await speaker.play(text=cls._fallback_text or FALLBACK_SPEECH)
+            logger.info("[DSH] Played the fallback line")
+        except Exception as exc:
+            logger.error(f"[DSH] Failed to play the fallback line: {exc}")
+
+    @classmethod
     async def _submit_utterance(cls, run_id: str, text: str):
         """POST one utterance to the plugin and resolve the run future.
 
@@ -341,6 +370,9 @@ class DshManager:
             cls.last_error = f"{type(exc).__name__}: {exc}"
             cls._connected = False
             logger.error(f"[DSH] Failed to submit utterance: {cls.last_error}")
+            # The caller is fire-and-forget, so this is the only place that
+            # knows the utterance never arrived.
+            await cls._play_fallback()
         finally:
             if reply:
                 cls._response_texts[run_id] = reply
