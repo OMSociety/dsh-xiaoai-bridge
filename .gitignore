@@ -1,3 +1,13 @@
+# ---------------------------------------------------------------------------
+# dsh-xiaoai-bridge
+#
+# 仓库根 = DSH 插件（package.json / lib/ / skills/xiaoai-speak/）
+# bridge/  = fork 自 coderzc/open-xiaoai-bridge 的 Python 桥接器
+#
+# 上游段落下方的规则保持原样（路径不带前缀，天然匹配任意层级），
+# 本文件末尾追加本项目自己的运行时产物规则。
+# ---------------------------------------------------------------------------
+
 # Python
 .venv
 .mypy_cache
@@ -31,6 +41,7 @@ xiaozhi.json
 
 # Models (large files)
 core/models/
+models.zip
 
 # Local env files
 .env
@@ -48,3 +59,28 @@ output/
 config-local.py
 
 **/models
+
+# ---------------------------------------------------------------------------
+# 本项目追加：绝不允许入库的内容
+# ---------------------------------------------------------------------------
+
+# DSH 插件侧
+node_modules/
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# 运行时渲染产物与设备状态（真相源在设置页，不在仓库里）
+#
+# 说明：bridge/config.py 是上游模板，必须保留入库，否则桥接器起不来。
+# 运行期真正生效的配置由插件渲染到插件数据目录，再用 CONFIG_PATH 指过去，
+# 所以这里只需忽略运行时状态文件。
+bridge/config.py.rendered
+bridge/device.json
+**/device.json
+**/devices.json
+
+# 凭据 / token（绝对不入库）
+*.token
+token.txt
+credentials.json
+**/credentials.json

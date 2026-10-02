@@ -1,0 +1,11 @@
+# Profile patch layer contributed by the dsh-xiaoai-bridge bundle.
+#
+# `id` is the settings-card namespace: DSH keys a plugin's settings entry by the
+# profile entry id, which is also what `ctx.settings.update(ns, patch, rev)`
+# writes to. It is the same value the host half reads back through
+# `ctx.fiber.entry.options.id`. Once shipped it cannot change without stranding
+# every stored settings section.
+- insert:
+    - id: xiaoai
+      name: 'dsh-xiaoai-bridge'
+      config: {}
