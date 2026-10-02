@@ -254,6 +254,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.3 审批提示语（`approval/asked` → 只念「需要你到电脑上确认一下」，
       审批正文永不出口；设置项 `approvalText`；见 §12.24；
       `scripts/check-speak.mjs` 的「approvals」6 条）
+- [x] 4.4 MiMo TTS 预留（设置页「语音合成方式」：跟随音色 / 小爱原生 / MiMo（预留）；
+      MiMo 四个占位字段只存不写；见 §12.25；`scripts/check-config.mjs` 与
+      `scripts/check-client.mjs` 的新断言）
 
 ## 9. 第 1 期实现决策
 
@@ -1292,5 +1295,59 @@ def keeps_listening(self) -> bool:
 'approval'`、`calls` 为空（没过回复器）；同回合同一 session 的第二次审批不重复；关掉
 `autoSpeak` 全静默；审批前的草稿被丢弃、审批后写的话照常播报；设置留空时用
 `DEFAULT_APPROVAL_TEXT`；插件从未见过的 session 不发声。
+
+
+### 12.25 语音合成方式与 MiMo 预留：只写桥接器认得的 provider（4.4）
+
+设置页「唤醒与语音」里新增**语音合成方式**（`ttsProvider`）三选一，以及四个 **MiMo 占位
+字段**（`mimoBaseUrl` / `mimoApiKeyCredential` / `mimoModel` / `mimoVoice`，全部默认空）。
+
+**桥接器其实早就有 provider 抽象。** `bridge/core/services/tts/router.py` 的
+`TTSRouter.SUPPORTED_PROVIDERS = {"xiaoai", "doubao", "openai", "mlx_audio"}`，
+`resolve_provider(configured_provider, tts_speaker)` 的规则是：配置了就用配置，**不认识的值直接抛**
+`Unknown tts_provider=...`；没配置则按音色判断 —— `tts_speaker == "xiaoai"` 用 `_play_xiaoai`
+（音箱自带合成），其他音色 ID 当豆包音色走 `_play_doubao`。`bridge/config.py` 里
+`dsh.tts_provider` 默认 `None`，就是这个「没配置」的旧规则。
+
+**三个选项各自写什么：**
+
+| 选项 | 渲染到桥接器 | 结果 |
+| --- | --- | --- |
+| 跟随音色（`''`，默认） | 什么都不写 | 保留上面那条按音色判断的旧规则，豆包音色 ID 照常可用 |
+| 小爱原生（`xiaoai`） | `dsh.tts_provider = "xiaoai"` | 强制音箱自带合成，即使音色字段填的是豆包音色 |
+| MiMo（预留，`mimo`） | **什么都不写** | 只记住这个选择，播放方式不变 |
+
+**为什么 MiMo 只存不写。** 桥接器没有 MiMo 客户端，把 `tts_provider = "mimo"` 写进去不是
+「预留」，而是让 TTS 路由在播放那一刻抛异常——从一个不生效的选项变成一个不出声的音箱。
+所以选择留在设置里（将来接上就能直接生效，不用让用户重选一遍），映射表
+`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS = { xiaoai: 'xiaoai' }` 里没有它，
+`buildOverrides()` 也就永远不发生成 `mimo` 的文件。选中的后果写在页面提示里
+（「选中只会记住这个选择，播放仍是当前方式」）。
+
+**MiMo 占位字段的形状。** 四个字段对应一次 OpenAI 兼容的语音合成请求
+（`POST /v1/audio/speech`：endpoint + 凭据 + model + voice），这正是桥接器**已经**支持的那条
+`openai` 通道的形状，所以将来接入时只需把字段接到 `tts.openai` 上，页面不会再变。凭据字段
+存的是**凭据名**（DSH 凭据库里的引用，同「访问令牌凭据名」的约定），明文永远不进设置、
+不进生成的文件——第 4.10 项「无真实凭据入库」在预留字段上同样成立。
+
+**顺手改掉一个错标签。** `ttsSpeaker` 原来写的是「朗读音箱插件」/「Speaking plug-in」，
+但桥接器把 `tts_speaker` 当**音色 ID** 解析（`xiaoai` = 小爱原生，其他值 = 豆包音色），
+跟「音箱插件」没有关系。现在叫「朗读音色」/「Reading voice」，提示词也照实说：
+`xiaoai` 用音箱自带的，填豆包音色 ID 才走豆包。
+
+**枚举要能显示中文，所以加了 `optionLabels`。** `lib/client.js` 的 enum 分支原来把选项值
+直接当标签（`options.push({ value: v, label: v })`），三选一的空值会渲染成空白段。现在
+spec 可以带 `optionLabels: { 值: i18n key }`，取值时 `translate()`，没有映射就退回原始值——
+`asrBackend`（`sense_voice` 等）和 `logLevel`（`DEBUG` 等）保持原样，它们显示的就是技术值。
+同一个分支的 `value` 也补上了和会话工作区 `<select>` 一样的兜底：
+`draft[key] === undefined || null ? "" : String(...)`，否则未播种的草稿会渲染成 `"undefined"`。
+
+**测试**：`scripts/check-config.mjs` —— 空选择不写 `tts_provider`、选 `xiaoai` 时写成字符串、
+选 `mimo` 时不写、四个 MiMo 字段一个都不进 `dsh`、稀疏文件里既没有 `tts_provider` 也没有
+`mimo`，并且用真 Python 加载渲染结果确认 `APP_CONFIG["dsh"]["tts_provider"]` 真是 `"xiaoai"`。
+`scripts/check-client.mjs` —— 段控件数量 2 → 3，`xiaoai-ttsProvider` 的选项值/标签是
+`["=跟随音色", "xiaoai=小爱原生", "mimo=MiMo（预留）"]` 且未播种时 `value` 是空串，
+没有 `optionLabels` 的枚举仍然用原始值当标签。
+
 
 

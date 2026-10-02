@@ -188,7 +188,7 @@ if (captured !== null) {
             '启用插件', '音箱名称', '音箱地址', '唤醒词', '语音识别后端', '会话工作区',
             '桥接器目录', 'Python 解释器', '随插件启动桥接器', '日志级别',
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
-            '对话保持时长（秒）', '连续对话', '朗读音箱插件', '唤醒应答', '退出应答', '退出词',
+            '对话保持时长（秒）', '连续对话', '语音合成方式', '朗读音色', 'MiMo 服务地址', 'MiMo 凭据名', 'MiMo 模型', 'MiMo 音色', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
             '自动念出回复', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
             '回复器失败提示语', '审批等待提示语', '人格设定', '说话风格', '行动准则', '输出限制', '语音消息附加提示',
@@ -239,10 +239,34 @@ if (captured !== null) {
             check(typeof control.checked === 'boolean', 'a Switch has no checked value');
             check(typeof control.onChange === 'function', 'a Switch has no onChange');
           }
-          check(seen.segments.length === 2, `expected 2 SegmentedControl controls, got ${seen.segments.length}`);
+          check(seen.segments.length === 3, `expected 3 SegmentedControl controls, got ${seen.segments.length}`);
           for (const control of seen.segments) {
             check(Array.isArray(control.options) && control.options.length >= 2, `SegmentedControl ${control.id} needs at least 2 options`);
             check(typeof control.onChange === 'function', `SegmentedControl ${control.id} has no onChange`);
+          }
+
+          // 6b. The TTS provider control carries its own option wording and a
+          //     real fallback for an unseeded draft: the reserved choice is
+          //     translated rather than shown raw, and an empty choice (the
+          //     default, "follow the voice") must not render as "undefined".
+          const provider = seen.segments.find((control) => control.id === 'xiaoai-ttsProvider');
+          check(Boolean(provider), 'page view did not render the TTS provider control');
+          if (provider) {
+            check(provider.value === '', `the TTS provider control should default to the empty choice, got ${JSON.stringify(provider.value)}`);
+            const options = (provider.options ?? []).map((option) => `${option.value}=${option.label}`);
+            check(
+              JSON.stringify(options) === JSON.stringify(['=跟随音色', 'xiaoai=小爱原生', 'mimo=MiMo（预留）']),
+              `unexpected TTS provider options: ${JSON.stringify(options)}`,
+            );
+          }
+          // 6c. The other two enums keep the raw value as their label.
+          const backend = seen.segments.find((control) => control.id === 'xiaoai-asrBackend');
+          check(Boolean(backend), 'page view did not render the ASR backend control');
+          if (backend) {
+            check(
+              (backend.options ?? []).every((option) => option.value === option.label),
+              'an enum without optionLabels must show its raw value',
+            );
           }
 
           // 7. The project-group picker is a native <select> populated from

@@ -103,6 +103,21 @@ eq(
   true,
   'dsh.continuous_conversation flips with the switch',
 );
+// The provider follows the switch, but only for a provider the bridge can load:
+// an empty choice keeps the router's own voice-id rule, and the reserved `mimo`
+// choice must never reach the bridge, which would raise on it.
+ok(!('tts_provider' in bare.dsh), 'an empty provider choice writes nothing');
+eq(buildOverrides({ ...DEFAULTS, ttsProvider: 'xiaoai' }).dsh.tts_provider, 'xiaoai', 'the native provider is written');
+ok(!('tts_provider' in buildOverrides({ ...DEFAULTS, ttsProvider: 'mimo' }).dsh), 'the reserved provider is not written');
+const reservist = buildOverrides({
+  ...DEFAULTS,
+  ttsProvider: 'mimo',
+  mimoBaseUrl: 'https://mimo.invalid/v1/audio/speech',
+  mimoApiKeyCredential: 'MIMO_API_KEY',
+  mimoModel: 'mimo-tts',
+  mimoVoice: 'zh_female_1',
+});
+ok(!Object.keys(reservist.dsh).some((key) => key.includes('mimo')), 'the MiMo placeholders stay out of the bridge config');
 eq(full.asr.model, 'paraformer', 'asr.model');
 
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-'));
@@ -124,6 +139,7 @@ try {
       fallbackText: '电脑睡了',
       asrBackend: 'paraformer',
       continuousConversation: true,
+      ttsProvider: 'xiaoai',
     },
   });
   ok(existsSync(target), `config written to ${target}`);
@@ -149,6 +165,7 @@ print(json.dumps({
     "dsh_exit_reply": module.APP_CONFIG["dsh"]["exit_reply"],
     "dsh_fallback_text": module.APP_CONFIG["dsh"]["fallback_text"],
     "dsh_continuous_conversation": module.APP_CONFIG["dsh"]["continuous_conversation"],
+    "dsh_tts_provider": module.APP_CONFIG["dsh"].get("tts_provider"),
     "asr_model": module.APP_CONFIG["asr"]["model"],
     "hooks": [callable(module.before_wakeup), callable(module.after_wakeup)],
     "untouched_default": module.APP_CONFIG["kws"]["keywords_score"],
@@ -177,6 +194,7 @@ print(json.dumps({
   eq(loaded.dsh_exit_reply, '拜拜', 'dsh.exit_reply');
   eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
   eq(loaded.dsh_continuous_conversation, true, 'the switch reaches the bridge as a real boolean');
+  eq(loaded.dsh_tts_provider, 'xiaoai', 'the provider switch reaches the bridge as a string');
   eq(loaded.asr_model, 'paraformer', 'asr.model');
   eq(loaded.hooks, [true, true], 'both wake hooks survive the overlay');
   eq(loaded.hook_globals_match, true, 'the hooks see the overridden values, not the template ones');
@@ -199,6 +217,8 @@ print(json.dumps({
   // writes `rule_prompt_for_skill` and must leave the other one alone.
   ok(!sparseSource.includes('"rule_prompt"'), 'template-only keys are never restated in the generated file');
   ok(sparseSource.includes('"continuous_conversation": False'), 'a false switch is still written, as a Python literal');
+  ok(!sparseSource.includes('tts_provider'), 'the provider stays out of the file while the choice is empty');
+  ok(!sparseSource.includes('mimo'), 'the reserved MiMo fields never reach the generated file');
   ok(!sparseSource.includes('response_timeout'), 'template-only keys are never restated in the generated file');
   ok(!sparseSource.includes('doubao'), 'untouched sections stay out of the generated file');
 } finally {
