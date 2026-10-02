@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>dsh-xiaoai-bridge</h1>
+  <h1>DSH XiaoAI Bridge</h1>
   <p>把小爱音箱接进 DeepSeek Harness：喊一声唤醒词，答案从音箱里念出来。</p>
   <p>桥接器是本仓库 fork 的 Python 服务，由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
