@@ -487,7 +487,7 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 | `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
 | `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
 | `scripts/check-session.mjs` | 会话桥接单测（宿主形状假 ctx，7 组 23 项断言，含 §12.6 坑三与 §12.9 坑六的回归） |
-| `scripts/check-supervisor.mjs` | 进程收养单测（10 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
+| `scripts/check-supervisor.mjs` | 进程收养单测（12 项断言：同代码收养 / 代码已换则替换，见 §12.8） |
 | `scripts/check-client.mjs` | 客户端 bundle 校验（`id` / `slot` / `key` / 官方表单件形状 / 14 个字段与 5 个分区 / `locale/*.json` 契约） |
 
 五个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
@@ -548,7 +548,7 @@ core/models/keywords.txt  181 字节 → 93 字节
   content 数组形状、`meta.cwd` 为绝对路径、设备库落盘（`version: 2`）、第二次投递复用活 agent、
   无默认模型时的降级告警、空文本拒绝、**v1 遗产设备库退役重建**、
   工作区兜底 / 配置生效 / 相对路径回退三条 `sessionCwd` 路径。
-- 进程收养单测（`scripts/check-supervisor.mjs`，10 项）与客户端 bundle 校验
+- 进程收养单测（`scripts/check-supervisor.mjs`，12 项）与客户端 bundle 校验
   （`scripts/check-client.mjs`：官方表单件形状、14 个字段与 5 个分区标题、
   `locale/*.json` 的存在性/语言 id/`meta.title|description` 非空、`exports` 与 `files` 是否放行 locale）。
 - locale 解析实测（在 profile 目录里跑）：
@@ -680,7 +680,7 @@ DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」
 此时不走收养，改为 `killTree(stale)` 杀掉再重新 spawn，日志会留下
 `bridge sources changed since pid=<n> started; replacing it`。
 
-回归测试 `node scripts/check-supervisor.mjs`（10 项）在临时目录里各起一个假
+回归测试 `node scripts/check-supervisor.mjs`（12 项）在临时目录里各起一个假
 `main.py`（`pythonPath` 指向 node 自身）覆盖两条分支，不会碰到真实的音箱连接。
 
 ### 12.9 坑六：会话 header 里没有 `cwd`，一个原因两个症状

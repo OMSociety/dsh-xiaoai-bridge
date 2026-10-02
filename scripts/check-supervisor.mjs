@@ -131,6 +131,7 @@ console.log('case A: leftover bridge running the same code is adopted');
 
   await supervisor.stop();
   check('stop kills the adopted process', await waitGone(dummy.pid, Date.now() + 10_000));
+  check('a finished stop is not still reported as stopping', supervisor.state().stopping === false);
 }
 
 console.log('case B: leftover bridge running replaced code is restarted');
@@ -154,6 +155,7 @@ console.log('case B: leftover bridge running replaced code is restarted');
 
   await supervisor.stop();
   check('stop kills the freshly spawned process', await waitGone(res.pid, Date.now() + 10_000));
+  check('a finished stop is not still reported as stopping', supervisor.state().stopping === false);
 }
 
 rmSync(root, { recursive: true, force: true });
