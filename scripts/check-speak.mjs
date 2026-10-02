@@ -463,6 +463,118 @@ await check('the tool keeps the stable name the skill text promises', () => {
   assert.equal(SPEAK_TOOL_NAME, 'xiaoai_speak');
 });
 
+// --- speaking without being asked (phase 4.1) ------------------------------
+console.log('proactive speech');
+
+/**
+ * Build the tool around a bridge client whose first answers we control.
+ * @param {object} options
+ * @param {(attempt: number, text: string) => object} options.playText answer per call
+ * @param {() => object} options.ensureBridge supervisor hook
+ * @param {number} [options.reviveWaitMs] retry deadline override
+ * @param {number} [options.revivePollMs] retry interval override
+ * @returns {object} tool plus what it did
+ */
+function reviveHarness({ playText, ensureBridge, reviveWaitMs, revivePollMs }) {
+  const played = [];
+  const noted = [];
+  const attempts = [];
+  const tool = createSpeakTool({
+    getConfig: () => ({ enabled: true, apiServerEnabled: true }),
+    bridge: {
+      playText: async (text) => {
+        played.push(text);
+        return playText(played.length, text);
+      },
+    },
+    sessions: {
+      deviceForSession: () => ({ key: 'dev', host: '192.168.1.191', name: '小爱音箱' }),
+      primaryDevice: () => null,
+    },
+    autoSpeak: {
+      claimToolSpeak: () => ({ allowed: true }),
+      noteSpoken: async (record) => { noted.push(record); },
+    },
+    ensureBridge: async () => { attempts.push(Date.now()); return ensureBridge(); },
+    reviveWaitMs,
+    revivePollMs,
+    logger: quiet,
+  });
+  return { tool, played, noted, attempts };
+}
+
+const t9 = reviveHarness({
+  // Nothing is listening on the first call, then the supervisor brought it up.
+  playText: (attempt) => (attempt === 1 ? { ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' } : { ok: true }),
+  ensureBridge: async () => ({ ok: true, pid: 4242 }),
+  reviveWaitMs: 500,
+  revivePollMs: 5,
+});
+await check('a bridge that is down is started on demand, then the line is spoken', async () => {
+  const result = await t9.tool.execute({ text: '水开了' }, { agent: { session: { id: 'session-tool-9' } } });
+  assert.deepEqual(t9.played, ['水开了', '水开了']);
+  assert.equal(t9.attempts.length, 1);
+  assert.deepEqual(result, { text: '已让小爱音箱念出：水开了' });
+  assert.equal(t9.noted.length, 1, 'a line that was really spoken is still logged');
+  assert.equal(t9.noted[0].source, 'tool');
+});
+
+const t10 = reviveHarness({
+  playText: () => ({ ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' }),
+  ensureBridge: async () => ({ ok: false, error: 'bridge is not running (autostart is off)' }),
+});
+await check('when the bridge cannot be started the reason is reported, not swallowed', async () => {
+  const result = await t10.tool.execute({ text: '水开了' }, {});
+  assert.equal(result.isError, true);
+  assert.match(result.text, /autostart is off/);
+  assert.deepEqual(t10.played, ['水开了'], 'a failed start is not retried against the same dead port');
+  assert.deepEqual(t10.noted, []);
+});
+
+const t11 = reviveHarness({
+  playText: () => ({ ok: false, status: 401, error: 'HTTP 401: unauthorized' }),
+  ensureBridge: async () => { throw new Error('an answered HTTP error must not restart the bridge'); },
+});
+await check('an HTTP error means the bridge answered, so it is not restarted', async () => {
+  const result = await t11.tool.execute({ text: '水开了' }, {});
+  assert.equal(result.isError, true);
+  assert.match(result.text, /401/);
+  assert.deepEqual(t11.attempts, []);
+});
+
+const t12 = reviveHarness({
+  playText: () => ({ ok: false, error: '请求超时（15000 ms）' }),
+  ensureBridge: async () => ({ ok: true, pid: 99 }),
+  reviveWaitMs: 40,
+  revivePollMs: 5,
+});
+await check('a revived bridge that never answers stops at the deadline', async () => {
+  const result = await t12.tool.execute({ text: '水开了' }, {});
+  assert.equal(result.isError, true);
+  assert.ok(t12.played.length >= 2, `expected retries after the start, saw ${t12.played.length}`);
+  assert.equal(t12.attempts.length, 1);
+});
+
+const t13Played = [];
+const t13 = createSpeakTool({
+  getConfig: () => ({ enabled: true, apiServerEnabled: true }),
+  bridge: {
+    playText: async (text) => {
+      t13Played.push(text);
+      return { ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' };
+    },
+  },
+  sessions: { deviceForSession: () => ({ key: 'dev' }), primaryDevice: () => null },
+  autoSpeak: { claimToolSpeak: () => ({ allowed: true }), noteSpoken: async () => {} },
+  logger: quiet,
+});
+await check('without an ensureBridge hook a dead bridge is reported, not revived', async () => {
+  const result = await t13.execute({ text: '念这句' }, {});
+  assert.equal(result.isError, true);
+  assert.match(result.text, /无法连接桥接器/);
+  assert.deepEqual(t13Played, ['念这句'], 'no hook means no retry loop');
+});
+
 rmSync(dataDir, { recursive: true, force: true });
 console.log(failures === 0 ? '\nspeak check OK' : `\nspeak check FAILED (${failures})`);
 process.exitCode = failures === 0 ? 0 : 1;

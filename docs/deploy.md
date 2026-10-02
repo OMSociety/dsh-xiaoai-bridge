@@ -244,6 +244,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `workspaces` facts，不再手输绝对路径）
 - [ ] 3.15 实机验收（用户重启 DSH 后）：语音一轮 → 听到口语化播报、`spoken.jsonl` 落一行、
       音箱会话出现在工作区分组里
+- [x] 4.1 主动说话 + API Server 常开（`lib/process.js` 的 watchdog：退避重启→放弃、
+      `ensureStarted()` 按需拉起；`lib/tools.js` 的 `speakWithRevive()`；见 §12.22；
+      `scripts/check-supervisor.mjs` case C–E 与 `scripts/check-speak.mjs`
+      的「proactive speech」5 条）
 
 ## 9. 第 1 期实现决策
 
@@ -1134,4 +1138,59 @@ token 塞进子进程 env，所以正常安装就是「已配置 token」。
 **测试**：`tests/test_api_server_auth.py` 12 条（决策表 / header 解析 / token 来源 /
 中间件确实挂在真 `APIServer` 上且九条路由都在门后）、`tests/test_skill_api_client.py`
 11 条（环境变量优先、配置文件兜底、坏配置不致命、401 提示）。
+
+### 12.22 主动说话：watchdog 保活 + 按需拉起（4.1）
+
+「API Server 常开」在第 4 期之前是句空话：桥接器进程崩了就**再也不会起来**——
+`lib/process.js` 的退出处理器只写一行 `lastError`，然后什么也不做。定时提醒、长任务
+跑完这类「没有人正在看着窗户」的场景全靠它，所以 4.1 的一半工作在进程侧。
+
+**一、watchdog：退避重启，然后放弃**（`lib/process.js`）
+
+- 退出处理器（`child.on('exit')`）在 `!stopping` 时调 `scheduleRestart('exited unexpectedly (code=…)')`。
+- 延迟表 `DEFAULT_RESTART_DELAYS_MS = [2000, 5000, 15000, 30000]`，**表长同时就是重试预算**：
+  `restarts >= restartDelaysMs.length` 时置 `gaveUp = true`，`lastError` 写成
+  `bridge exited unexpectedly (code=…); the watchdog stopped after N restarts`。
+  固定间隔重试会把「音箱没插电」变成每 2 秒一次的密集重启，退避不会。
+- **预算重置规则**：进程活过 `stableMs`（默认 60 s）才算「健康了一轮」，此时退出把
+  `restarts` 归零——否则「一天崩一次」会在几天后耗尽预算而永久闭嘴。
+  watchdog 自己的重启**不**重置（否则崩循环里 `restarts` 永远是 0，等于无限重启）；
+  用户显式 `start()` 才重置（`start({ fromWatchdog = false })` 里 `restarts = 0; gaveUp = false`）。
+- `stop()` 在最早的 `if (!running()) return` **之前**调 `clearRestartTimer()`：桥接器已经
+  宕机时点的「停止」如果不清计时器，一秒后到期的重启会把它又拉起来。
+- 只在插件自己管进程时才重试（`watchdogActive()`：`cfg.enabled !== false &&
+  cfg.autoStart !== false && !gaveUp && !stopping`）。`autoStart` 关掉意味着用户自己
+  管桥接器，插件不该跟用户抢。
+
+**二、按需拉起：`ensureStarted()`**（供工具用）
+
+`running()` → `{ok:true, already:true}`；`cfg.enabled === false` → `plugin disabled`；
+`cfg.autoStart === false` → `bridge is not running (autostart is off)`；`gaveUp` → 上次的
+`lastError`；否则 `start({ fromWatchdog: true })`。最后一条分支写 `fromWatchdog` 是有意的：
+工具触发的启动不该把「已经放弃重试」的预算清掉。
+
+**三、工具侧的重启判定线**（`lib/tools.js` 的 `speakWithRevive()`）
+
+`bridge.playText()` 的失败分两类，只有第一类值得重启：
+
+| 失败形态 | 含义 | 动作 |
+| --- | --- | --- |
+| `{ok:false}` 且**无 `status`**（连不上 / 超时） | 请求根本没到 API Server，桥接器没在跑 | 调 `ensureBridge()`，成功后按 `revivePollMs`（默认 1500 ms）重试到 `reviveWaitMs`（默认 12000 ms） |
+| `{ok:false, status: 4xx/5xx}` | 桥接器活着并且答了话 | 直接上报，**不重启**（重启一个会说话的进程是错的） |
+
+`ensureBridge()` 失败时返回 `桥接器没在运行，自动启动也失败了：<原因>` 并 `isError`，
+**不做第二次尝试**（对着同一个死端口重试没有意义）。`ensureBridge` 是可选注入项：
+`check-speak.mjs` 里没有它的用例仍然只播一次。
+
+**四、`state()` 的新字段**（给 4.5 状态卡用）：`restarts`（本轮崩循环已用掉的重启次数）、
+`watchdogGaveUp`（watchdog 是否已放弃）、`nextRestartAt`（下一次自动重启的 ISO 时间，或
+`null`）。加上 §12.21 的 `auth`，状态卡要的三类信息（在跑没在跑 / 为什么不在跑 / 鉴权
+形态）就齐了。
+
+**测试**：`scripts/check-supervisor.mjs` 新增 case C（自然退出→重启成新 pid、日志有
+`restart #1 in 120 ms`）、case D（已排队的重启被 `stop()` 取消，等过一个延迟也不再起）、
+case E（`restartDelaysMs: [10, 20]` 的崩循环 → `watchdogGaveUp === true` 且日志写
+`the watchdog stopped after 2 restarts`；随后显式 `start()` 清掉标记并真的跑起来）；
+`scripts/check-speak.mjs` 新增「proactive speech」5 条（按需拉起后重试成功、拉起失败时
+报原因、HTTP 错误不重启、超时到 `reviveWaitMs` 就收手、没有 `ensureBridge` 时行为不变）。
 

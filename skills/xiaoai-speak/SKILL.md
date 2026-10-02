@@ -24,6 +24,18 @@ not the reply itself:
 Do not call it for ordinary chat replies typed into the window that nobody asked
 to hear — those belong in the conversation, not on the speaker.
 
+### Speaking without being asked
+
+You do not have to wait for a message to arrive. A reminder coming due, a long
+task finishing, or anything the user should hear right now can be spoken
+directly, from a desktop session as well as a voice one: call `xiaoai_speak` and
+the line goes to the speaker. Nothing needs to be prepared first — if the bridge
+is not running, the plugin starts it on demand and the call waits for it.
+
+Speak up only when the sound itself is the point: something time-sensitive, or a
+result the user is waiting on rather than one they will come back to read. A
+running commentary of your own progress is noise in their room.
+
 ## How to call it
 
 Call the `xiaoai_speak` tool with the exact text to speak:

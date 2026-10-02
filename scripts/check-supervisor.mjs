@@ -8,6 +8,11 @@
  * `config.py` is). This script drives both decisions against a throwaway
  * tree, so "I fixed it and nothing changed" cannot happen quietly again.
  *
+ * Cases C-E cover the other half of "the API Server is always up": what happens
+ * when the bridge dies *by itself*. The watchdog restarts it on a widening
+ * schedule, a deliberate stop cancels a restart that was already queued, and a
+ * crash loop spends the schedule and then gives up instead of spinning forever.
+ *
  *   node scripts/check-supervisor.mjs
  */
 import { spawn } from 'node:child_process';
@@ -99,9 +104,46 @@ const config = {
 };
 
 /**
+ * @param {number} ms milliseconds to wait
+ * @returns {Promise<void>} resolves after the delay
+ */
+function sleep(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/**
+ * Poll a predicate until it holds or the deadline passes.
+ * @param {() => boolean} predicate condition to wait for
+ * @param {number} budgetMs how long to keep asking
+ * @returns {Promise<boolean>} whether it ever held
+ */
+async function until(predicate, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    if (predicate()) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(25);
+  }
+}
+
+/** @returns {string} the whole bridge log, or '' before it exists */
+function logText() {
+  try {
+    return readFileSync(logPath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** @returns {number[]} every pid the supervisor reported starting, in order */
+function startedPids() {
+  return [...logText().matchAll(/bridge started pid=(\d+)/g)].map((m) => Number(m[1]));
+}
+
+/**
  * @returns {object} supervisor bound to the throwaway tree
  */
-function makeSupervisor() {
+function makeSupervisor(overrides = {}) {
   return createBridgeSupervisor({
     getConfig: () => config,
     paths: () => ({ bridgeDir, pythonPath: process.execPath }),
@@ -109,6 +151,7 @@ function makeSupervisor() {
     logger: { info() {}, warn() {} },
     resolveToken: async () => null,
     onLogLine() {},
+    ...overrides,
   });
 }
 
@@ -156,6 +199,87 @@ console.log('case B: leftover bridge running replaced code is restarted');
   await supervisor.stop();
   check('stop kills the freshly spawned process', await waitGone(res.pid, Date.now() + 10_000));
   check('a finished stop is not still reported as stopping', supervisor.state().stopping === false);
+}
+
+console.log('case C: a bridge that dies on its own is restarted by the watchdog');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  // Exits ~30 ms after start: a real process that ran, but far shorter than the
+  // stable window, so the retry budget must not be reset.
+  writeFileSync(join(bridgeDir, 'main.py'), 'setTimeout(() => process.exit(3), 30);\n', 'utf8');
+  const supervisor = makeSupervisor({ restartDelaysMs: [120] });
+  const first = await supervisor.start();
+  check('the first start succeeds', first.ok === true && first.pid !== undefined);
+
+  const restarted = await until(() => startedPids().length >= 2, 5000);
+  check('the watchdog starts the bridge again', restarted);
+  check('the restarted process is a new one', startedPids()[1] !== first.pid);
+  check(
+    'the restart and its delay are recorded',
+    logText().includes('exited unexpectedly (code=3)') && logText().includes('restart #1 in 120 ms'),
+  );
+  check('the spent restart is counted in state', supervisor.state().restarts >= 1);
+
+  await supervisor.stop();
+}
+
+console.log('case D: stopping the bridge cancels a restart that was already queued');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  writeFileSync(join(bridgeDir, 'main.py'), 'process.exit(3);\n', 'utf8');
+  const supervisor = makeSupervisor({ restartDelaysMs: [700] });
+  const first = await supervisor.start();
+  check('the first start succeeds', first.ok === true);
+
+  const scheduled = await until(() => supervisor.state().nextRestartAt !== null, 5000);
+  check('a restart is queued after the crash', scheduled);
+  const before = startedPids().length;
+
+  const stopped = await supervisor.stop();
+  check('stopping an already dead bridge reports success', stopped.ok === true && stopped.stopped === false);
+  check('the queued restart is dropped', supervisor.state().nextRestartAt === null);
+
+  await sleep(1000);
+  check('the cancelled restart never fires', startedPids().length === before && supervisor.state().running === false);
+  check('one crash is not enough to give up', supervisor.state().watchdogGaveUp === false);
+}
+
+console.log('case E: a crash loop spends the schedule and then gives up');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  // The default stable window stays in place: every run dies within it, so the
+  // budget is never reset and the crash loop has to exhaust the schedule.
+  writeFileSync(join(bridgeDir, 'main.py'), 'process.exit(7);\n', 'utf8');
+  const supervisor = makeSupervisor({ restartDelaysMs: [10, 20] });
+  const first = await supervisor.start();
+  check('the first start succeeds', first.ok === true);
+
+  const gaveUp = await until(() => supervisor.state().watchdogGaveUp === true, 5000);
+  check('the watchdog gives up instead of looping forever', gaveUp);
+  check('the log says how many restarts were spent', logText().includes('the watchdog stopped after 2 restarts'));
+  check(
+    'giving up is reported as the last error',
+    String(supervisor.state().lastError ?? '').includes('the watchdog stopped after 2 restarts'),
+  );
+  const spent = startedPids().length;
+  await sleep(250);
+  check('nothing is started after giving up', startedPids().length === spent);
+
+  // An explicit start is the user saying "try again": it clears the budget.
+  writeFileSync(join(bridgeDir, 'main.py'), 'setInterval(() => {}, 1000);\n', 'utf8');
+  const again = await supervisor.start();
+  check('an explicit start still starts the bridge', again.ok === true);
+  check(
+    'an explicit start clears the give-up state',
+    supervisor.state().watchdogGaveUp === false && supervisor.state().restarts === 0,
+  );
+  check('the restarted bridge is running', supervisor.state().running === true);
+
+  await supervisor.stop();
+  check('stop kills the restarted bridge', await waitGone(again.pid, Date.now() + 10_000));
 }
 
 rmSync(root, { recursive: true, force: true });
