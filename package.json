@@ -1,6 +1,6 @@
 {
   "name": "dsh-xiaoai-bridge",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "XiaoAI speaker bridge for DeepSeek Harness: wake word, speech capture, DSH conversation and speaker playback, with the Python bridge hosted as a local process by the plugin.",
   "type": "module",
   "license": "MIT",

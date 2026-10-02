@@ -261,6 +261,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `bridgeApi` 与 `diagnostics`；设置页「运行状态」显示接口连通、鉴权方式、
       令牌是否配置、看门狗重启次数与最近错误；见 §12.26；
       `scripts/check-diagnostics.mjs` 与 `plugin-smoke.mjs` 的新断言）
+- [x] 4.6 卸载与回滚（teardown 删除可重建文件、保留 `bridge.log`/`spoken.jsonl`
+      等历史、未知文件只上报；`lib/ports.js` 探测 4399/9092 是否真的释放；
+      `POST /data/wipe` 用 `{"confirm":"wipe"}` 显式清空；见 §12.27；
+      `scripts/check-cleanup.mjs` 的新断言）
 
 ## 9. 第 1 期实现决策
 
@@ -1416,6 +1420,85 @@ code 与「探测成功时不记录」；最后断言七种 code 都在 `DIAGNOS
 列出的每个 code 与页面文案对账（漏一个就红）。`plugin-smoke.mjs` 则在**打过一次无令牌
 `/asr` 之后**再拉 `/health`，断言 `bridgeApi` 四个取值之一 + `diagnostics` 里出现
 `plugin-rejected`，也就是「bearer 不匹配真的会在卡片上留下痕迹」。
+
+## 12.27 卸载与回滚：删掉能重建的，留下历史（4.6）
+
+计划里 4.6 的原话是「`dsh plugin remove` 后收尾：`ctx.effect` 里 `kill` 进程树、
+释放 4399/9092、清理插件数据目录」。前两件是行为，最后一件是**判断**——判断错了
+就会毁掉用户的东西，所以这一节写清为什么这样切。
+
+### 12.27.1 宿主不给「卸载」信号
+
+查过 `dsh-plugin-manager`（`D:\WorkSpace\_oxb-wheels\asar-out\dsh\node_modules\`
+与 `_oxb-wheels\x-plugin-manager`），只有 UI 包与类型文件，没有 removal 事件或
+hook。插件被移除、DSH 正常退出、插件被重载，跑的都是同一段 `ctx.effect` teardown。
+于是「卸载时清空」只能靠推测，而推测的代价是：**每次重启都删掉 `spoken.jsonl`**
+——那正是第 3 期需求⑤「播报留痕」要求跨重启保留的文件。
+
+### 12.27.2 按「能不能重建」切分
+
+数据目录 `%USERPROFILE%\.dsh\xiaoai-bridge`（`lib/index.js:46 DATA_DIR_NAME`）：
+
+| 条目 | 类别 | 谁写的 | teardown 处理 |
+| --- | --- | --- | --- |
+| `config.py` | generated | `supervisor.renderConfig()`，每次启动重渲染 | 删 |
+| `bridge.pid` | generated | 启动时写、退出时清 | 删 |
+| `render.py.tmp` | generated | `lib/render-config.js:197-205` 的临时文件（异常退出的残片） | 删 |
+| `__pycache__/` | generated | Python 自己生成 | 删 |
+| `bridge.log` | history | 桥接器 stdout/stderr，`lib/process.js:134` | 留 |
+| `spoken.jsonl` | history | `lib/speech-log.js` 的播报留痕 | 留 |
+| `devices.json` / `device.json` | history | 设备发现结果 | 留 |
+| 其他任何文件 | other | 我们不知道是谁的 | 留，并写进 `kept` |
+
+`lib/cleanup.js` 就是这张表：`classify(name)` 返回 `generated` / `history` /
+`other`，`removeGenerated()` 只删第一类并返回 `{removed, kept, failed}`，
+`list()` 给目录不存在返回 `[]`，两种清理都**永不抛**（失败逐条 `logger.warn`）。
+删目录用 `rmSync(path, { recursive: true })`，删其他条目用
+`rmSync(path, { force: true })`：**不带 `recursive` 的 `rm` 只移除链接本身**，
+所以一个名叫 `__pycache__` 的 junction 不会把它指向的目录一起带走
+（`scripts/check-cleanup.mjs` 真的建了一个 junction 来验这件事）。
+
+### 12.27.3 端口：证明它真的松手了
+
+4399 是桥接器里 Rust `open_xiaoai_server` 的 AppServer（端口不可配，日志行
+`[AppServer] ✅ 已启动: "0.0.0.0:4399"`）；9092 是插件自己的 API Server
+（`apiServerPort`）。进程树由 `lib/process.js:562-576 killTree()` 收：Windows 上
+`taskkill /pid <pid> /T /F`，其他平台先 `kill(-pid, SIGTERM)`。`stop()` 本来就会
+先清掉看门狗的重启计时器、对被收养的进程轮询存活、超时后强杀。
+
+teardown 之后新增 `reportHeldPorts(stopped)`：探测 `[4399, apiServerPort]`，
+若刚停过一个进程（`stopped.stopped === true`）则等 200 ms 再探一次，然后
+- 仍在应答 → `diagnostics.note({ code: 'port-held', detail: 'port N still accepts connections after the bridge was stopped (…)' })`，卡片上显示「端口在停止后仍被占用」；
+- 插件这一轮**什么都没停** → 只写 `debug: port N is served by a process outside this plugin`，不记诊断（别人家的监听不是我们的错误）。
+
+### 12.27.4 真要清空时：`POST /data/wipe`
+
+`cleanup.wipe()` 是这个判断的另一半：它删**全部**条目，包括历史。它由一个显式
+路由调用，body 必须是 `{"confirm":"wipe"}`，否则 400：
+
+```powershell
+# 卸载前（或卸载后目录还在时）清空播报留痕与日志
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:<webServer 端口>/plugin/xiaoai/data/wipe `
+  -ContentType 'application/json' -Body '{"confirm":"wipe"}'
+```
+
+路由沿用既有的 same-origin 白名单（`lib/http.js:159-171`：只放行
+`http://<webServer.host>:<port>`、`localhost`、`127.0.0.1`；没有 Origin 的 curl
+直接放行），因此页面上的任何一次设置保存都碰不到它——要删历史必须写明这句话。
+返回 `{ok:true, dataDir, removed, failed}`：`removed` 是删掉的条目名，`failed`
+是删不掉的，`ok:true` 不代表每一项都成功。
+
+### 12.27.5 测试
+
+`scripts/check-cleanup.mjs`（36 条）：分类表与不重叠、`removeGenerated()` 恰好删
+`['__pycache__','bridge.pid','config.py','render.py.tmp']` 且历史与陌生文件都在、
+二次调用无事可做、`wipe()` 清空整目录、目录不存在时两种清理都是 no-op、
+junction 守卫（链接消失、被指向的 `precious.txt` 还在；无权限则打印 skip）、
+端口探测（0 / 70000 非法；真起一个 `net.createServer().listen(0)` 断言绑定端口为
+`true`、`server.close()` 后为 `false`；`heldPorts` 去重并过滤非法值）。
+`plugin-smoke.mjs` 另加两条：`{"confirm":"please"}` → 400，
+`{"confirm":"wipe"}` → 200 且 `removed` 是数组（临时 `DSH_HOME` 里没有残片，
+所以为空数组）。
 
 
 
