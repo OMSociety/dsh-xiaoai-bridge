@@ -273,6 +273,50 @@ check('a relative sessionCwd falls back instead of being handed to the host', ()
   assert.ok(warnings.some((line) => line.includes('sessionCwd must be an absolute path')), warnings.join(' | '));
 });
 
+// --- case 8: the project groups the settings page offers --------------------
+// The page lists these instead of accepting a typed path, because the host
+// groups a session only when its cwd is exactly a workspace path.
+console.log('case 8: project groups for the settings page');
+function bridgeWithRegistry(registry) {
+  const ctx = {
+    get(name) {
+      return name === 'workspaceRegistry' ? registry : undefined;
+    },
+    on: () => () => {},
+  };
+  return createSessionBridge({ ctx, getConfig: () => ({}), dataDir, logger });
+}
+
+check('the registry rows are reduced to id/path/title', () => {
+  const bridge = bridgeWithRegistry({
+    list: () => [
+      { id: 'w1', path: 'D:\\WorkSpace', title: 'WorkSpace' },
+      { id: 'w2', path: '  D:\\Other  ', title: '   ' },
+      { id: 'w3', path: '   ', title: 'no path at all' },
+      { id: 'w4' },
+      null,
+      'not a row',
+    ],
+  });
+  assert.deepEqual(bridge.workspaceGroups(), [
+    { id: 'w1', path: 'D:\\WorkSpace', title: 'WorkSpace' },
+    { id: 'w2', path: 'D:\\Other', title: '' },
+  ]);
+});
+
+check('a host without a workspace registry offers no groups', () => {
+  assert.deepEqual(bridgeWithRegistry(undefined).workspaceGroups(), []);
+});
+
+check('a registry that throws does not break the settings page', () => {
+  const bridge = bridgeWithRegistry({
+    list: () => {
+      throw new Error('registry is not ready');
+    },
+  });
+  assert.deepEqual(bridge.workspaceGroups(), []);
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();

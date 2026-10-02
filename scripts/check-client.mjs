@@ -64,8 +64,13 @@ if (captured !== null) {
   // 2. The factory requires react plus the shared primitives library. It may
   //    NOT require a cordis service package: those belong in `dsh.client.inject`.
   const requested = [];
-  const element = (type, props, key) => ({ type, props: props ?? {}, key: key ?? null });
-  const seen = { forms: [], valueFields: [], switches: [], segments: [] };
+  const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [] };
+  const element = (type, props, key) => {
+    // Native controls are not stubbed components, so capture the one the page
+    // builds by hand: the project-group picker.
+    if (type === 'select') seen.selects.push(props ?? {});
+    return { type, props: props ?? {}, key: key ?? null };
+  };
   const text = (children) => children;
   const primitivesStub = {
     SettingsForm: (props) => {
@@ -239,6 +244,24 @@ if (captured !== null) {
             check(Array.isArray(control.options) && control.options.length >= 2, `SegmentedControl ${control.id} needs at least 2 options`);
             check(typeof control.onChange === 'function', `SegmentedControl ${control.id} has no onChange`);
           }
+
+          // 7. The project-group picker is a native <select> populated from
+          //    GET /health, not a free-text path: the host groups a session only
+          //    when its cwd is exactly a workspace path, so a typed path would
+          //    silently leave the speaker ungrouped. The harness never lets
+          //    /health answer, which is exactly the empty-list case.
+          check(seen.selects.length === 1, `expected 1 native <select>, got ${seen.selects.length}`);
+          for (const control of seen.selects) {
+            check(control.id === 'xiaoai-sessionCwd', `unexpected <select> id ${JSON.stringify(control.id)}`);
+            check(typeof control.onChange === 'function', '<select> has no onChange');
+            const values = (control.children ?? []).map((option) => option.props.value);
+            check(
+              values.length === 1 && values[0] === '',
+              `a host that reports no workspaces must offer only "not set", got ${JSON.stringify(values)}`,
+            );
+          }
+          check(source.includes('healthFacts.workspaces'), 'the picker must read the workspace list out of the /health facts');
+          check(source.includes('field.sessionCwd.follow'), 'the picker needs a "follow the default" option label');
         } catch (err) {
           failures.push('component render threw: ' + String(err?.message ?? err));
         }

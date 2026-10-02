@@ -237,7 +237,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [ ] 3.11 fork 自加 API Server bearer 鉴权（上游 9 个端点仍无鉴权；loopback 限定，待排期）
 - [x] 3.13 人格提示词 + replyer 模型（三个字段 + 回复器 + 自动接管播报 + `spoken.jsonl` 留痕，
       见 §12.17/§12.18/§12.19；`scripts/check-speak.mjs` 约 40 条断言，**实机待验证**）
-- [x] 3.14 会话分组：按工作区登记音箱会话（`attachToWorkspace()`，见 §12.20）
+- [x] 3.14 会话分组：按工作区登记音箱会话（`attachToWorkspace()`，见 §12.20）；
+      `sessionCwd` 改成从宿主已有工作区里选（`workspaceGroups()` + `/health` 的
+      `workspaces` facts，不再手输绝对路径）
 - [ ] 3.15 实机验收（用户重启 DSH 后）：语音一轮 → 听到口语化播报、`spoken.jsonl` 落一行、
       音箱会话出现在工作区分组里
 
@@ -1059,8 +1061,26 @@ profile 级的 `ctx.systemPrompt.section()` 会漏进**所有**桌面会话 —�
 **修法**（`lib/session.js` 的 `attachToWorkspace()`）：建完会话后拿 cwd 去
 `workspaceRegistry.resolveByPath(cwd)` 查工作区，查到就 `attachSession`；
 查不到就什么都不做（宿主反正会拒，何必抛一次）。resume 分支也尽力附一次，
-用来治愈「会话建在工作区之前」的老会话。**因此要让它出现在工作区分组里，
-`sessionCwd` 要填写工作区目录本身，而不是它下面的子目录**；想让音箱会话待在
-`D:\WorkSpace\XiaoAI`，就在侧栏把那个目录建成一个工作区，两者取其一。
+用来治愈「会话建在工作区之前」的老会话。
 `scripts/check-session.mjs` 的 case 5/6 各加了一条断言（落地即成组 / 子目录不硬塞）。
+
+**设置页不再让人手输路径**（m04557）：既然「cwd 必须正好等于工作区目录」，
+让用户自己敲一个绝对路径就是把一个他无法验证的前提交给他 —— 敲错了不会报错，
+只会永远显示「未分组」，而事后又没有补救手段（`insertSessionBefore` 见上）。
+所以 `sessionCwd` 的控件从文本框换成了一个原生 `<select>`：
+
+- 候选来自宿主自己的工作区清单：`lib/session.js` 的 `workspaceGroups()` 读
+  `ctx.get('workspaceRegistry').list()`，只保留 `path` 非空的记录，规整成
+  `{id, path, title}`（`title` trim 后可为空，页面回退显示纯路径）。
+- 清单经 `GET /plugin/xiaoai/health` 的 facts 下发（`state.collectFacts()` 新增
+  `workspaces`，`lib/index.js` 的 `state.workspaces()` 只是转调
+  `sessions.workspaceGroups()`），客户端读 `health.data.health.workspaces`。
+- 第一项是「不指定（跟随默认工作区）」，值为空串 —— 保存即 unset，
+  回落到「宿主第一个工作区」的既有兜底。
+- 已保存但已不在清单里的值（工作区被删、或值来自旧版本的手输）会**多出一条**
+  「当前值（已不在工作区列表里）：<路径>」的选项，避免它在下一次保存时**静默消失**。
+- `/health` 还没答复时清单为空，控件只剩「不指定」——不会渲染出半截列表。
+
+**代价**：插件不再自动建工作区。用户要一个「音箱专用」分组，就得先在侧栏把那个
+目录建成工作区，然后在这里选中它 —— 这正是 m04557 否掉「没有就自动注册」的原因。
 
