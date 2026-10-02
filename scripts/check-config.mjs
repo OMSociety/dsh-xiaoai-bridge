@@ -1,11 +1,15 @@
 /**
- * Offline acceptance checks for lib/render-config.js.
+ * Offline acceptance checks for lib/render-config.js and lib/process.js.
  *
  * The renderer only matters if the *bridge* agrees with it, so the central case
  * here does not inspect the generated source as text: it renders a config with
  * deliberately unusual settings, then runs the bridge's own interpreter with
  * `CONFIG_PATH` pointing at the result and compares the values the Python side
  * actually loaded.
+ *
+ * The bridge is started by environment variables alone, so the other half of
+ * "the settings card is the single source of truth" is the mapping asserted
+ * below against `bridgeChildEnv()`.
  *
  * Run: node scripts/check-config.mjs
  */
@@ -16,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DEFAULTS } from '../lib/config.js';
+import { bridgeChildEnv } from '../lib/process.js';
 import {
   GENERATED_HEADER,
   buildOverrides,
@@ -119,6 +124,23 @@ const reservist = buildOverrides({
 });
 ok(!Object.keys(reservist.dsh).some((key) => key.includes('mimo')), 'the MiMo placeholders stay out of the bridge config');
 eq(full.asr.model, 'paraformer', 'asr.model');
+
+// Half of this plugin's settings never reach config.py: they become the child
+// process environment. Assert the mapping here so a settings key without a
+// consumer (or a consumer without a key) is caught offline.
+console.log('render-config: child environment');
+const childEnvBare = bridgeChildEnv({ ...DEFAULTS }, 'C:\\data\\config.py');
+eq(childEnvBare.SILENT_START_ENABLE, '0', 'the connect prompt stays on by default');
+eq(
+  bridgeChildEnv({ ...DEFAULTS, silentStart: true }, 'C:\\data\\config.py').SILENT_START_ENABLE,
+  '1',
+  'the silent-start switch reaches the child',
+);
+eq(childEnvBare.DSH_ENABLE, '1', 'the master switch is passed through');
+eq(childEnvBare.AUDIO_INPUT_ENABLE, '1', 'audio input stays enabled');
+eq(childEnvBare.CONFIG_PATH, 'C:\\data\\config.py', 'the child is pointed at the rendered config');
+eq(childEnvBare.API_SERVER_PORT, '9092', 'the API Server port is a string for the child');
+ok(!('XIAOAI_API_TOKEN' in childEnvBare), 'the token is added by the caller, never here');
 
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-'));
 try {

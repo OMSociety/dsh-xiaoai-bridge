@@ -234,7 +234,7 @@ if (captured !== null) {
             check(typeof field.resetLabel === 'string', `value field ${field.id} has no resetLabel`);
             check(typeof field.overriddenLabel === 'string', `value field ${field.id} has no overriddenLabel`);
           }
-          check(seen.switches.length === 5, `expected 5 Switch controls, got ${seen.switches.length}`);
+          check(seen.switches.length === 6, `expected 6 Switch controls, got ${seen.switches.length}`);
           for (const control of seen.switches) {
             check(typeof control.checked === 'boolean', 'a Switch has no checked value');
             check(typeof control.onChange === 'function', 'a Switch has no onChange');

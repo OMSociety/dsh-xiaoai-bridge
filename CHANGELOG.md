@@ -18,6 +18,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 
 - `README.md`：安装、快速上手、模型工具、设置项、数据位置、排错、卸载与仓库结构。
 - `CONTRIBUTING.md`：环境要求、提交前要跑的自检、目录结构与文档约定。
+- 设置项 `silentStart`（静默启动，默认关）：开启后桥接器连上音箱时不再播报「已连接」。桥接器侧由 `SILENT_START_ENABLE` 环境变量判断（`bridge/native/src/server.rs`）。
 
 ### 变更
 
@@ -25,11 +26,14 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - `LICENSE` 追加本 fork 的版权行（`OMSociety`），上游版权行原样保留。
 - `package.json`：`files` 纳入 `bridge/`；补上客户端实际 require 的 `@deepseek-ai/dsh-client-ui-primitives` peer 依赖。
 - 新增 `.npmignore`：发布打包时排除虚拟环境、缓存与模型目录。
+- `bridge/native/src/server.rs`：「已连接」播报改为可关闭（改动 Rust 后需重新 `uv sync` 编译原生扩展）。
+- `lib/process.js`：子进程环境改由导出的纯函数 `bridgeChildEnv()` 生成；`scripts/check-config.mjs` 增加对应断言（设置项与环境变量的映射现在离线可测）。
 
 ### Added
 
 - `README.md`: installation, quick start, model tool, settings, data locations, troubleshooting, uninstall and repository layout.
 - `CONTRIBUTING.md`: environment requirements, the self-checks to run before committing, repository layout and documentation conventions.
+- A `silentStart` setting (start silently, off by default): with it on, the bridge no longer speaks "已连接" when it connects to the speaker. The bridge reads it from the `SILENT_START_ENABLE` environment variable (`bridge/native/src/server.rs`).
 
 ### Changed
 
@@ -37,6 +41,8 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - `LICENSE` gains this fork's copyright line (`OMSociety`); the upstream lines are kept as-is.
 - `package.json`: `files` now includes `bridge/`; the `@deepseek-ai/dsh-client-ui-primitives` peer dependency the client really requires is declared.
 - Added `.npmignore`, so a published tarball leaves out the virtualenv, the caches and the model package.
+- `bridge/native/src/server.rs`: the "已连接" prompt can now be turned off (changing Rust means re-running `uv sync` to rebuild the native extension).
+- `lib/process.js`: the child environment now comes from an exported pure function, `bridgeChildEnv()`; `scripts/check-config.mjs` asserts the mapping, so settings-to-environment stays testable offline.
 
 ## [0.2.8] - 2026-10-03
 

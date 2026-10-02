@@ -62,13 +62,14 @@ node scripts\check-cleanup.mjs
 
 动手前先按改动内容读对应的一份：[README.md](./README.md) 的配置项与排错表、[CONTRIBUTING.md](./CONTRIBUTING.md) 的约定，以及 [docs/deploy.md](./docs/deploy.md) 里相关的 §12.x（那里有别人踩过的坑，搜关键词比重新试一遍便宜）。
 
-- 改配置项：`lib/config.js` 的 `DEFAULTS` 与 schema 两处一起改 → `lib/client.js` 的中英两张文案表（中文约 `:261`、英文约 `:412`）→ [README.md](./README.md) 的配置表 → 跑 `node scripts\check-config.mjs` 与 `node scripts\check-client.mjs`。
+- 改配置项：`lib/config.js` 的 `DEFAULTS` 与 schema 两处一起改 → `lib/client.js` 的中英两张文案表（中文约 `:261`、英文约 `:412`）→ 若这项要改变桥接器进程行为，改 `lib/process.js` 的 `bridgeChildEnv()`（设置项 → 环境变量的唯一映射处）→ [README.md](./README.md) 的配置表 → 跑 `node scripts\check-config.mjs` 与 `node scripts\check-client.mjs`（开关类控件会让 `check-client` 的 Switch 计数变化，那是断言在提醒你确认）。
 - 改界面：直接改 `lib/client.js`（没有 bundler 兜底），中英两张表都要改 → 核一下 [README.md](./README.md) 的配置项与排错表有没有要同步的行 → 跑 `node scripts\check-client.mjs`（它在沙箱里求值 bundle，断言 module id、`apply`/`inject`、席位注册并渲染一次组件；能拦住语法、模块形态与席位写错，**拦不住**真机上的交互与桥接器进程行为）→ 改的若是用户看得见的行为，还要按验收标准第 3 条重启 DSH 核对。
 - 加/改诊断码：`lib/diagnostics.js:24` 的 `DIAGNOSTIC_CODES`（当前 8 个）→ `lib/client.js` 中英文案 → README 排错表 → 跑 `node scripts\check-diagnostics.mjs`。
 - 改端口：`lib/ports.js` 与 `bridge/native/src/server.rs` 必须同时改 → 跑 `check-cleanup` 与 `check-supervisor`。
 - 改 HTTP 路由：`lib/http.js`（前缀 `:27` 的 `/plugin/xiaoai`；`/health`、`/config`、`/bridge/logs`、`/data/wipe`）。请求体一律 `JSON.parse(await readBody(req))`，设置写入要处理 revision 冲突；同源校验在 `lib/http.js:158-174`，**不要加 CORS 头**。
 - 改 teardown / 卸载：先读 [docs/deploy.md](./docs/deploy.md) §12.27，再动 `lib/cleanup.js`，跑 `node scripts\check-cleanup.mjs`。
 - 改 `bridge/` 下任何文件：先读 [bridge/AGENTS.md](./bridge/AGENTS.md)；`bridge/config.py` 是上游模板，必须留在版本库里。
+- 改 `bridge/native/src/*.rs`：Rust 扩展要重编译才生效，且**必须先让桥接器停下来**（否则 `.pyd` 被占用，`uv sync` 报 `failed to remove file …open_xiaoai_server.pyd: 拒绝访问 (os error 5)`）——`POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop`（该路由不要凭据）→ 在 `bridge/` 里 `uv sync` → 确认 `bridge\.venv\Lib\site-packages\open_xiaoai_server\open_xiaoai_server.pyd` 的修改时间就是刚才 → `POST …/bridge/start`。`uv` 不在 PATH，本机在 `C:\Users\Administrator\.local\bin\uv.exe`。
 - 改版本号：**先报备用户**（仓库既有纪律，见 [CONTRIBUTING.md](./CONTRIBUTING.md)）。
 - 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍追加到 `docs/deploy.md` 的 §12.x，不要写进 README 或提交信息。
 - 一次改动跨了上面多条（例如既加配置项又改界面）：相关检查**全跑**（配置项 + 界面 = `check-config` + `check-client`），这里只有并集，没有优先级。
@@ -114,6 +115,8 @@ node scripts\check-cleanup.mjs
 | 装 GitHub 版本时报 `no matching ref` | README 的安装命令用的是分支 `#main`——插件的版本从来没有打 tag；要按版本固定就先打 tag 再改那一行 |
 | `config render failed: ENOENT` 且路径里有 `config.py.tmp` | 数据目录还没建（`autoStart` 关着，或在临时 `DSH_HOME` 里跑）——不是渲染器坏了 |
 | `No module named pytest` | `uv sync` 清掉了 dev 依赖：`uv pip install --python bridge\.venv\Scripts\python.exe pytest` |
+| `failed to remove file …open_xiaoai_server.pyd: 拒绝访问 (os error 5)` | 桥接器正在跑，`.pyd` 被占用：先 `POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop` 再 `uv sync`，装完 `POST …/bridge/start` |
+| 改了 `bridge/native/src/*.rs` 但行为没变 | 扩展没重编译：停桥接器后 `uv sync`，核对 `.pyd` 的文件时间戳 |
 | `[WARN] Failed to replace env in config: ${NPM_TOKEN}` | `dsh plugin`（pnpm）打印的无关警告，忽略 |
 | 卸载后仍有进程或端口没释放 | 读 `docs/deploy.md` §12.27；这条决策由 `check-cleanup` 与 `check-supervisor` 覆盖 |
 | 状态卡上出现 `port-held` / `watchdog-gave-up` / `start-failed` | 编码含义见 README 排错表；实时状态看 `GET /plugin/xiaoai/health` 的 `bridgeApi.state` |

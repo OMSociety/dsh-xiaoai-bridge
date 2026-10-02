@@ -280,8 +280,12 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `bridge/device.json`、渲染产物与凭据都不入库；见 §12.28）
 - [x] 4.11 通读 + 子代理复核（README / CHANGELOG / CONTRIBUTING 十类事实逐条对照源码，
       8 类全对；1 处真问题与 2 处措辞已改、1 条误报经复核后不改；见 §12.28.8）
-- [x] 4.12 给编码 agent 的 AGENTS.md（计划外增补：根 `AGENTS.md` 120 行；
+- [x] 4.12 给编码 agent 的 AGENTS.md（计划外增补：根 `AGENTS.md` 128 行；
       `CONTRIBUTING.md` 加一行指向它、`package.json` 的 `files` 纳入它；见 §12.29）
+- [x] 4.13 静默启动（计划外增补：用户实机反馈「连上小爱会播『已连接』提示音，
+      希望做成可配置项」；`silentStart` 设置项 → 桥接器读 `SILENT_START_ENABLE`，
+      Rust 侧 `bridge/native/src/server.rs` 改写 + `lib/process.js` 抽出
+      `bridgeChildEnv()`；见 §12.30）
 
 ## 9. 第 1 期实现决策
 
@@ -1688,7 +1692,7 @@ python C:\Users\Administrator\.dsh\skills\agent-md-creator\scripts\check_agents_
 命令解析，`Get-ChildItem` 既不在仓库配置里也不在 PATH 上（PowerShell 内建命令本来就不是
 可执行文件）。改成八条逐行 `node scripts\check-*.mjs` 后 **error 0 / warn 0**；唯一的
 info 是上游 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——那是上游文件，本 fork 不动。
-成文 120 行。
+成文 128 行（4.13 时又补了「改 Rust」链与两条排错，见 §12.30.3）。
 
 #### 12.29.4 盲测与它抓出来的四处缺口
 
@@ -1722,6 +1726,41 @@ info 是上游 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——那�
 `AGENTS.md` 末尾写明与代码同 PR 更新，并点出四类「必须同步」的改动：验收命令
 （`scripts/check-*.mjs` 的增删）、模块边界与端口、`.gitignore` 的禁区、profile 的安装
 方式。`bridge/` 侧规则仍归 `bridge/AGENTS.md`，冲突时以更接近改动点的那份为准。
+
+### 12.30 静默启动：让「已连接」提示音可关（4.13，计划外增补）
+
+#### 12.30.1 需求与取证
+
+用户重启 DSH 实机试用后反馈：桥接器连上音箱时会播一句「已连接」，希望做成可配置项。全仓搜这四个字，只有一处会出声：`bridge/native/src/server.rs:34` 的 `SpeakerManager::play_text("已连接").await?;`——它在 `async fn test()` 里，由 `:134-137` 的 `tokio::spawn` 延迟 1 秒调起（`TaskManager::instance().add("test", test)`），错误用 `let _ =` 吞掉，所以**这句提示音不写任何日志**：A/B 实测两轮日志一模一样，出不出声只能靠耳朵。`server.rs:113` 的 `pylog!("[AppServer] ✅ 已连接: {:?}", addr)` 只是设备接入日志，与提示音无关。
+
+链路位置：插件侧 `lib/process.js:482` 以 `python main.py`（cwd = `bridge/`）拉起桥接器，子进程环境在那里拼；「设置项 → 环境变量」这条链此前没有集中点。
+
+#### 12.30.2 怎么关
+
+- Rust：新增 `is_silent_start()` 读 `SILENT_START_ENABLE`，真值表与既有的 `is_audio_input_enabled()`（`:20-31` 读 `AUDIO_INPUT_ENABLE`）一致，接受 `true`/`1`/`yes`/`on`；区别是**未设或非法一律 false**——默认照旧出声，升级前后行为不变。播报包进 `if !is_silent_start() { … }`。
+- 插件：`lib/config.js` 的 `DEFAULTS` 与 schema 两处加 `silentStart`（默认 `false`，`live(z.boolean())`，与 `autoStart` 同段 `process`）；`lib/client.js` 中英两张表加「静默启动 / Start silently」与提示语，FIELD 表加一条布尔控件；`lib/process.js` 把子进程环境抽成导出的纯函数 `bridgeChildEnv(cfg, configPath)`，`SILENT_START_ENABLE` 在其中（`cfg.silentStart ? '1' : '0'`），凭据注入仍在它之后单独追加。
+- 为什么抽纯函数：环境映射从此能被离线断言，不必起进程。
+
+#### 12.30.3 改 Rust 的代价：`.pyd` 被占用
+
+`bridge/pyproject.toml` 的 `[tool.uv] cache-keys` 含 `native/src/**/*.rs`，改 `.rs` 后 `uv sync` 会重编译。第一次失败：
+
+```text
+error: failed to remove file D:\WorkSpace\Github\dsh-xiaoai-bridge\bridge\.venv\Lib\site-packages\open_xiaoai_server\open_xiaoai_server.pyd: 拒绝访问。 (os error 5)
+```
+
+原因：桥接器正在跑，`.pyd` 被占用（wheel 其实已编译成功，只是装不进去）。解法：`POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop`（这条路由不要凭据，只有 `/asr` 校验 bearer）→ `uv sync`（复用缓存，18 ms）→ `POST …/bridge/start`。`uv` 不在 PATH，本机在 `C:\Users\Administrator\.local\bin\uv.exe`。这条坑已进 `AGENTS.md` 的「改 Rust」链与「出错怎么办」表。
+
+#### 12.30.4 验证
+
+- 装上了没有：`bridge\.venv\Lib\site-packages\open_xiaoai_server\open_xiaoai_server.pyd` 的 LastWriteTime = 2026/10/3 02:55:47、7,668,224 字节，二进制里能搜到 ASCII 串 `SILENT_START_ENABLE`（同处还有 `AUDIO_INPUT_ENABLE`）。
+- A/B 实测：同一份配置各跑 11 秒（`Start-Process … python -u main.py`，env `DSH_ENABLE=1`/`API_SERVER_ENABLE=1`/`AUDIO_INPUT_ENABLE=1`/`LOG_LEVEL=INFO`/`CONFIG_PATH=<数据目录>\config.py`，跑完 `taskkill /T /F`）：第一轮不设 `SILENT_START_ENABLE`，第二轮设 `SILENT_START_ENABLE=1`。两轮都在建服后 0.3–0.7 秒接入设备（`[AppServer] ✅ 已连接: 192.168.1.191:56304` / `:56312`），而 `test()` 在 +1 秒才执行——**日志证明不了是否出声**，听觉结论以用户为准。
+- 离线断言：`scripts/check-config.mjs` 现在同时覆盖 `lib/process.js`，断言默认 `SILENT_START_ENABLE === '0'`、`silentStart: true` 时 `'1'`、`CONFIG_PATH` 原样透传、`API_SERVER_PORT` 仍是字符串、且环境里**不含** `XIAOAI_API_TOKEN`（凭据只走 `childEnv()` 的后追加）。
+- 回归：八个 checker 全绿（`check-client` 的 Switch 计数须从 5 改成 6 才过——新增布尔控件会让它失败，这是提醒不是 bug）；`uv sync` 清掉了 pytest，重装后 `90 passed, 19 subtests passed`；未入库的冒烟脚本 exit 0。
+
+#### 12.30.5 版本与生效条件
+
+版本仍是 `0.2.8`，没有 bump（仓库纪律：改版本号先报备）。宿主半的 `lib/*.js` 改动要**重启 DSH** 才生效——本次作业结束时桥接器已恢复运行（pid 45628），但 DSH 仍是改代码之前启动的，所以设置页暂时看不到「静默启动」，且旧代码不传 `SILENT_START_ENABLE`，启动仍会播提示音；重启后可在设置页开「静默启动」。
 
 
 

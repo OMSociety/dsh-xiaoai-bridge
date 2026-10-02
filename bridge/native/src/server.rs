@@ -30,8 +30,24 @@ fn is_audio_input_enabled() -> bool {
     }
 }
 
+/// Check if the connect prompt should be skipped, so the speaker stays quiet
+/// while the bridge comes up (the plugin exposes this as "静默启动").
+/// Supports: "true"/"false", "1"/"0", "yes"/"no", etc.
+/// Defaults to false if not set or invalid, keeping the upstream prompt.
+fn is_silent_start() -> bool {
+    match env::var("SILENT_START_ENABLE") {
+        Ok(val) => {
+            let val = val.trim().to_lowercase();
+            matches!(val.as_str(), "true" | "1" | "yes" | "on")
+        }
+        Err(_) => false,
+    }
+}
+
 async fn test() -> Result<(), AppError> {
-    SpeakerManager::play_text("已连接").await?;
+    if !is_silent_start() {
+        SpeakerManager::play_text("已连接").await?;
+    }
 
     // Only start recording if audio input is enabled
     if is_audio_input_enabled() {

@@ -140,6 +140,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `bridgeDir` | 文本 | 空 | 桥接器源码目录；空则用 `<插件>/bridge` |
 | `pythonPath` | 文本 | 空 | 跑桥接器的解释器；空则用 `<bridgeDir>/.venv/Scripts/python.exe` |
 | `autoStart` | 布尔 | 开 | 跟随插件启动桥接器 |
+| `silentStart` | 布尔 | 关 | 开：连上音箱时不再播报「已连接」，启动不出声 |
 
 ### 语音
 
