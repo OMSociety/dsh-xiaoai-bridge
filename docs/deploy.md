@@ -198,6 +198,23 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `插件 → dsh-xiaoai-bridge` 页面在**描述与组件列表之间**渲染出「配置概览」段；
       `GET /plugin/xiaoai/health` → 200、`/plugin/xiaoai/config` → 200、无 `Failed to load plugins`。
       槽位修正过程与正确契约见 §11.6（第一次落在 `settings.plugins.tab`，位置错误）
+- [x] 2.0 核实 TTS 耦合点（`TTSRouter.play(...)` 是唯一入口，`SUPPORTED_PROVIDERS` 无后端专属项）
+- [x] 2.1 删旧连接器（`xiaozhi.py` / `openclaw*.py` / `qwenpaw*.py` / `services/protocols/{protocol,websocket_protocol}.py`
+      / `services/audio/codec.py` + 3 个测试；残留 grep 0 命中，`pytest` 41 passed）
+- [x] 2.2 `core/dsh.py`（已存在，本段补 `device_host` 透传）
+- [x] 2.3 `core/dsh_conversation.py`（已存在，`_run_one_turn_with_local_asr` 为「提交即返回」变体）
+- [x] 2.4 不自动 TTS（播报只由插件的 `xiaoai_speak` 工具触发，天然防重复播报）
+- [x] 2.5 `core/app.py`（`enable_dsh` + `DshManager` 生命周期 + `send_to_dsh*` + `set_dsh_session_key`）
+- [x] 2.6 `core/wakeup_session.py`（`_dsh_controller` / `_dsh_task` / `_start_dsh_conversation` / 路由 `"dsh"`）
+- [x] 2.7 `config.py`（`before_wakeup` 读 `APP_CONFIG["dsh"]["wakeup_keywords"]`，新增完整 `dsh` 段）
+- [x] 2.8 `main.py`（`DSH_ENABLE`）—— 另新增启动时重新生成 `core/models/keywords.txt`，见 §12.3
+- [x] 2.9 `kws/keywords.py`（`should_generate_keywords()` 只认 `OPENAI_ENABLE` / `DSH_ENABLE`）
+- [x] 2.10 `xiaoai_speak` 工具（`ctx.tools.register` 裸 JSON Schema + `POST /api/play/text`）
+- [x] 2.11 `/plugin/xiaoai/asr` 路由（唯一带 bearer 鉴权的路由）
+- [x] 2.12 会话管理（每台音箱一个会话，`<dataDir>/devices.json`，`agents.resume` 优先）
+- [x] 2.13 事件订阅（`ctx.on('session/event', ...)`，只读观察，异常被吞掉不影响 append）
+- [x] 2.14 闭环联调 —— **待用户重启 DSH 后实机验证**（说唤醒词 → 说话 → 看会话 → 听播报）
+- [x] 2.15 插件托管桥接器进程（计划未排期，作为插入任务实现；`lib/process.js` + `lib/bridge.js`）
 
 ## 9. 第 1 期实现决策
 
@@ -414,3 +431,96 @@ configured ? renderSlot("plugins.bundle.config", { view: "page" }, { entryKey: p
 2. 选槽位先跑 `check-mounts.mjs --explain <key>` 读 purpose，**不要照抄别的插件的写法**：
    MinerU 用 `settings.plugins.tab` 是因为它要在设置区里加一个页面，不是 bundle 配置。
 3. 改完跑 `check-mounts.mjs --check <插件目录>` 静态核对字面量 slot key（本仓库当前 0 error）。
+
+## 12. 第 2 期实现（dsh 连接器与语音闭环）
+
+### 12.1 两个仓库面的分工
+
+| 面 | 位置 | 职责 |
+|---|---|---|
+| 桥接器 | `bridge/` | 接管音箱音频，KWS 唤醒、VAD、ASR，把用户语句 POST 到插件 `/asr` |
+| 插件 | `lib/` | 托管桥接器进程，把语句投进 DSH 会话，提供 `xiaoai_speak` 工具让模型开口 |
+
+关键设计：**桥接器不做 TTS**。播报只由模型的 `xiaoai_speak` 工具触发，
+所以「模型没说话」和「重复播报」这两个问题在结构上就不存在。
+
+### 12.2 插件侧新增模块
+
+| 文件 | 作用 |
+|---|---|
+| `lib/process.js` | 托管 `python main.py` 子进程；注入环境变量、日志环形缓冲 + `<dataDir>/bridge.log`、`taskkill /T` 杀进程树、pidfile 收养 |
+| `lib/bridge.js` | 带 token 的桥接器 REST 客户端；`playText()` 走 `/api/play/text` 且 `blocking:false` |
+| `lib/session.js` | 一台音箱一个会话；`agents.resume` 优先、`agents.create` 兜底；**投递用 `agent.followup()`** |
+| `lib/tools.js` | `xiaoai_speak` 工具（裸 JSON Schema，走 `ctx.tools.register`，不用 `defineTool`） |
+| `lib/http.js` | 新增 `POST /asr`（唯一要 bearer 的路由）、`GET /devices`、`/bridge/status|logs|health|start|stop|restart` |
+
+三个必须记住的宿主契约（细节见 `docs/deploy.md` §6 与实施计划 §7.5）：
+
+1. **投递必须用 `agent.followup(message)`**。`agent.inject()` 不唤醒 agent，
+   空闲 agent 收到消息后一动不动。
+2. **`createUserMessage` 的 `content` 只接受数组** `[{type:'text',text}]`，裸字符串不是该形状。
+   插件用惰性 `import('@deepseek-ai/dsh-llm')`，解析不到时手搓同形状对象兜底。
+3. **`source.kind` 不能是裸 `'plugin'`**。我们写 `plugin:dsh-xiaoai-bridge`
+   （裸值会让会话当场可写、之后永久不可读）。
+
+### 12.3 两个真坑（重启前修掉）
+
+**坑一：`core/models/keywords.txt` 不会被重新生成。**
+上游只在 `scripts/start.sh:126` 与 `Dockerfile:64` 的 CMD 里调用
+`core/services/audio/kws/keywords.py`；以 `python main.py` 直接启动（插件的托管方式）
+时**从不生成**，`config.py` 里改唤醒词不生效，甚至会一直用上游自带的
+`你好小智 / 小智小智 / 貌似貌似 / ...`——说「小爱小爱」根本唤不醒。
+修法：`bridge/main.py` 新增 `ensure_wakeup_keywords()`，在 `MainApp` 启动前调用生成器，
+让 `config.py` 的 `wakeup.keywords` 成为唤醒词唯一真相源。
+
+实测（`DSH_ENABLE=1`）：
+
+```
+core/models/keywords.txt  181 字节 → 93 字节
+你 好 小 黑 @你好小黑
+小 黑 你 好 @小黑你好
+小 爱 小 爱 @小爱小爱
+```
+
+**坑二：`/asr` 的 body 契约不匹配。**
+`core/dsh.py:_submit_utterance` 原本只发 `{text, session_key, device_name, source}`，
+而插件读 `device_host` 与 `device_name`，`host` 为 `undefined` → 设备键回落 `default`。
+单设备能跑，多设备设计失效。修法：`dsh.py` 增加 `_device_host`，优先读环境变量
+`XIAOAI_DEVICE_HOST`（插件 spawn 时注入），并在请求体里带上。
+
+### 12.4 已验证（离线）
+
+- `python -m pytest -x -q` → `41 passed`。
+- 桥接器冷启动冒烟（`DSH_ENABLE=1 API_SERVER_ENABLE=1 AUDIO_INPUT_ENABLE=1`，带
+  `XIAOAI_DEVICE_HOST=192.168.1.191` / `XIAOAI_API_TOKEN=smoke-test-token`）：
+  `0.0.0.0:4399 LISTENING`、`127.0.0.1:9092 LISTENING`、
+  `192.168.1.150:4399 ← 192.168.1.191:54816 ESTABLISHED`（音箱端 client 自动连上）、
+  `GET /api/health` → `{"success": true, "data": {"status": "healthy", "speaker_ready": true}}`、
+  `GET /api/status` → `{"success": true, "data": {"status": "idle"}}`。
+- 插件烟测（`_oxb-wheels/plugin-smoke.mjs`，已加 `autoStart:false` 以免真的拉起桥接器）：
+  `effects: 4`、`tools: 1`、`skills: xiaoai-speak`、`GET /health` 200、
+  `GET/POST /config` 200、`GET /bridge/status` 200、
+  `POST /asr` 无 bearer → 401、空文本 → 400、无 agents 服务 → 503、
+  跨域 → 403、未知路由 → 404。
+
+### 12.5 未验证（需要用户重启 DSH）
+
+第 2 期验收的实机部分（计划 §五 行 308–313）：
+
+1. 说唤醒词「小爱小爱」，听到「小爱来了」；
+2. 说一句话，DSH 里出现对应的用户消息（`source.kind = plugin:dsh-xiaoai-bridge`）；
+3. 模型调用 `xiaoai_speak`，音箱念出该文本；
+4. 说退出词「退出」/「停止」/「再见」能打断并恢复监听；
+5. 无重复播报。
+
+### 12.6 已知遗留
+
+- `lib/process.js` 的 `childEnv()` 会 `delete env.OPENAI_ENABLE`：OpenAI 兼容后端
+  代码保留但插件托管下不可达（它只是可被手工启动的参考实现）。这是刻意的，
+  写在此处以免日后误判为 bug。
+- `core/utils/config.py` 的 `_initialize_device_id()` 仍会
+  `update_config("DEVICE_ID", mac)`，但 `update_config_file()` 是对 `config.py` 文本做
+  `re.sub(r'"DEVICE_ID"\s*:\s*"[^"]*"', ...)`，而本次已删掉含该字面键的 `"xiaozhi"` 段
+  → **回写实际变成 no-op**。第 3 期若按新结构重新引入 `DEVICE_ID` 字面键，回写行为会复活。
+- 桥接器的 API Server（9092）**目前仍无鉴权**，计划第 3 期（3.11）加 bearer。
+
