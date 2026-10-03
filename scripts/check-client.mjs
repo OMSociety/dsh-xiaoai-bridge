@@ -64,7 +64,7 @@ if (captured !== null) {
   // 2. The factory requires react plus the shared primitives library. It may
   //    NOT require a cordis service package: those belong in `dsh.client.inject`.
   const requested = [];
-  const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [] };
+  const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [], folds: [] };
   const element = (type, props, key) => {
     // Native controls are not stubbed components, so capture the one the page
     // builds by hand: the project-group picker.
@@ -94,6 +94,16 @@ if (captured !== null) {
       return element('div', { children: props.label });
     },
     Tag: (props) => element('span', { children: text(props.children) }),
+    // The real component mounts collapsed content only while `open`, so a
+    // section that starts collapsed is genuinely absent from this render. The
+    // page text below therefore describes the default view, and the two fields
+    // behind the collapsed 高级 fold are asserted at source level instead.
+    DisclosureRow: (props) => {
+      seen.folds.push(props);
+      const head = element('div', { children: props.title });
+      if (!props.open) return element('div', { children: [head, props.collapsedContent] });
+      return element('div', { children: [head, props.children] });
+    },
   };
   const shim = (specifier) => {
     requested.push(specifier);
@@ -183,10 +193,12 @@ if (captured !== null) {
           check(summary.includes('小爱音箱'), 'summary view does not name the plugin');
 
           // Every configurable field must reach a control, so a field added to
-          // lib/config.js without a client entry fails this check.
+          // lib/config.js without a client entry fails this check. The list
+          // covers what the default view shows; the advanced pair is checked
+          // below, because its fold starts collapsed.
           const configFields = [
             '启用插件', '音箱名称', '音箱地址', '唤醒词', '语音识别后端', '会话工作区',
-            '桥接器目录', 'Python 解释器', '随插件启动桥接器', '日志级别',
+            '随插件启动桥接器', '日志级别',
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
             '对话保持时长（秒）', '连续对话', '语音合成方式', '朗读音色', 'MiMo 服务地址', 'MiMo 凭据名', 'MiMo 模型', 'MiMo 音色', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
@@ -196,6 +208,15 @@ if (captured !== null) {
           for (const label of configFields) {
             check(page.includes(label), `page view is missing the field ${JSON.stringify(label)}`);
           }
+          // Inside the 高级 fold: the fold must exist (asserted below) and keep
+          // carrying these two labels.
+          for (const label of ['桥接器目录', 'Python 解释器']) {
+            check(source.includes(label), `the 高级 fold is missing the field ${JSON.stringify(label)}`);
+          }
+          check(
+            seen.folds.length >= 7,
+            `the page should fold its 7 sections, got ${seen.folds.length} DisclosureRow renders`,
+          );
           for (const heading of ['基本', '唤醒与语音', '应答与兜底', '播报与回复器', '人格与提示词', '桥接器进程', '本地 API 服务', '运行状态']) {
             check(page.includes(heading), `page view is missing the section ${JSON.stringify(heading)}`);
           }

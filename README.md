@@ -130,7 +130,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 ## 配置项
 
-设置页里改；下面是常用项与默认值。
+设置页里改；下面是常用项与默认值。页面按 7 个可折叠分区排：基本 / 唤醒与语音 / 应答与兜底 / 播报与回复器 / 人格与提示词 / 桥接器进程 / 本地 API 服务；`bridgeDir` 与 `pythonPath` 这类排障项收在「桥接器进程」下的**高级**折叠里。折叠与联动只改显示：某个开关关掉时它管着的那组项会隐藏，但已经填过的值和暂存的草稿都还在，开关打开就回来（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.39）。
 
 保存走 `POST /plugin/xiaoai/config`，写入前会用 `validateConfig()` 严格校验：不合法的值**当场回 400**（错误信息里带着是哪一项，例如 `wakeupTimeout must be a whole number of seconds in [1, 600]`），不会先存进去再说。校验在 revision 围栏之前跑，所以「既过期又不合法」的请求回的是 400 而不是 409。已经躺在设置里的坏值（手改过配置文件、或旧版本写进去的）走另一条路：载入时由 `sanitizeConfig()` 逐键回退成默认值，并只告警一次 `unusable config repaired with defaults: …`。
 
@@ -141,39 +141,44 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `enabled` | 布尔 | 开 | 总开关；关掉后只保留设置卡 |
 | `deviceName` | 文本 | `小爱音箱` | 音箱显示名，出现在会话标题上 |
 | `deviceHost` | 文本 | `192.168.1.191` | 刷机后音箱的局域网地址 |
-| `bridgeDir` | 文本 | 空 | 桥接器源码目录；空则用 `<插件>/bridge` |
-| `pythonPath` | 文本 | 空 | 跑桥接器的解释器；空则用 `<bridgeDir>/.venv/Scripts/python.exe` |
-| `autoStart` | 布尔 | 开 | 跟随插件启动桥接器；关掉后需要桥接器的调用（如 `xiaoai_speak`）会直接失败并报 `bridge is not running (autostart is off)`，不会替你拉起进程 |
-| `silentStart` | 布尔 | 关 | 开：连上音箱时不再播报「已连接」，启动不出声 |
+| `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；只喂给桥接器（日志前缀、按会话覆盖音色），DSH 侧不读它。本仓库默认值与上游文档不同（见 CHANGELOG） |
+| `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
+| `agentPreset` | 文本 | `xiaoai` | 音箱那个会话按哪个 Agent 预设组建。本仓库带一个「小爱模式」（[preset/xiaoai/](preset/xiaoai/)，需要先在插件市场里安装它）；留空用宿主默认预设。填了但没安装**不是错误**：这次回落到宿主默认预设，并留下一条 `agent-preset-missing` 诊断（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.36） |
 
-### 语音
+### 唤醒与语音
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `wakeKeywords` | 文本 | `小爱小爱` | 唤醒词，一行一个 |
-| `exitKeywords` | 文本 | `退出`、`停止`、`再见` | 退出词，一行一个 |
-| `wakeupReplyText` | 文本 | `小爱来了` | 唤醒词命中时念的一句 |
-| `exitReplyText` | 文本 | `小爱，再见` | 对话结束时念的一句 |
 | `wakeupTimeout` | 数字 | `20` | 静默多少秒后结束对话；必须是 `1`–`600` 的整数，非整数或越界会被回退成默认值并在日志里告警一次 |
-| `continuousConversation` | 布尔 | 关 | 开：一次唤醒可接着说；关：一句一次唤醒 |
-| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / MiMo（预留，暂不生效） |
-| `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS |
+| `continuousConversation` | 布尔 | 关 | 开：一次唤醒可接着说；关：一句一次唤醒。只有打开时，「退出词」才出现 |
 | `asrBackend` | 枚举 | `sense_voice` | 桥接器使用的语音识别后端 |
-| `mimoBaseUrl`、`mimoApiKeyCredential`、`mimoModel`、`mimoVoice` | 文本 | 空 | MiMo 预留占位；凭据只存名字，目前不发给桥接器 |
+| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / MiMo（预留，暂不生效）；选 MiMo 时下面四项才出现 |
+| `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS；`ttsProvider` 选 MiMo 时这一项隐藏 |
+| `mimoBaseUrl`、`mimoApiKeyCredential`、`mimoModel`、`mimoVoice` | 文本 | 空 | MiMo 预留占位，只在 `ttsProvider` 选 MiMo 时出现；凭据只存名字，目前不发给桥接器 |
 
-### 回复
+### 应答与兜底
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
-| `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；本仓库默认值与上游文档不同（见 CHANGELOG） |
-| `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
-| `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`（工具注册回全局层）；关（默认）只有音箱发起的会话能调，工具也只出现在那个会话里（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34 与 §12.35） |
-| `agentPreset` | 文本 | `xiaoai` | 音箱那个会话按哪个 Agent 预设组建。本仓库带一个「小爱模式」（[preset/xiaoai/](preset/xiaoai/)，需要先在插件市场里安装它）；留空用宿主默认预设。填了但没安装**不是错误**：这次回落到宿主默认预设，并留下一条 `agent-preset-missing` 诊断（见 §12.36） |
-| `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
+| `wakeupReplyText` | 文本 | `小爱来了` | 唤醒词命中时念的一句 |
+| `exitReplyText` | 文本 | `小爱，再见` | 对话结束时念的一句 |
+| `exitKeywords` | 文本 | `退出`、`停止`、`再见` | 退出词，一行一个；只在 `continuousConversation` 打开时出现 |
 | `fallbackText` | 文本 | `连不上电脑，请稍后再试` | 桥接器活着但插件连不上时念 |
 
-### 播报
+### 播报与回复器
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来；关掉后下面那组回复器项隐藏 |
+| `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`（工具注册回全局层）；关（默认）只有音箱发起的会话能调，工具也只出现在那个会话里（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34 与 §12.35） |
+| `spokenMaxChars` | 数字 | `300` | 播报字数上限，超长先压缩一次再截断 |
+| `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具在屏幕上等待确认时念；审批正文永不出口 |
+| `replyerProvider`、`replyerModel` | 文本 | 空 | 回复器路由；空则跟随会话模型。注意**切换模型只对回复器即时生效**：语音会话的 agent 路由在会话创建时就钉死了，要等 DSH 重启后才用上新模型（有意保留的取舍，见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.31.7） |
+| `replyerHistoryTurns` | 数字 | `6` | 交给回复器的近期往返数 |
+| `replyerFailureText` | 文本 | `回复器调用失败` | 回复器两次都失败时念 |
+
+### 人格与提示词
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -181,18 +186,23 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `replyStyle` | 文本 | 空 | 回复器的说话风格 |
 | `behaviorStyle` | 文本 | 空 | 只注入音箱发起的会话 |
 | `outputLimits` | 文本 | 内置 | 回复器必须避开的东西（emoji、markdown、括号动作、URL 等） |
-| `replyerProvider`、`replyerModel` | 文本 | 空 | 回复器路由；空则跟随会话模型。注意**切换模型只对回复器即时生效**：语音会话的 agent 路由在会话创建时就钉死了，要等 DSH 重启后才用上新模型（有意保留的取舍，见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.31.7） |
-| `replyerHistoryTurns` | 数字 | `6` | 交给回复器的近期往返数 |
-| `replyerFailureText` | 文本 | `回复器调用失败` | 回复器两次都失败时念 |
-| `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具在屏幕上等待确认时念；审批正文永不出口 |
-| `spokenMaxChars` | 数字 | `300` | 播报字数上限，超长先压缩一次再截断 |
+| `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
 
-### 进程与接口
+### 桥接器进程
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| `autoStart` | 布尔 | 开 | 跟随插件启动桥接器；关掉后需要桥接器的调用（如 `xiaoai_speak`）会直接失败并报 `bridge is not running (autostart is off)`，不会替你拉起进程 |
+| `silentStart` | 布尔 | 关 | 开：连上音箱时不再播报「已连接」，启动不出声；只在 `autoStart` 打开时出现 |
 | `logLevel` | 枚举 | `INFO` | 桥接器日志级别 |
-| `apiServerEnabled` | 布尔 | 开 | 是否提供桥接器 API |
+| `bridgeDir` | 文本 | 空 | 「高级」折叠里的排障项：桥接器源码目录；空则用 `<插件>/bridge` |
+| `pythonPath` | 文本 | 空 | 「高级」折叠里的排障项：跑桥接器的解释器；空则用 `<bridgeDir>/.venv/Scripts/python.exe` |
+
+### 本地 API 服务
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `apiServerEnabled` | 布尔 | 开 | 是否提供桥接器 API；关掉后下面三项隐藏 |
 | `apiServerHost` | 文本 | `127.0.0.1` | API Server 监听地址；保持 loopback 最安全 |
 | `apiServerPort` | 数字 | `9092` | API Server 端口 |
 | `apiServerTokenCredential` | 文本 | `XIAOAI_API_TOKEN` | 依凭据的**名字**，不是令牌本身 |

@@ -305,12 +305,14 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `dsh_xiaoai_server`；见 §12.37）
 - [x] 4.15 发布前清单与小尾巴（新增仓库内 `TODO.md`；本清单回填 4.13 各批与 4.14；
       §12.33 补父标题；见 §12.38）
+- [x] 4.16 设置页重新排版（7 个可折叠分区 + 「高级」折叠 + 联动显隐；
+      隐藏而不是卸载，草稿不丢；见 §12.39）
 
 ## 9. 第 1 期实现决策
 
 - **不引入打包器**：`lib/client.js` 手写为 `window.__ModuleLoader__.load({id, factory})` 形态，
   内部**只** `require("react")` 与 `require("react/jsx-runtime")`，不 require 任何 UI 包
-  （直接把 UI 原语耦合降到零，白屏面最小）。依赖清单写在 `package.json` 的 `dsh.client.inject`。
+  （当时的想法是把 UI 原语耦合降到零、白屏面最小；4.16 的排版改版后改成 require `@deepseek-ai/dsh-client-ui-primitives` 里的 `DisclosureRow` 等原语，见 §12.39）。依赖清单写在 `package.json` 的 `dsh.client.inject`。
   与官方构建产物形态一致，省掉 tsc + tsdown；正确性由 `scripts/check-client.mjs` 兜底
   （在 `node:vm` 沙箱里加载 bundle、断言 module id/导出/页签注册/首帧渲染）。
 - 插件走 0.2.x peer 线：`@deepseek-ai/cordis ^4.0.4` + `@deepseek-ai/dsh-* ^0.2.0-rc.1`，
@@ -2520,6 +2522,61 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 #### 12.38.5 这一轮的检查
 
 `npm run check`（九条）绿、`doc-check.mjs` 与 `changelog-check.mjs` 绿、`check_agents_md.py` 0 / 0 / 0；`TODO.md` 的加入没有触碰任何断言（它不在 `files` 白名单里，也不参与 README 锚点）。
+
+### 12.39 设置页重新排版：折叠分区与联动显隐（4.16，UI 重排）
+
+#### 12.39.1 用户要的是什么
+
+用户原文：「重新排版一下配置页面，整理一下配置项的位置。用好排版折叠和出现逻辑（某些功能只有开启XX功能才会出现）」。改动只落在浏览器半（`lib/client.js`）、它的检查（`scripts/check-client.mjs`）与 `README.md` 的配置项章节；宿主半、桥接器、配置键名与默认值一律不动。
+
+#### 12.39.2 折叠用宿主的 `DisclosureRow`
+
+从 asar 取到的实现（`node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/index.js:3156`）是**受控**组件：`open` 由父级持有、`onToggle` 必传，`expandable && expandOnRowClick` 时整行可点、可键盘触发，展开态用 `IconChevronUpOutlineRegular`；关键一行是 `:3203` 的 `}), open && children]` —— **收起时 children 根本不挂载**。所以组件里用 `foldState = useState(function () { return Object.assign({}, FOLD_DEFAULTS); })` 持有每段的开合，`toggleFold(id)` 拷贝旧 map 再取反（不可变），`Fold()` 只是 `DisclosureRow` 的一层包装（补 `foldBodyStyle` 的纵向间距）。`FOLD_DEFAULTS` 里 `process.advanced` 默认 `false`（排障项默认收起），其余 7 段默认展开。
+
+段落 id 与标题一字未动（`basic` / `voice` / `reply` / `speak` / `persona` / `process` / `api`），因为 `scripts/check-client.mjs:199` 断言渲染文本里必须有那 8 个标题（含「运行状态」）；换标题会连带改检查，而标题本身没有重排的必要。
+
+#### 12.39.3 联动为什么用 `display:none`（隐藏）而不是不渲染（卸载）
+
+`scripts/check-client.mjs` 的三条计数断言（40 个中文标签出现在渲染文本里、`Switch` 恰好 7 个、`SegmentedControl` 恰好 3 个、原生 `<select>` 恰好 1 个）都建立在「控件在渲染树里」这个前提上。如果按开关把字段整段卸载，`autoSpeak` / `apiServerEnabled` / `autoStart` / `continuousConversation` 默认值一关，对应控件立刻从渲染树消失，计数断言与标签断言都会挂。更重要的是产品行为：卸载会丢掉这一项**暂存的草稿与校验提示**，用户把开关来回拨一次就得重填。
+
+所以门挡住的控件**照常渲染**，只是外面套一层 `jsx("div", { key: spec.key + "-hidden", style: hiddenStyle, children: control })`（`hiddenStyle = { display: "none" }`）—— 与设置页其它部分一致：`buildOps()` 本来就按 `FIELDS` 全表生成 ops，隐藏与否不影响保存什么。
+
+门外值 `gateOpen(gate)` 取值的优先级是 `draft[gate.key]` → `snapshot.value[gate.key]` → `GATE_DEFAULTS`。最后一层的存在是必要的：`/config` 还没答上来时 `snapshot` 是空的，没有 `GATE_DEFAULTS` 就会把「默认开启」的开关（`autoSpeak`、`autoStart`、`apiServerEnabled`）看成关，于是首帧把它们的子项全藏起来、加载完再突然冒出来。`GATE_DEFAULTS` 镜像 `lib/config.js` 的 `DEFAULTS` 里那几个布尔值（`ttsProvider: ""`、`continuousConversation: false`、`autoSpeak: true`、`autoStart: true`、`apiServerEnabled: true`），**两边要一起改**。
+
+联动规则（不改键名、不改默认值，只改显示）：
+
+| 门 | 只看这一个键 | 被它管的字段 |
+| --- | --- | --- |
+| TTS provider | `ttsProvider` | `in: ["mimo"]` → `mimoBaseUrl` / `mimoApiKeyCredential` / `mimoModel` / `mimoVoice`；`notIn: ["mimo"]` → `ttsSpeaker` |
+| 连续对话 | `continuousConversation` | `exitKeywords` |
+| 自动播报 | `autoSpeak` | `replyerProvider` / `replyerModel` / `replyerHistoryTurns` / `replyerFailureText` |
+| 桥接器托管 | `autoStart` | `silentStart` |
+| 本地 API 服务 | `apiServerEnabled` | `apiServerHost` / `apiServerPort` / `apiServerTokenCredential` |
+
+#### 12.39.4 字段重新归属
+
+`FIELDS` 表整表重写（每条多两个可选属性：`show` 门与 `advanced: true`），分区顺序与归属：
+
+- 基本：`enabled`、`deviceName`、`deviceHost`、`sessionKey`、`sessionCwd`、`agentPreset`（`sessionKey` 从「回复」搬来 —— 它只喂给桥接器；`sessionCwd` 与 `agentPreset` 是「这个音箱会话归到哪、按哪套预设建」，也归这里）
+- 唤醒与语音：`wakeKeywords`、`wakeupTimeout`、`continuousConversation`、`asrBackend`、`ttsProvider`、`ttsSpeaker`、MiMo 四项
+- 应答与兜底：`wakeupReplyText`、`exitReplyText`、`exitKeywords`、`fallbackText`（前三项原来散在「语音」里，`fallbackText` 从「回复」搬来）
+- 播报与回复器：`autoSpeak`、`speakFromAnySession`、`spokenMaxChars`、`approvalText`、回复器四项（`spokenMaxChars` 与 `approvalText` 从「播报」与「回复」合并进来，回复器不再单列）
+- 人格与提示词：`personality`、`replyStyle`、`behaviorStyle`、`outputLimits`、`voiceRuleText`（原来混在「播报」里）
+- 桥接器进程：`autoStart`、`silentStart`、`logLevel`，加「高级」折叠里的 `bridgeDir`、`pythonPath`
+- 本地 API 服务：`apiServerEnabled` + host / port / 凭据（原来叫「进程与接口」，把桥接器托管和 API 混在一起）
+
+`SECTIONS` 的 id 与 `section.*` 标题键沿用旧值（`reply` 现在渲染成「应答与兜底」、`speak` 渲染成「播报与回复器」、`api` 渲染成「本地 API 服务」），`COPY.zh` / `COPY.en` 只加了 `section.advanced`（「高级」/「Advanced」）一条。
+
+#### 12.39.5 `scripts/check-client.mjs` 的两处期望变更与理由
+
+1. **`'桥接器目录'` 与 `'Python 解释器'` 从「渲染文本必须含」改成「源码必须含」**。它们现在默认收在「高级」折叠里，而 `DisclosureRow` 收起时不渲染 children —— stub 忠实地照做后，这两个标签就不在渲染文本里了。改检查而不是改产品：折叠正是用户要的效果，而这两条断言原本要防的是「加了配置项忘了加控件」，源码级断言同样能防住（`FIELDS` 里仍有这两条、`configFields` 的 40 个标签里其余 38 个仍在渲染文本里）。stub 与宿主一致这一点是刻意的：如果 stub 收起时也渲染 children，检查就会在一个真实浏览器里不成立的假设上通过。
+2. **新增 `seen.folds.length >= 7`**：断言 7 个分区确实走的是折叠容器，而不只是内容好看。stub 的 `DisclosureRow` 会把每次渲染的 `title` 推进 `seen.folds`，`title` 始终进 children（与宿主实现一致：`title` 在 `.row` 里，不受 `open` 影响）。
+
+`collectText`（`scripts/check-client.mjs:341-354`）只收 `props.children`、不收 `title` / `label` 这类 props，所以折叠标题不能靠 props 过标签断言 —— 这也是 stub 要把 `title` 放进 children 的原因。
+
+#### 12.39.6 这一轮的检查
+
+`npm run check`（九条，含改动后的 `check-client.mjs`）绿；`doc-check.mjs`（README 锚点只有 `#排错` 与 `#快速开始`，配置项章节的重排没动它们）与 `changelog-check.mjs` 绿；`check_agents_md.py` 0 / 0 / 0；`bridge` 侧 pytest 未受影响（这一批不动 Python）。仓库外另有一个不入库的临时脚本 `render-outline.mjs`（`D:\WorkSpace\_oxb-wheels\`），用同一套 vm + stub 渲染一次设置页并打印折叠 / 隐藏 / 控件大纲，用来在改检查之前先肉眼确认结构。
 
 
 
