@@ -552,14 +552,64 @@ await check('a playback failure is reported, and nothing is logged as spoken', a
   failing.tool = createSpeakTool({
     getConfig: () => ({ enabled: true, apiServerEnabled: true }),
     bridge: { playText: async () => ({ ok: false, error: 'bridge refused' }) },
-    sessions: { deviceForSession: () => null, primaryDevice: () => null },
+    sessions: { deviceForSession: () => ({ key: 'dev' }), primaryDevice: () => null },
     autoSpeak: { claimToolSpeak: () => ({ allowed: true }), noteSpoken: async () => { throw new Error('must not be called'); } },
     logger: quiet,
   });
-  const result = await failing.tool.execute({ text: '念这句' }, {});
+  const result = await failing.tool.execute({ text: '念这句' }, { agent: { session: { id: 'session-tool-fail' } } });
   assert.equal(result.isError, true);
   assert.match(result.text, /bridge refused/);
 });
+
+await check('a session the speaker did not start cannot make the speaker talk', async () => {
+  const played = [];
+  const claims = [];
+  const tool = createSpeakTool({
+    getConfig: () => ({ enabled: true, apiServerEnabled: true }),
+    bridge: { playText: async (text) => { played.push(text); return { ok: true }; } },
+    sessions: { deviceForSession: () => null, primaryDevice: () => ({ key: 'fallback', name: '小爱音箱' }) },
+    autoSpeak: {
+      claimToolSpeak: (sessionId) => { claims.push(sessionId); return { allowed: true }; },
+      noteSpoken: async () => { throw new Error('must not be called'); },
+    },
+    logger: quiet,
+  });
+  const refused = await tool.execute({ text: '念这句' }, { agent: { session: { id: 'session-desktop' } } });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /小爱音箱发起的对话/);
+  assert.deepEqual(played, [], 'a refused call must not play anything');
+  assert.deepEqual(claims, [], 'a refused call must not claim the turn');
+});
+
+await check('speakFromAnySession opens the tool to sessions with no speaker', async () => {
+  const played = [];
+  const noted = [];
+  const tool = createSpeakTool({
+    getConfig: () => ({ enabled: true, apiServerEnabled: true, speakFromAnySession: true }),
+    bridge: { playText: async (text) => { played.push(text); return { ok: true }; } },
+    sessions: { deviceForSession: () => null, primaryDevice: () => ({ key: 'fallback', name: '小爱音箱' }) },
+    autoSpeak: { claimToolSpeak: () => ({ allowed: true }), noteSpoken: async (record) => { noted.push(record); } },
+    logger: quiet,
+  });
+  const result = await tool.execute({ text: '水开了' }, { agent: { session: { id: 'session-desktop-open' } } });
+  assert.deepEqual(played, ['水开了']);
+  assert.notEqual(result.isError, true);
+  assert.equal(noted.length, 1);
+  assert.equal(noted[0].deviceKey, 'fallback', 'the opt-in falls back to the first configured device');
+});
+
+await check('a non-boolean speakFromAnySession stays closed', async () => {
+  const tool = createSpeakTool({
+    getConfig: () => ({ enabled: true, apiServerEnabled: true, speakFromAnySession: 'true' }),
+    bridge: { playText: async () => { throw new Error('must not play'); } },
+    sessions: { deviceForSession: () => null, primaryDevice: () => ({ key: 'fallback' }) },
+    autoSpeak: { claimToolSpeak: () => ({ allowed: true }), noteSpoken: async () => {} },
+    logger: quiet,
+  });
+  const refused = await tool.execute({ text: '念这句' }, { agent: { session: { id: 'session-desktop-string' } } });
+  assert.equal(refused.isError, true);
+});
+
 await check('the tool keeps the stable name the skill text promises', () => {
   assert.equal(SPEAK_TOOL_NAME, 'xiaoai_speak');
 });

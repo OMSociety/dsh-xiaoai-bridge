@@ -679,7 +679,11 @@ async function main() {
       'port 80 is treated as a valid target, not as a host-smuggling attempt',
     );
 
-    // IPv6 and case-insensitive spellings of a working host stay accepted.
+    // IPv6 and case-insensitive spellings of a working host stay accepted. The
+    // mixed-case probe asserts a *successful* call: `request` returns a boolean
+    // `ok` on every path, so `typeof ok === 'boolean'` would also pass for a
+    // host the client wrongly refused. `[::1]` is only checked for its spelling
+    // here because the recorder listens on IPv4.
     const ipv6 = createBridgeClient({
       getConfig: () => ({ apiServerHost: '[::1]', apiServerPort: recorderPort }),
       resolveToken: async () => null,
@@ -693,7 +697,21 @@ async function main() {
       logger: { warn: () => {} },
       diagnostics: { note: () => {} },
     });
-    ok(typeof (await upperCase.request('/api/health')).ok === 'boolean', 'a host name in mixed case is not treated as hostile');
+    eq((await upperCase.request('/api/health')).ok, true, 'a host name in mixed case is not treated as hostile');
+
+    // A wildcard bind has no address of its own to dial, so it is dialed on
+    // loopback -- the same normalization the port probe uses (`dialableHost`).
+    for (const wildcard of ['::', '0.0.0.0', '[::]']) {
+      const client = createBridgeClient({
+        getConfig: () => ({ apiServerHost: wildcard, apiServerPort: recorderPort }),
+        resolveToken: async () => null,
+        logger: { warn: () => {} },
+        diagnostics: { note: () => {} },
+      });
+      eq(client.baseUrl(), `http://127.0.0.1:${recorderPort}`, `baseUrl() dials ${wildcard} on loopback`);
+      const result = await client.request('/api/health');
+      eq(result.ok, true, `${wildcard} is a dialable target, not a hostile host`);
+    }
 
     await close(recorder);
   }

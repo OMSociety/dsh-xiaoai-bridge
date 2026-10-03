@@ -19,9 +19,13 @@
  * file naming a process that is not our bridge, an interpreter that cannot be
  * spawned, and two callers asking for a start at the same moment.
  *
+ * Cases I-J cover the seams with the rest of the plugin: the API token handed to
+ * the child (and never inherited from the host when there is none), and a start
+ * that replaces an adopted bridge whose death the 5s poll has not seen yet.
+ *
  *   node scripts/check-supervisor.mjs
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -173,6 +177,15 @@ function logText() {
     return readFileSync(logPath, 'utf8');
   } catch {
     return '';
+  }
+}
+
+/** @returns {object|null} the pid record the supervisor last wrote, if any */
+function readPidRecord() {
+  try {
+    return JSON.parse(readFileSync(pidPath, 'utf8'));
+  } catch {
+    return null;
   }
 }
 
@@ -437,6 +450,54 @@ console.log('case I: the API token reaches the bridge process, and only when the
   check('an unconfigured token is not inherited from the host', bareSeen.token === null);
   delete process.env.XIAOAI_API_TOKEN;
   await withoutToken.stop();
+}
+
+console.log('case J: a replacement start forgets the adopted bridge it outlived');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  writeFileSync(join(bridgeDir, 'main.py'), 'setInterval(() => {}, 1000);\n', 'utf8');
+
+  // An adopted process is not our child, so its death is only noticed by the 5s
+  // poll. Dying just before an explicit start used to leave that poll armed: it
+  // then deleted the pid file the *replacement* had just written, wiped
+  // startedAt, and reported an exit that never happened.
+  const dummy = await startDummy();
+  writePidRecord(dummy.pid);
+  const supervisor = makeSupervisor();
+  const adopted = await supervisor.start();
+  check('the leftover bridge is adopted first', adopted.adopted === true && adopted.pid === dummy.pid);
+  check('the adopted state is visible', supervisor.state().adopted === true);
+
+  // Kill it and start again in the same breath: waiting only long enough for the
+  // pid to really be gone keeps this well inside the poll window.
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(dummy.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  } else {
+    try {
+      process.kill(dummy.pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+  check('the adopted bridge is gone before the replacement starts', await until(() => !isAlive(dummy.pid), 2_000));
+
+  const fresh = await supervisor.start();
+  check('a start replaces the dead adopted bridge', fresh.ok === true && fresh.adopted !== true);
+  check('the replacement got its own pid', typeof fresh.pid === 'number' && fresh.pid !== dummy.pid);
+  check('the replacement owns the pid file', readPidRecord()?.pid === fresh.pid);
+  check('startedAt belongs to the replacement', supervisor.state().startedAt !== null);
+  check('the adoption is no longer armed', supervisor.state().adopted === false);
+  check('no phantom exit was reported', !logText().includes('adopted bridge pid='));
+  check('the phantom exit did not wake the watchdog', supervisor.state().restarts === 0);
+
+  // One full poll period later the verdict must not have changed.
+  await sleep(5_500);
+  check('the pid file survives the poll period', readPidRecord()?.pid === fresh.pid);
+  check('the poll still reports no phantom exit', !logText().includes('adopted bridge pid='));
+
+  await supervisor.stop();
+  check('stop kills the replacement', await waitGone(fresh.pid, Date.now() + 10_000));
 }
 
 rmSync(root, { recursive: true, force: true });

@@ -2106,6 +2106,114 @@ node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `pro
 仓库外的 `plugin-smoke.mjs` 也补了一条断言：假凭据库里明明有令牌时，不带 bearer 的 `POST /asr` 必须
 是 401，出现 503 就说明宿主没把解析器交给门禁。
 
+### 12.34 `xiaoai_speak` 的作用域门禁：谁能让小爱说话
+
+#### 12.34.1 DSH 的权限模型里没有「按工具开关」
+
+现象是「电脑/网页的普通对话里也会调用 `xiaoai_speak`」。查过两条线之后确认这是**插件侧**的问题，
+不是设置没找对：
+
+- 设置页的权限只有 sandbox 与 approval 预设（用户 patch 层 `cordis.patch.yml` 的 `permission.presets`
+  里只有 `read-only`/`workspace-write`/`danger-full-access` 三种组合，字段就是 `sandbox` + `approval`），
+  没有任何「允许/禁止某个工具」的界面或配置项；
+- 宿主确实提供逐工具的机制 —— `tools` 服务的 `restrict(filter)`（限制调用方 agent 作用域里可见的全局
+  工具）与 `guard(guard)`（按调用拒绝，且谁也不能把别人拒掉的调用强行放行）—— 但它们是**插件代码 API**，
+  不是配置项；`agentPresets` 是「插件组合清单」（`PresetDefinition.plugins`），也不是工具白名单。
+
+所以插件自己必须决定：**默认只在音箱发起的会话里允许**，再用一个显式开关放开。工具仍然全局注册
+（`lib/index.js:462`）：可见性交给门禁判断，比按作用域注册更可解释，也不依赖未文档化的作用域语义。
+
+#### 12.34.2 实现
+
+新增配置项 `speakFromAnySession`（`lib/config.js` 的 `DEFAULTS` 与 `CONFIG_SCHEMA` 各一处，默认
+`false`）。`lib/tools.js` 的 `execute` 在拿到 `sessionId` 之后、占用回合（`claimToolSpeak`）之前判断
+`const bound = sessions.deviceForSession(sessionId);`：
+
+- 有绑定（音箱发起的会话）：照旧，`device` 就是它；
+- 没有绑定且 `speakFromAnySession !== true`：直接返回 `isError` 与文案「xiaoai_speak 只能在小爱音箱
+  发起的对话里用……」，**不占用回合、不播报、不写 `spoken.jsonl`**；
+- 没有绑定但开关为 `true`：维持改动前的行为，回退到 `sessions.primaryDevice()`（只用于给
+  `spoken.jsonl` 记 `deviceKey`）。
+
+`sessionId` 来自 `exec.agent.session.id`，而 `deviceForSession`（`lib/session.js:544-551`）只在「这条
+会话由桥接器投递的语音创建」时才有记录（记录随 `deliver()` 建会话写入），所以它正好是「音箱那一路」
+的判据。判真用严格比较 `!== true`：只有布尔 `true` 放开，字符串 `"true"`、数字 `1` 之类都算关闭。
+
+门禁只能放在插件侧：`lib/bridge.js` 的 `playText()` 不带设备参数，播报目标是桥接器当前连着的那只
+音箱，插件并不控制它 —— `device` 只影响日志与留痕。
+
+#### 12.34.3 用户怎么设置
+
+设置页「播报」一节多一个开关「**任何会话都能让小爱说话**」（`lib/client.js` 的 `FIELDS`，默认关）：
+
+- 保持关闭（默认）：只有小爱音箱发起的对话能调用 `xiaoai_speak`；电脑/网页的普通对话调用会被拒，
+  模型会看到拒绝理由，不会出声。
+- 打开：任何会话都能调用它。想从桌面对话「主动说一句」时才需要打开；代价是模型在普通对话里也可能
+  顺手调用。
+
+这批代码要**重启 DSH** 才载入（宿主 JS 与设置页 bundle 都在启动时读取）。
+
+#### 12.34.4 这一轮的离线检查
+
+- `scripts/check-speak.mjs` 新增三条：未绑定会话被拒（`isError`、文案点名「小爱音箱发起的对话」、
+  没有播报也没有占用回合）、`speakFromAnySession: true` 时回退 `primaryDevice()` 并照常留痕、
+  非布尔值（`"true"`）仍然关闭；原先「播放失败」那条用例改成绑定会话，否则会先被门禁拦下而测不到
+  桥接器拒绝的路径。
+- `scripts/check-client.mjs` 的 Switch 计数断言从 6 改成 7（七个布尔项：`enabled`、
+  `continuousConversation`、`autoSpeak`、`speakFromAnySession`、`autoStart`、`silentStart`、
+  `apiServerEnabled`），并把这个开关的中文标签加进 `configFields`。
+- `scripts/check-http.mjs` 见 §12.34.5 的 M1/M3；`scripts/check-supervisor.mjs` 见 M2。
+
+#### 12.34.5 同批修掉的缺陷，以及记录下来不修的
+
+一位只读复核者逐行看过 `7aa3595..099b5a5`，给出三条「需要立即修」与若干低优先级项。修掉的：
+
+- **M1 通配绑定拨号**：`apiServerHost` 为 `::` 时，配置层与文档都当它合法（探测时归一成
+  `127.0.0.1`），`lib/bridge.js` 的 `resolveTarget()` 却按「主机名形状」拒掉，于是 `playText`/`health`/
+  `interrupt` 全部报 `apiServerHost is not a plain host name: "::"`。现在 `lib/bridge.js` 导出
+  `dialableHost()`（`0.0.0.0`、`::`、`[::]` 归一到 `127.0.0.1`），`resolveTarget()`、`baseUrl()` 与
+  `lib/index.js` 的 `reportHeldPorts()` 都用它，这条规则只剩一处实现。空串**故意不在**归一表里：
+  `validateConfig` 本来就是拒的，客户端跟着拒。
+- **M2 收养状态残留**：收养的桥接器自己死掉后，如果在下一次 5s 轮询之前来一次 start，`doStart()` 会
+  照常 spawn 并写 pid 文件，却不清 `adoptedPid`/`adoptedWatch`；随后那次轮询认定收养的 pid 已死，
+  于是删掉**新**子进程刚写的 pid 文件、抹掉 `startedAt`、报一条并不存在的 `adopted bridge ... exited
+  unexpectedly`，并在滑动崩溃窗口里多记一次假退出。现在 `doStart()` 在写新 pid 文件之前统一清掉收养
+  状态；`scripts/check-supervisor.mjs` 的 case J 复现这条时间线（先收养、原地杀掉、立刻 start），
+  断言新进程拥有 pid 文件、`startedAt` 是新值、`adopted === false`、日志无幻影退出、`restarts === 0`，
+  再等满一个轮询周期复核一次。用未修复的版本跑过 case J：正是「pid 文件存活」与「无幻影退出」两条
+  FAIL，断言确实拦得住回归。
+- **M3 恒真断言**：`check-http.mjs` 里「大小写混合的主机名不被当敌意」原本断言 `typeof ok === 'boolean'`，
+  而 `request()` 每条路径都返回布尔 `ok`，所以主机名真被拒掉也照样通过。现在断言 `ok === true`，
+  并补 `::`/`0.0.0.0`/`[::]` 三个通配拼写的拨号断言。`[::1]` 只断言 `baseUrl()` 的拼写：测试用的
+  recorder 只监听 IPv4，拨 `[::1]` 物理上到不了。
+- **L1 Windows 停桥**：`killTree()` 原来先发一次不带 `/F` 的 `taskkill /pid X /T` 再等
+  `KILL_GRACE_MS`。对 console 子进程这条命令根本不生效（`can only be terminated forcefully`），
+  白等满 3 秒。现在 Windows 直接 `/T /F` 一次到位；进程被系统收回时 socket 也随之释放，正是 9092
+  与音箱 WebSocket 需要的效果。
+- **L2 陈旧退出写状态**：`proc.on('exit')` 原来先写 `exitCode`/`exitSignal` 再判断 `child !== proc`，
+  与紧邻注释矛盾。现在只在「这一代仍然是当前子进程」时才写。
+
+记录在案、这一批不修的（多为上游既有行为或已文档化的取舍）：
+
+- L3 `lib/process.js` 等待 `spawn` 事件的 Promise 没有超时；按 libuv 语义「要么 spawn 要么 error」，
+  构造不出卡住的路径，加超时属于防御性冗余。
+- L4 播放闸门：设备报 idle 时 `_until = now`，而重新放行要求 `now - _until >= RELEASE_TAIL_SECONDS`，
+  于是每条非阻塞 `/api/play/text` 之后下一条要多等约 0.5 秒；桥接器自己的测试用 `tail_seconds=0.0`，
+  CI 看不见这个延迟。
+- L5/L6 播报锁 `_playback_lock()` 覆盖「播报 + 等闸」且等闸上限取请求方可放松的 `timeout`；设备若
+  永不报 playing/idle，后续 `text` 会堵在锁上（名额满后 503）。另外登记 hold 时若设备正在放别的
+  声音，新 hold 会被预标「已开始」，`set_device_playing(True)` 更会一次性标记所有在飞 hold，可能
+  提前开闸。这两条属于桥接器的播报串行化设计，改动会牵动设备时序，需要实机复现再动。
+- L7 `wakeupTimeout` 收紧成整数后，配置里已有的小数会在加载时被 `sanitizeConfig` 静默修回默认值
+  （只写一行 warn），文档只写了 ops 路径的 400。
+- L8 `/api/play/url` 与 `/api/play/file` 既不占名额也不上锁：`serialized: true` 只对 `text` 成立。
+  插件不调用这两条（`lib/` 里没有对应调用点），所以对本插件只是潜在风险。
+- 观察项：`SPOKEN_LOG_CAP_BYTES` 与 `SPOKEN_LOG_MAX_BYTES` 两处手抄同一常量；`lib/config.js` 的
+  `resolveLoadConfig` 已无调用点；`currentToken()` 会在只读路径上写凭据，使「无令牌 503」在真实接线
+  里几乎不可达（离线用例靠注入 stub 覆盖）；`/bridge/start|stop|restart` 无鉴权是 §12.27 已写明的
+  信任边界；`lib/render-config.js` 的 `sleepSync` 用 `Atomics.wait` 阻塞事件循环（至多 40 乘 5 毫秒）；
+  `bridge/tests/conftest.py` 的 `collect_ignore` 排除 `test_tts*.py`。
+
 
 
 

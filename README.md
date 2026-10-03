@@ -166,6 +166,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
 | `sessionKey` | 文本 | `agent:main:open-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>` |
 | `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
+| `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`；关（默认）只有音箱发起的会话能调（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34） |
 | `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
 | `fallbackText` | 文本 | `连不上电脑，请稍后再试` | 桥接器活着但插件连不上时念 |
 

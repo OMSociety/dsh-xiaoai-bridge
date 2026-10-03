@@ -190,7 +190,7 @@ if (captured !== null) {
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
             '对话保持时长（秒）', '连续对话', '语音合成方式', '朗读音色', 'MiMo 服务地址', 'MiMo 凭据名', 'MiMo 模型', 'MiMo 音色', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
-            '自动念出回复', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
+            '自动念出回复', '任何会话都能让小爱说话', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
             '回复器失败提示语', '审批等待提示语', '人格设定', '说话风格', '行动准则', '输出限制', '语音消息附加提示',
           ];
           for (const label of configFields) {
@@ -234,7 +234,9 @@ if (captured !== null) {
             check(typeof field.resetLabel === 'string', `value field ${field.id} has no resetLabel`);
             check(typeof field.overriddenLabel === 'string', `value field ${field.id} has no overriddenLabel`);
           }
-          check(seen.switches.length === 6, `expected 6 Switch controls, got ${seen.switches.length}`);
+          // One switch per `kind: "boolean"` field (enabled, continuousConversation,
+          // autoSpeak, speakFromAnySession, autoStart, silentStart, apiServerEnabled).
+          check(seen.switches.length === 7, `expected 7 Switch controls, got ${seen.switches.length}`);
           for (const control of seen.switches) {
             check(typeof control.checked === 'boolean', 'a Switch has no checked value');
             check(typeof control.onChange === 'function', 'a Switch has no onChange');
