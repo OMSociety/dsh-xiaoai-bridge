@@ -19,6 +19,9 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 const { createSessionBridge, SOURCE_KIND } = await import(new URL('../lib/session.js', import.meta.url).href);
+const { createExposure, SCOPE_UNAVAILABLE_CODE, SCOPE_FAILED_CODE } = await import(
+  new URL('../lib/exposure.js', import.meta.url).href
+);
 
 const warnings = [];
 const logger = {
@@ -37,7 +40,10 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
   let live = null;
   let resumeCalls = 0;
 
-  const agent = { session: { id: null }, followup: (message) => { inbox.push(message); } };
+  // A real Agent carries its own `ctx`; the bridge hands that context to the
+  // scope hook so an agent that is already running still gets its registration.
+  const agentCtx = { on: () => () => {} };
+  const agent = { session: { id: null }, ctx: agentCtx, followup: (message) => { inbox.push(message); } };
   const agents = {
     // The host's registry.get(id) returns the Agent, not the create handle.
     get: (id) => (live && live.agent.session.id === id ? live.agent : null),
@@ -73,7 +79,7 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
     on: () => () => {},
   };
   return {
-    ctx, created, inbox, renames, agentCtxHandlers, attached,
+    ctx, created, inbox, renames, agentCtx, agentCtxHandlers, attached,
     get live() { return live; },
     get resumeCalls() { return resumeCalls; },
   };
@@ -317,6 +323,187 @@ check('a registry that throws does not break the settings page', () => {
   assert.deepEqual(bridge.workspaceGroups(), []);
 });
 
+// --- case 9: the speaker agent's own scope carries the registration ---------
+// A voice conversation and a desktop chat share one tool registry, so the tool
+// belongs in the speaker agent's layer, which the bridge reaches through the
+// agent setup hook. Both the create path and the reused-agent path must announce
+// that context.
+console.log('case 9: agent scope hook');
+const h9 = harness();
+const scoped9 = [];
+const bridge9 = createSessionBridge({
+  ctx: h9.ctx,
+  getConfig: () => ({}),
+  dataDir,
+  logger,
+  onAgentScope: (agentCtx, agent) => { scoped9.push({ agentCtx, agent }); },
+});
+await bridge9.deliver({ host: '192.168.1.196', text: '你好' });
+check('a freshly created agent is announced to the scope hook', () => {
+  assert.equal(scoped9.length, 1);
+  assert.equal(scoped9[0].agentCtx, h9.agentCtx);
+});
+const setup9 = [];
+const joinCtx = { on: (event, handler) => { setup9.push([event, handler]); return () => {}; } };
+h9.created[0].setup(joinCtx);
+check('setup hands the agent context to the scope hook', () => {
+  assert.equal(scoped9.length, 2);
+  assert.equal(scoped9[1].agentCtx, joinCtx);
+});
+check('adding the scope hook keeps the model listener', () => {
+  assert.ok(
+    setup9.some(([event]) => event === 'system-prompt/assemble'),
+    setup9.map(([event]) => event).join(' | '),
+  );
+});
+await bridge9.deliver({ host: '192.168.1.196', text: '再来一句' });
+check('a reused live agent is announced again', () => {
+  assert.equal(h9.created.length, 1);
+  assert.equal(scoped9.length, 3, `scope hook ran ${scoped9.length} times`);
+  assert.equal(scoped9[2].agentCtx, h9.agentCtx);
+});
+
+// The scope hook must not depend on the model-selection seam: a host that
+// offers no default model is exactly where a dropped registration would hide.
+console.log('case 9b: no default model, scope hook still installed');
+const h9b = harness({ withDefaultModel: false });
+const scoped9b = [];
+const bridge9b = createSessionBridge({
+  ctx: h9b.ctx,
+  getConfig: () => ({}),
+  dataDir,
+  logger,
+  onAgentScope: (agentCtx) => { scoped9b.push(agentCtx); },
+});
+await bridge9b.deliver({ host: '192.168.1.197', text: '你好' });
+check('the setup hook survives the missing model selection', () => {
+  assert.equal(typeof h9b.created[0].setup, 'function');
+  assert.equal('agentOptions' in h9b.created[0], false);
+  const probe = { on: () => () => {} };
+  h9b.created[0].setup(probe);
+  assert.ok(scoped9b.includes(probe), 'the scope hook was not called');
+});
+
+// --- case 10: the exposure manager itself -----------------------------------
+// The host decides which layer a registration lands in from the *calling*
+// context, so this is unit-tested with a plugin context and an agent context
+// that both record what they are asked to register.
+console.log('case 10: exposure manager');
+function exposureHarness({ speakFromAnySession = false, seam = true, failRegister = false } = {}) {
+  const globals = [];
+  const env = { scoped: [], notes: [], warnings: [] };
+  let config = { speakFromAnySession };
+  const sink = (target) => ({
+    register: (definition) => {
+      if (failRegister) throw new Error('registry refused');
+      const entry = { name: definition.name };
+      target.push(entry);
+      return () => {
+        const at = target.indexOf(entry);
+        if (at >= 0) target.splice(at, 1);
+      };
+    },
+  });
+  const exposure = createExposure({
+    ctx: { tools: sink(globals), skills: sink(globals) },
+    getConfig: () => config,
+    logger: { info: () => {}, warn: (line) => { env.warnings.push(String(line)); } },
+    diagnostics: { note: (entry) => { env.notes.push(entry); } },
+    tool: () => ({ name: 'xiaoai_speak' }),
+    skill: () => ({ name: 'xiaoai-speak' }),
+  });
+  env.exposure = exposure;
+  env.globals = globals;
+  env.agentCtx = seam ? { tools: sink(env.scoped), skills: sink(env.scoped) } : { on: () => () => {} };
+  env.otherCtx = seam ? { tools: sink(env.scoped), skills: sink(env.scoped) } : { on: () => () => {} };
+  env.setConfig = (next) => { config = next; };
+  env.codes = () => env.notes.map((entry) => entry.code);
+  env.names = () => env.scoped.map((row) => row.name).sort();
+  return env;
+}
+
+const e1 = exposureHarness();
+e1.exposure.attach(e1.agentCtx);
+check('a scoped host registers both entries in the agent layer', () => {
+  assert.deepEqual(e1.names(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.deepEqual(e1.globals, []);
+  assert.equal(e1.exposure.state().mode, 'scoped');
+  assert.equal(e1.exposure.state().scoped, 1);
+  assert.equal(e1.exposure.state().scopeSeam, true);
+});
+e1.exposure.attach(e1.agentCtx);
+check('the same agent context is never registered twice', () => {
+  assert.equal(e1.scoped.length, 2);
+  assert.equal(e1.exposure.state().scoped, 1);
+});
+e1.exposure.attach(e1.otherCtx);
+check('a second agent gets its own registration', () => {
+  assert.equal(e1.scoped.length, 4);
+  assert.equal(e1.exposure.state().scoped, 2);
+});
+
+const e2 = exposureHarness({ seam: false });
+e2.exposure.attach(e2.agentCtx);
+check('a host without the seam is reported instead of silently going global', () => {
+  assert.deepEqual(e2.globals, []);
+  assert.deepEqual(e2.scoped, []);
+  assert.equal(e2.exposure.state().mode, 'unavailable');
+  assert.equal(e2.exposure.state().scopeSeam, false);
+  assert.deepEqual(e2.codes(), [SCOPE_UNAVAILABLE_CODE]);
+  assert.ok(e2.warnings.some((line) => line.includes('cannot scope a registration')), e2.warnings.join(' | '));
+});
+e2.exposure.attach(e2.otherCtx);
+check('the missing-seam notice is reported once, not per session', () => {
+  assert.deepEqual(e2.codes(), [SCOPE_UNAVAILABLE_CODE]);
+});
+
+const e3 = exposureHarness({ speakFromAnySession: true });
+e3.exposure.attach(e3.agentCtx);
+e3.exposure.syncGlobal();
+check('the escape hatch registers both entries globally', () => {
+  assert.deepEqual(e3.globals.map((row) => row.name).sort(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.equal(e3.exposure.state().mode, 'global');
+});
+e3.setConfig({ speakFromAnySession: false });
+e3.exposure.syncGlobal();
+check('turning the hatch off drops the global entries only', () => {
+  assert.deepEqual(e3.globals, []);
+  assert.deepEqual(e3.names(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.equal(e3.exposure.state().mode, 'scoped');
+});
+e3.setConfig({ speakFromAnySession: true });
+e3.exposure.syncGlobal();
+check('the hatch reopens without tripping over a duplicate name', () => {
+  assert.equal(e3.globals.length, 2);
+});
+e3.exposure.dispose();
+check('dispose leaves the global layer', () => {
+  assert.deepEqual(e3.globals, []);
+});
+
+const e4 = exposureHarness({ speakFromAnySession: true, seam: false });
+e4.exposure.syncGlobal();
+e4.exposure.attach(e4.agentCtx);
+check('with the hatch open a missing seam is not reported', () => {
+  assert.equal(e4.globals.length, 2);
+  assert.deepEqual(e4.notes, []);
+  assert.deepEqual(e4.warnings, []);
+});
+
+const e5 = exposureHarness({ failRegister: true });
+e5.exposure.attach(e5.agentCtx);
+check('a refusing registry is reported and never thrown', () => {
+  assert.deepEqual(e5.scoped, []);
+  assert.deepEqual(e5.codes(), [SCOPE_FAILED_CODE]);
+});
+const e6 = exposureHarness();
+e6.setConfig({ speakFromAnySession: 'yes' });
+e6.exposure.syncGlobal();
+check('only an explicit true opens the escape hatch', () => {
+  assert.deepEqual(e6.globals, []);
+  assert.equal(e6.exposure.state().mode, 'scoped');
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();
@@ -324,6 +511,8 @@ await bridge4.dispose();
 await bridge5.dispose();
 await bridge6.dispose();
 await bridge7.dispose();
+await bridge9.dispose();
+await bridge9b.dispose();
 rmSync(dataDir, { recursive: true, force: true });
 rmSync(legacyDir, { recursive: true, force: true });
 rmSync(workspaceDir, { recursive: true, force: true });

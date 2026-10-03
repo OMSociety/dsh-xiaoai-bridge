@@ -664,6 +664,8 @@ core/models/keywords.txt  181 字节 → 93 字节
 
 `GET /plugin/xiaoai/health` 显示 `bridge.running = true / pid = 8668 / managed = true`，
 `GET /devices` 显示设备键 `192.168.1.191`（说明 §12.3 的坑二已修好）与会话 id。
+这段日志里的 `agent:main:open-xiaoai-bridge` 是**当时的默认值**：§12.35.5 把这支 fork 的默认改成了
+`agent:main:dsh-xiaoai-bridge`，历史摘录保持原样不改。
 解开会话落盘（`session.v4.jsonl.zstd`，4 个 zstd frame 串接；Node 的
 `zstdDecompressSync` 只解第一个 frame，需要 `_oxb-wheels/zstd-jsonl.mjs` 手工逐 frame 解）
 后看到事件序列：
@@ -2120,8 +2122,9 @@ node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `pro
   工具）与 `guard(guard)`（按调用拒绝，且谁也不能把别人拒掉的调用强行放行）—— 但它们是**插件代码 API**，
   不是配置项；`agentPresets` 是「插件组合清单」（`PresetDefinition.plugins`），也不是工具白名单。
 
-所以插件自己必须决定：**默认只在音箱发起的会话里允许**，再用一个显式开关放开。工具仍然全局注册
-（`lib/index.js:462`）：可见性交给门禁判断，比按作用域注册更可解释，也不依赖未文档化的作用域语义。
+所以插件自己必须决定：**默认只在音箱发起的会话里允许**，再用一个显式开关放开。这一轮工具仍然全局注册
+（`lib/index.js:462`），可见性交给门禁判断，也不依赖当时还没取证的宿主作用域语义；**下一轮改成按作用域
+注册，见 §12.35**，门禁保留下来当第二道闸（开关中途关掉、子代理等边界仍靠它 fail-closed）。
 
 #### 12.34.2 实现
 
@@ -2213,6 +2216,78 @@ node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `pro
   里几乎不可达（离线用例靠注入 stub 覆盖）；`/bridge/start|stop|restart` 无鉴权是 §12.27 已写明的
   信任边界；`lib/render-config.js` 的 `sleepSync` 用 `Atomics.wait` 阻塞事件循环（至多 40 乘 5 毫秒）；
   `bridge/tests/conftest.py` 的 `collect_ignore` 排除 `test_tts*.py`。
+
+### 12.35 工具只出现在音箱那个会话里：按作用域注册
+
+#### 12.35.1 门禁管「能不能调」，不管「看不看得见」
+
+门禁（§12.34）只拦调用，工具仍然写在每个会话的工具表里：普通对话的模型看得见 `xiaoai_speak`，
+看得见就可能顺手调一次，被拒之后它才知道不行。用户要的是「**别提供给它**」，那就得让这个条目根本不
+进那些会话的注册表。
+
+`agentPresets` 不是工具白名单（§12.34.1 已经确认过：它只有 `plugins` 清单），所以「把小爱模式做成一种
+预设」解决不了可见性；能做的是**按作用域注册**。
+
+#### 12.35.2 宿主的分层注册语义（读自 Inspect，不是猜的）
+
+- `tools` 服务自述：「Scoped registrations shadow globals; one visibility resolver feeds presentation,
+  lookup, and dispatch.」`register()` 的说明是「Register globally **or in the calling agent scope**」——
+  落哪一层由**调用方上下文**决定：从 agent 自己的 ctx 调就进那个 agent 的层，从插件 ctx 调就进全局层；
+  同一层里重名会失败。
+- `skills` 服务是同一个形状：「A registration files into the layer of its calling context's scope
+  (`scopeOf`)… A read merges the global layer with the viewing scope's chain — the nearest layer's entry
+  wins a duplicate name outright.」
+- 生命周期：`agent/disposed` 的说明写明它在「driver quiescence and **scoped-registration unwind**」之后
+  发出 —— 作用域里的注册由宿主随后收掉，插件不需要记 handle。
+- agent 自己的 ctx 从哪来：`agents.create`/`agents.resume` 的 `setup(agentCtx, agent)` 钩子（`resume` 也吃
+  `setup`）；已经在跑的 agent 可以从 `agents.get(id)` 拿到，`Agent` 带自己的 `.ctx`。
+
+#### 12.35.3 实现
+
+新增 `lib/exposure.js`（`createExposure`），把「谁注册、注册到哪一层」收在一处：
+
+- `attach(agentCtx)`：从 agent ctx 取 `tools`/`skills`（先看属性，再看 `get()`），两个都在就把工具与技能
+  注册进**这一层**；同一个 ctx 只注册一次（`WeakSet`，因为同层重名会失败）。缺其中任何一个就**什么都
+  不注册**，记一条 `scope-registration-unavailable` 诊断加一行 warn（文案写明它不会偷偷退回全局层）。
+- `syncGlobal()`：只有 `speakFromAnySession === true` 时把两个条目注册进**全局**层（也就是改动前的
+  `ctx.tools.register` 行为），关掉时把两个 disposer 都跑掉。作用域注册与这个开关无关，所以用户中途关掉
+  开关，正在跑的音箱会话不会失能。
+- `state()` → `{ mode, scoped, scopeSeam }`，接在 `/health` 的 `exposure` 字段上（界面没有单独一行展示它，
+  缺 seam 时用户看到的是诊断列表里那条中文说明）。
+
+`lib/session.js` 新增 `onAgentScope` 选项：`factoryOptions()` 把作用域钩子与既有的 model-selection
+`setup` 组合到一个函数里（**没有**默认模型选择的宿主也要留下钩子，否则最容易漏注册的那台宿主反而会丢掉
+注册），`ensureAgent()` 在 create、resume 之后以及复用已在跑的 agent 时各通知一次。
+`lib/index.js` 删掉两处全局 `ctx.tools.register` / `ctx.skills.register`，改成建一个 exposure、在
+`settings/document-updated` 上 `syncGlobal()`、并在插件卸载时 `dispose()`。
+
+#### 12.35.4 降级行为（有意的）
+
+宿主没给作用域 seam（或只给了一半）时，插件**不注册**并报一条诊断：宁可语音会话里少一个工具，也不能
+因为「反正要能用」把工具塞回全局层 —— 那正是这一轮要修的问题本身。开着逃生门时全局层已经有两个条目，
+这种宿主不再报诊断（没有缺失可言）。
+
+#### 12.35.5 顺带改名：`sessionKey` 的 fork 默认值
+
+`sessionKey` 默认值从 `agent:main:open-xiaoai-bridge` 改成 `agent:main:dsh-xiaoai-bridge`（`lib/config.js`
+的默认值与 schema，以及桥接侧的 `bridge/config.py`（`dsh`/`openai` 两个默认 + 两处示例注释）、
+`bridge/core/dsh.py`、`bridge/core/wakeup_session.py`、`bridge/core/openai.py`）。这个字段只喂桥接器
+（日志前缀、按会话覆盖音色、`/asr` 载荷回显），DSH 侧没有读取者，会话路由按音箱设备（`devices.json`），
+所以改默认值**不会丢音箱会话**。上游两份禁改文档（`bridge/AGENTS.md`、`bridge/README.md`）与 §12.6 的历史
+日志摘录里仍是旧值，CHANGELOG 里注明了「fork 默认值与上游文档不同」。
+
+#### 12.35.6 这一轮的离线检查
+
+- `scripts/check-session.mjs`：case 9/9b（钩子确实拿到 agent ctx、与模型钩子组合后
+  `system-prompt/assemble` 监听仍在、复用已在跑的 agent 会再通知一次、没有默认模型的宿主也留着 setup
+  钩子）与 case 10（exposure 管理器：作用域里两条、同一个 ctx 不重复、第二个 agent 另有注册、缺 seam 时
+  只报一次且不进全局层、逃生门开/关/重开、`dispose` 撤掉全局层、registry 抛错只报不抛、只有严格 `true`
+  才开门）。
+- `scripts/check-diagnostics.mjs`：两个新诊断码进 `used` 表。
+- `scripts/check-config.mjs`：fixture 里的旧 sessionKey 一并改名（那几处是任意 `agentId` 的样例，不是默认值
+  断言）。
+
+这批改动同样要**重启 DSH** 才载入（新模块 + 设置页 bundle 都在启动时读取）。
 
 
 

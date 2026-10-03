@@ -20,12 +20,12 @@ class OpenAIHeadersTest(unittest.TestCase):
         sys.modules.pop("core.openai", None)
         self.manager = importlib.import_module("core.openai").OpenAIManager
         self.manager._api_key = ""
-        self.manager._session_key = "agent:default:open-xiaoai-bridge"
+        self.manager._session_key = "agent:default:dsh-xiaoai-bridge"
 
     def test_default_sends_hermes_session_header(self):
         """Default config targets Hermes: session_key goes out as the header."""
         self.assertEqual(
-            "agent:default:open-xiaoai-bridge",
+            "agent:default:dsh-xiaoai-bridge",
             self.manager._headers()["X-Hermes-Session-Key"],
         )
 
@@ -38,7 +38,7 @@ class OpenAIHeadersTest(unittest.TestCase):
         self.manager._session_header = "X-Hermes-Session-Key"
         headers = self.manager._headers()
         self.assertEqual(
-            "agent:default:open-xiaoai-bridge",
+            "agent:default:dsh-xiaoai-bridge",
             headers["X-Hermes-Session-Key"],
         )
 
@@ -53,7 +53,7 @@ class OpenAIHeadersTest(unittest.TestCase):
         headers = self.manager._headers()
         self.assertEqual("Bearer secret", headers["Authorization"])
         self.assertEqual(
-            "agent:default:open-xiaoai-bridge",
+            "agent:default:dsh-xiaoai-bridge",
             headers["X-Hermes-Session-Key"],
         )
 

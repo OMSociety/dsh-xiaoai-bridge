@@ -87,7 +87,7 @@ const full = buildOverrides({
   wakeKeywords: '你好小智\n小爱小爱',
   exitKeywords: '退出,再见',
   wakeupTimeout: 33,
-  sessionKey: 'agent:butler:open-xiaoai-bridge',
+  sessionKey: 'agent:butler:dsh-xiaoai-bridge',
   deviceName: '客厅音箱',
   ttsSpeaker: 'zh_female_1',
   wakeupReplyText: '在呢',
@@ -99,7 +99,7 @@ eq(full.wakeup.keywords, ['你好小智', '小爱小爱'], 'wakeup.keywords');
 eq(full.wakeup.timeout, 33, 'wakeup.timeout');
 eq(full.dsh.wakeup_keywords, ['你好小智', '小爱小爱'], 'dsh.wakeup_keywords');
 eq(full.dsh.exit_keywords, ['退出', '再见'], 'dsh.exit_keywords');
-eq(full.dsh.session_key, 'agent:butler:open-xiaoai-bridge', 'dsh.session_key');
+eq(full.dsh.session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
 eq(full.dsh.tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
 eq(full.dsh.wakeup_reply, '在呢', 'dsh.wakeup_reply');
 eq(full.dsh.exit_reply, '拜拜', 'dsh.exit_reply');
@@ -167,7 +167,7 @@ try {
       wakeKeywords: '你好小智\n小爱小爱',
       exitKeywords: '退出,再见',
       wakeupTimeout: 33,
-      sessionKey: 'agent:butler:open-xiaoai-bridge',
+      sessionKey: 'agent:butler:dsh-xiaoai-bridge',
       deviceName: '客厅音箱',
       ttsSpeaker: 'zh_female_1',
       wakeupReplyText: '在呢',
@@ -248,7 +248,7 @@ print(json.dumps({
   eq(loaded.dsh_wakeup_keywords, ['你好小智', '小爱小爱'], 'dsh.wakeup_keywords');
   eq(loaded.dsh_exit_keywords, ['退出', '再见'], 'dsh.exit_keywords');
   eq(loaded.wakeup_timeout, 33, 'wakeup.timeout');
-  eq(loaded.dsh_session_key, 'agent:butler:open-xiaoai-bridge', 'dsh.session_key');
+  eq(loaded.dsh_session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
   eq(loaded.dsh_device_name, '客厅音箱', 'dsh.device_name');
   eq(loaded.dsh_tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
   eq(loaded.dsh_wakeup_reply, '在呢', 'dsh.wakeup_reply');

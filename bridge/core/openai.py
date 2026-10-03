@@ -27,7 +27,7 @@ class OpenAIManager:
     _base_url = "http://127.0.0.1:8000/v1"
     _api_key = ""
     _model = "gpt-4o-mini"
-    _session_key = "agent:default:open-xiaoai-bridge"
+    _session_key = "agent:default:dsh-xiaoai-bridge"
     # Optional header used to send session_key to the server (e.g. Hermes'
     # "X-Hermes-Session-Key" for long-term memory scoping). Standard OpenAI /
     # Ollama / LM Studio ignore the unknown header; set empty to disable.
@@ -81,7 +81,7 @@ class OpenAIManager:
         cls._base_url = str(config.get("base_url", "http://127.0.0.1:8000/v1")).rstrip("/")
         cls._api_key = str(config.get("api_key", "") or "")
         cls._model = str(config.get("model", "gpt-4o-mini"))
-        cls._session_key = str(config.get("session_key", "agent:default:open-xiaoai-bridge"))
+        cls._session_key = str(config.get("session_key", "agent:default:dsh-xiaoai-bridge"))
         cls._session_header = str(config.get("session_header", "X-Hermes-Session-Key") or "").strip()
         cls._system_prompt = str(config.get("system_prompt", "") or "")
         cls._timeout = int(config.get("response_timeout", 120))

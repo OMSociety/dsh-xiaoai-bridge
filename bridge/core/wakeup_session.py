@@ -112,11 +112,11 @@ class WakeupSessionManager:
         from core.openai import OpenAIManager
         default_openai_session_key = self.config.get_app_config(
             "openai", {}
-        ).get("session_key", "agent:default:open-xiaoai-bridge")
+        ).get("session_key", "agent:default:dsh-xiaoai-bridge")
         OpenAIManager._session_key = default_openai_session_key
         from core.dsh import DshManager
         default_dsh_session_key = self.config.get_app_config("dsh", {}).get(
-            "session_key", "agent:main:open-xiaoai-bridge"
+            "session_key", "agent:main:dsh-xiaoai-bridge"
         )
         DshManager._session_key = default_dsh_session_key
 

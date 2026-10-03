@@ -43,8 +43,8 @@ async def before_wakeup(speaker, text, source, app):
     if source == "kws":
         # --- 示例一：按唤醒词路由到不同 Agent ---
         # AGENT_SESSIONS = {
-        #     "小美": "agent:xiaomei:open-xiaoai-bridge",    # 说"你好小美" → 路由到 xiaomei Agent
-        #     "管家": "agent:butler:open-xiaoai-bridge",     # 说"你好管家" → 路由到 butler Agent
+        #     "小美": "agent:xiaomei:dsh-xiaoai-bridge",    # 说"你好小美" → 路由到 xiaomei Agent
+        #     "管家": "agent:butler:dsh-xiaoai-bridge",     # 说"你好管家" → 路由到 butler Agent
         # }
         # for keyword, session_key in AGENT_SESSIONS.items():
         #     if keyword in text:
@@ -79,7 +79,7 @@ async def before_wakeup(speaker, text, source, app):
     if source == "xiaoai":
         # --- 示例四：小爱指令按用户名路由到不同 Session ---
         # if text == "召唤小美":
-        #     app.set_dsh_session_key("agent:xiaomei:open-xiaoai-bridge")
+        #     app.set_dsh_session_key("agent:xiaomei:dsh-xiaoai-bridge")
         #     await speaker.abort_xiaoai()
         #     return "dsh"
 
@@ -217,7 +217,7 @@ APP_CONFIG = {
         "base_url": "http://127.0.0.1:19387/plugin/xiaoai",  # DSH 插件 HTTP 端点
         "token": "",  # API Token；运行时优先使用环境变量 XIAOAI_API_TOKEN
         # session_key 格式：agent:<agentId>:<rest>
-        "session_key": "agent:main:open-xiaoai-bridge",
+        "session_key": "agent:main:dsh-xiaoai-bridge",
         "device_name": "",  # 可选：上报给 DSH 的设备名
         "response_timeout": 120,
         "tts_provider": None,  # None = 交给 tts.router 选择默认 provider
@@ -251,7 +251,7 @@ APP_CONFIG = {
         #   - "xiaoai_asr": 接管小爱原生 ASR 结果
         "input_mode": "local_asr",
         # session_key 统一采用 agent:<agentId>:<rest> 格式，便于 after_wakeup 解析
-        "session_key": "agent:default:open-xiaoai-bridge",
+        "session_key": "agent:default:dsh-xiaoai-bridge",
         # 可选：把 session_key 作为请求头发给服务端，用于服务端长期记忆作用域。
         # 默认设为 Hermes 的 "X-Hermes-Session-Key"；它只用于长期记忆作用域，
         # chat/completions 仍是无状态（历史仍由 messages 携带），不会重复。

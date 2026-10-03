@@ -29,7 +29,7 @@ Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderz
 | 特性 | 说明 |
 | --- | --- |
 | **唤醒即对话** | 说出唤醒词即可说话，桥接器识别后提交给一个真正的 DSH 会话，答案再从音箱念出来 |
-| **主动说话** | 任何会话（含桌面会话）都能调用 `xiaoai_speak`；桥接器没在跑就顺手拉起来（`autoStart` 关掉时不会：`ensureStarted()` 直接拒绝，返回 `bridge is not running (autostart is off)`） |
+| **主动说话** | 桥接器没在跑就顺手拉起来（`autoStart` 关掉时不会：`ensureStarted()` 直接拒绝，返回 `bridge is not running (autostart is off)`）；`xiaoai_speak` 只注册在音箱发起的会话里，想让普通对话也能调，打开 `speakFromAnySession` |
 | **半双工防自问自答** | 播放期间闸门关闭麦克风，插件不会听到自己刚念出去的话 |
 | **播报留痕** | 每一句念出来的话都带来源写进 `spoken.jsonl`，跨重启保留 |
 | **进程托管与看门狗** | 插件渲染 `config.py`、拉起解释器，按 2 / 5 / 15 / 30 秒递增退避重启，预算用尽后放弃并说明原因 |
@@ -109,7 +109,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 2. 打开设置页确认四项：**启用**、**音箱名称**、**音箱地址**（刷机后音箱的局域网地址）、**会话工作区**。
 3. 说唤醒词（默认 `小爱小爱`）：音箱答一句 `小爱来了`，接下来的话被识别并提交给你选的会话。
-4. 会话在**播报留痕**里留下每一句；想让它主动开口，在任何会话里让它调 `xiaoai_speak`。
+4. 会话在**播报留痕**里留下每一句；想让它主动开口，在音箱那个会话里让它调 `xiaoai_speak`（工具默认只注册在那里；想让电脑或网页的普通对话也能调，打开设置里的 `speakFromAnySession`）。
 5. 出问题时先看设置页的**运行状态**卡，再看本文的 [排错](#排错)。
 
 > **提示：**音箱刷机与客户端补丁属于上游项目，见 [Open-XiaoAI 刷机教程](https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md) 与 [Client 端补丁](https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md)。
@@ -120,7 +120,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 | 工具 | 作用 | 关键参数 |
 | --- | --- | --- |
-| `xiaoai_speak` | 让小爱音箱念出指定文本；不必先有唤醒，桥接器没在跑时会按需拉起 | `text`（必填，要念的话；写成适合听的短句，别带 Markdown、代码块或 URL） |
+| `xiaoai_speak` | 让小爱音箱念出指定文本；不必先有唤醒，桥接器没在跑时会按需拉起。只出现在**音箱发起的会话**的工具表里（打开 `speakFromAnySession` 则每个会话都看得见） | `text`（必填，要念的话；写成适合听的短句，别带 Markdown、代码块或 URL） |
 
 模型的标准用法：**要念的话直接写进 `text`**。设置了「自动播报回复」时，模型这一轮没调工具就把回复正文念出来；调了工具就只念工具里那段——所以同一句话不会被念两遍。
 
@@ -164,9 +164,9 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
-| `sessionKey` | 文本 | `agent:main:open-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>` |
+| `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；fork 默认值与上游文档不同（见 CHANGELOG） |
 | `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
-| `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`；关（默认）只有音箱发起的会话能调（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34） |
+| `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`（工具注册回全局层）；关（默认）只有音箱发起的会话能调，工具也只出现在那个会话里（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34 与 §12.35） |
 | `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
 | `fallbackText` | 文本 | `连不上电脑，请稍后再试` | 桥接器活着但插件连不上时念 |
 
@@ -240,6 +240,8 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `watchdog-gave-up` | 桥接器反复退出，看门狗不再重试；原因就是最近错误 |
 | `port-held` | 桥接器停止后端口仍在应答 |
 | `token-not-applied` | 桥接器先于 API 令牌启动，只在 loopback 上应答；重启桥接器即可套用令牌（`warn`，不是错误） |
+| `scope-registration-unavailable` | 这台 DSH 不支持按会话注册工具，`xiaoai_speak` 没有注册（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.35；`warn`） |
+| `scope-registration-failed` | 往音箱会话的作用域里注册 `xiaoai_speak` 时出错，detail 是宿主给的原文（`warn`） |
 
 日志与状态分四处，别混着看：数据目录里的 `bridge.log`（真正的日志）、插件自己的 `GET /plugin/xiaoai/bridge/logs`（读同一份日志，可带 `limit`）、桥接器 API `http://127.0.0.1:9092/api/health`（状态端点，回 `{status, speaker_ready, auth}`）、插件自己的 `GET /plugin/xiaoai/health`（状态端点，回 facts）。播报留痕 `spoken.jsonl` 不是日志而是历史：它有 5 MiB 上限，超了就整体轮转到单槽 `spoken.jsonl.1`，**旧的一代会被下一次轮转覆盖**，所以长期留痕只能靠自己另存。更细的内容——pnpm 供应链坑、模型目录、鉴权中间件、每一期的决策——都在 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)（这份文件不随包发布，所以用绝对地址）。
 
@@ -280,6 +282,7 @@ Set-Location bridge
 lib/index.js        插件入口：设置卡片、生命周期、session/event 转发
 lib/process.js      桥接器子进程：启动、停止、日志、看门狗、渲染配置
 lib/tools.js        xiaoai_speak 工具（含「没到桥接器就按需拉起」）
+lib/exposure.js     工具与技能注册到哪一层：音箱会话的作用域，或（开逃生门时）全局
 lib/auto-speak.js   播报纪律：什么时候出声、谁来措辞、念过什么
 lib/bridge.js       桥接器 HTTP 客户端与失败分类
 lib/diagnostics.js  错误库（稳定 code + 原始 detail）

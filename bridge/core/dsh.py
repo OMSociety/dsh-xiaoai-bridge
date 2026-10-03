@@ -48,7 +48,7 @@ class DshManager:
     _enabled = False
     _base_url = DEFAULT_BASE_URL
     _api_key = ""
-    _session_key = "agent:main:open-xiaoai-bridge"
+    _session_key = "agent:main:dsh-xiaoai-bridge"
     _device_name = ""
     _device_host = ""
     _timeout = 120
@@ -103,7 +103,7 @@ class DshManager:
         env_token = get_env("XIAOAI_API_TOKEN")
         cls._api_key = str(env_token or config.get("token", "") or "")
         cls._session_key = str(
-            config.get("session_key", "agent:main:open-xiaoai-bridge")
+            config.get("session_key", "agent:main:dsh-xiaoai-bridge")
         )
         cls._device_name = str(
             get_env("XIAOAI_DEVICE_NAME") or config.get("device_name", "") or ""
