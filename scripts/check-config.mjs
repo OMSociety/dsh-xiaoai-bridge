@@ -212,7 +212,7 @@ try {
   // The Windows read window the retry exists for cannot be staged in-process
   // (it needs a foreign handle opened without FILE_SHARE_DELETE), so the
   // negative path is what this checker can hold down; the positive one — a real
-  // lock released mid-retry — is recorded in docs/deploy.md §12.31.3.
+  // lock released mid-retry — cannot be staged in-process.
   const blockedDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-blocked-'));
   try {
     const blockedTarget = renderConfigPath(blockedDir);

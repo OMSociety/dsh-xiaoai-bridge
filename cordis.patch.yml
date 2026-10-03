@@ -17,7 +17,7 @@
 # the tools that wait for someone to click a card. A speaker session is spoken,
 # so a card would park the turn where nobody is looking.
 #
-# Terminal, jobs and to-do are in the list (see docs/deploy.md §12.36.8): the
+# Terminal, jobs and to-do are in the list: the
 # speaker session has to be able to look at this machine and run commands. Only
 # the tool rows are declared here -- the sandbox seam, the sandbox policy, the
 # approval service and the shell environment live on the host side (same as

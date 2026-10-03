@@ -1,6 +1,6 @@
 # 参与开发
 
-这个仓库有两半：根目录的 **DSH 插件**（Node，`lib/`）与 `bridge/` 下的 **Python 桥接器**（源码源自 coderzc/open-xiaoai-bridge，本仓库自行演进）。改动前先读 [README.md](README.md) 与 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)——后者按「期」记录了每个决策、踩过的坑与取证方式（这份不随包发布，只在仓库里存在，所以这里用绝对地址）。给编码 agent 的硬规则（命令、模块边界、禁区、验收）见 [AGENTS.md](AGENTS.md)。
+这个仓库有两半：根目录的 **DSH 插件**（Node，`lib/`）与 `bridge/` 下的 **Python 桥接器**（源码源自 coderzc/open-xiaoai-bridge，本仓库自行演进）。改动前先读 [README.md](README.md)；过去的决策、踩过的坑与取证方式在 [CHANGELOG.md](CHANGELOG.md) 的版本条目里。给编码 agent 的硬规则（命令、模块边界、禁区、验收）见 [AGENTS.md](AGENTS.md)。
 
 ## 环境
 
@@ -49,7 +49,6 @@ lib/client.js       设置页与运行状态卡（客户端 bundle）
 skills/xiaoai-speak/  模型用的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            自检脚本（九个 check-*.mjs + 聚合入口 check-all.mjs）
-docs/deploy.md      实施与验证记录（不随包发布）
 TODO.md             发布前待办（不随包发布）
 ```
 

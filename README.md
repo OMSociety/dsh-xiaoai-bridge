@@ -284,10 +284,10 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | **自动念出回复** `autoSpeak` | 布尔 | 开 | 模型这一轮没调 `xiaoai_speak` 时，把回复正文交给回复器润色后念出来。关掉后只有模型主动调工具才出声，回复器那一组选项会收起来（值保留）。 |
-| **任何会话都能让小爱说话** `speakFromAnySession` | 布尔 | 关 | 关：`xiaoai_speak` 只在音箱发起的会话里可用，工具与技能也只注册在那一层。开：桌面与网页会话也能调它。作用域注册的取舍见 [docs/deploy.md 的 §12.34 与 §12.35](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)。 |
+| **任何会话都能让小爱说话** `speakFromAnySession` | 布尔 | 关 | 关：`xiaoai_speak` 只在音箱发起的会话里可用，工具与技能也只注册在那一层。开：桌面与网页会话也能调它。 |
 | **播报字数上限** `spokenMaxChars` | 整数 40-2000 | `300` | 一条播报最多多少字；超了先让回复器精简一次，仍然超就截断。 |
 | **审批等待提示语** `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具卡在宿主审批流上时念的固定一句。审批请求的正文永远不会被念出来。 |
-| **回复器提供商** `replyerProvider` | 文本 | 空 | 回复器用哪个 provider；留空跟随会话的默认路由。切换只对回复器即时生效——语音会话的 agent 路由在会话创建时就定了，要重启 DSH 才换（见 [docs/deploy.md 的 §12.31.7](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)）。 |
+| **回复器提供商** `replyerProvider` | 文本 | 空 | 回复器用哪个 provider；留空跟随会话的默认路由。切换只对回复器即时生效——语音会话的 agent 路由在会话创建时就定了，要重启 DSH 才换。 |
 | **回复器模型** `replyerModel` | 文本 | 空 | 回复器用哪个模型，与提供商一起生效。 |
 | **回复器参考轮数** `replyerHistoryTurns` | 整数 0-50 | `6` | 回复器能看到最近多少轮对话（只用于润色，不影响主会话的上下文）。 |
 | **回复器失败提示语** `replyerFailureText` | 文本 | `回复器调用失败` | 回复器连续失败时改念这一句，免得把没润色的原文念出去。 |
@@ -329,7 +329,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 能触达 `POST /plugin/xiaoai/asr` 的调用方，等于拿到了这个 agent 的输入通道：请求正文会被当成一句用户消息。这条路径上插件不做任何语义拦截，也没有给语音轮次单独收窄工具集——一句话得到的权限，等于它落进去的那个会话的权限。
 
-机械保障只有两条：`/asr` 的 bearer 门禁（fail closed：没配置令牌一律 503，bearer 对不上回 401，且不看来源地址），以及宿主既有的审批流（审批前音箱先念固定的一句提示，审批请求的正文永不念出，决定由宿主做）。其余插件路由（`/config`、`/bridge/*`、`/data/wipe`）按设计不做鉴权：它们和 DSH 在同一台机器、同一个信任边界里。要更强的约束只能靠会话与 agent 层（预设、审批策略、沙箱），展开见 [docs/deploy.md 的 §12.31.8](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)。
+机械保障只有两条：`/asr` 的 bearer 门禁（fail closed：没配置令牌一律 503，bearer 对不上回 401，且不看来源地址），以及宿主既有的审批流（审批前音箱先念固定的一句提示，审批请求的正文永不念出，决定由宿主做）。其余插件路由（`/config`、`/bridge/*`、`/data/wipe`）按设计不做鉴权：它们和 DSH 在同一台机器、同一个信任边界里。要更强的约束只能靠会话与 agent 层（预设、审批策略、沙箱）。
 
 ### 最小可用配置
 
@@ -472,7 +472,6 @@ skills/xiaoai-speak/ 模型用的技能
 cordis.patch.yml     bundle 声明（插件本体 + 「小爱模式」预设）
 bridge/              Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/             自检脚本（九个 check-*.mjs 与聚合入口）
-docs/deploy.md       实施与验证记录（不随包发布）
 ```
 
 动了插件行为就补对应的 checker，动了桥接器就补 `bridge/tests/`；`npm run check` 与 pytest 全绿是提交前的底线。环境、约定与与上游的关系见 [CONTRIBUTING.md](CONTRIBUTING.md)，给编码 agent 的硬规则见 [AGENTS.md](AGENTS.md)。
