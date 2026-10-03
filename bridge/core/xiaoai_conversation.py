@@ -8,7 +8,7 @@ class XiaoAIConversationController:
         self.continuous_conversation_mode = True
         self.max_listening_retries = 2
         self.exit_command_keywords = ["停止", "退下", "退出", "下去吧"]
-        self.exit_prompt = "再见，主人"
+        self.exit_prompt = "再见"
         self.continuous_conversation_keywords = ["开启连续对话"]
         self.conversing = False
         self.current_retries = 0
@@ -21,7 +21,7 @@ class XiaoAIConversationController:
         self.exit_command_keywords = config.get(
             "exit_command_keywords", ["停止", "退下", "退出", "下去吧"]
         )
-        self.exit_prompt = config.get("exit_prompt", "再见，主人")
+        self.exit_prompt = config.get("exit_prompt", "再见")
         self.continuous_conversation_keywords = config.get(
             "continuous_conversation_keywords", ["开启连续对话"]
         )

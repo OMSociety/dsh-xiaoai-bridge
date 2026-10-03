@@ -139,7 +139,7 @@ await check('the system prompt carries personality, style and output limits', ()
   assert.match(prompts.system, /不要 emoji/);
 });
 await check('the user prompt carries the transcript and the intent', () => {
-  assert.match(prompts.user, /主人：一个问题/);
+  assert.match(prompts.user, /用户：一个问题/);
   assert.match(prompts.user, /你：一个回答/);
   assert.match(prompts.user, /【要表达的意图】\n答案是 42/);
 });

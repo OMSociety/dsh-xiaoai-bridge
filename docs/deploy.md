@@ -309,6 +309,8 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       隐藏而不是卸载，草稿不丢；见 §12.39）
 - [x] 4.17 设置页按官方插件的写法重做视觉（改用宿主 `DisclosureRow` 的折叠行几何、
       注入式样式表 + `--dsw-*` 主题变量、控件几何对齐宿主字段；见 §12.40）
+- [x] 4.18 提示词口径统一（「主人」→「用户」、回复器人格示例改成「鲸鱼娘」，
+      含 `bridge/config.py` 模板里的默认值；见 §12.41）
 
 ## 9. 第 1 期实现决策
 
@@ -2616,6 +2618,48 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 `node scripts/check-client.mjs` 绿，且这一批**没有改检查的任何期望值**（视觉与 className 的重做不动渲染文本、也不动控件计数 —— 这正是 12.39.5 那两条断言的边界）；`npm run check` 九条绿；`doc-check.mjs` / `changelog-check.mjs` / `check_agents_md.py` 绿；`bridge` 侧未动（pytest 基线 115 passed, 19 subtests）。结构另用仓库外不入库的 `render-outline.mjs` 复核了一遍（7 个折叠 + 高级折叠 + 各字段归属）。
 
 **这一轮没有真机截图**：`127.0.0.1:19387` 的浏览器界面要求 `dsh web` 打印的进程令牌，桌面壳里的会话拿不到（`GET /` 回 `dsh web authentication required`），所以视觉是按官方 CSS 逐条复刻的，最终以用户刷新页面后所见为准。
+
+### 12.41 提示词口径统一：主人 → 用户、猫娘 → 鲸鱼娘（4.18，文案）
+
+#### 12.41.1 用户要的是什么
+
+原话：「提示词“主人”全面替换成“用户”。“猫娘”替换成“大肥鱼”」，随后更正：「不要写你是一只叫小爱的大肥鱼助手，可以写“你是一只叫DeepSeek的鲸鱼娘助手。」，以及一句补充：「DeepSeek前后加空格」。看过第一版之后，用户又定了两处收尾：「就念「再见」，中性化成「对方」」。最终口径四条：
+
+- 称呼统一成「用户」（不再用「主人」）；
+- 回复器人格示例改写为「你是一只叫 DeepSeek 的鲸鱼娘助手」，拉丁字母前后各留一个半角空格（中英混排的排版习惯，也是对上面那句补充的执行）；
+- 退出提示语只念「再见」（不写「再见，用户」——念出来像客服）；
+- 「他」改成「对方」，不再默认用户是男性。
+
+#### 12.41.2 改了哪些提示词
+
+| 位置 | 键 / 常量 | 新文本 |
+|---|---|---|
+| `lib/config.js` | `DEFAULT_VOICE_RULE_TEXT` | 「注意：这条消息是用户通过小爱音箱发来的语音。…」 |
+| `lib/tools.js` | `xiaoai_speak` 的两处描述 | 「当用户通过小爱音箱跟你说话时…」「不必等用户先唤醒音箱…」 |
+| `lib/replyer.js` | `REPLYER_IDENTITY` / `USER_LABEL` / system 提示 | 「你是一个通过小爱音箱和用户说话的语音助手…」「用户」「就像对着用户说话一样。」 |
+| `lib/client.js` | `hint.personality` | 「回复器的人格设定，例如「你是一只叫 DeepSeek 的鲸鱼娘助手」。只影响音箱念出来的话。」 |
+| `bridge/config.py` | `dsh.exit_prompt`、`dsh.rule_prompt_for_skill`、`openai.rule_prompt_for_skill` | 「再见」；两处说明改成「这条消息是用户通过小爱音箱发送的，对方看不到你回复的文字。」 |
+| `bridge/core/xiaoai_conversation.py` | `self.exit_prompt` 初值与 `apply_runtime_config()` 的兜底默认值 | 「再见」 |
+| `bridge/README.md` | 示例配置里的 `rule_prompt_for_skill` | 同 `bridge/config.py` 的 `openai` 段 |
+
+`scripts/check-speak.mjs` 里 `assert.match(prompts.user, /主人：一个问题/)` 跟着改成 `/用户：一个问题/`——它断言的是回复器拼出来的 user 消息里带不带「<称呼>：<原话>」，改称呼就必须改它，否则这条检查会假红。
+
+#### 12.41.3 什么没改，为什么
+
+`docs/deploy.md` 与 `bridge/CHANGELOG.md` 里出现的「主人」是**历史取证**（当时提示词原文的摘录、以及早先 §12.x 的引用），按本仓库「只写最终状态、不改写历史条目」的约定保持原样；这一轮的口径变更记在本节。设备端命令、`bridge/core/models/` 里的模型资产同理不动。
+
+#### 12.41.4 运行时要重新渲染才会改口
+
+桥接器真正读的是渲染产物 `<DSH 家目录>\xiaoai-bridge\config.py`，它由 `lib/render-config.js` 生成：**不是模板的副本，而是一层覆盖** —— 生成的文件在导入时用 `_load_template()` 把仓库里的 `bridge/config.py` 当模块加载（`APP_CONFIG = _template.APP_CONFIG`），再把插件设置 `_deep_merge()` 上去，所以它引用的始终是仓库里那份模板。据此，本轮改的文本分两类生效：
+
+- **模板侧的键**（`dsh.exit_prompt`、`openai` 段的 `rule_prompt_for_skill`）：覆盖里根本不写它们，所以下次**加载**渲染产物时重新执行 `_load_template()` 就拿到新值 —— 也就是重启桥接器（或任何一次重新渲染）后生效，不需要重装插件。
+- **渲染产物侧的 `dsh.rule_prompt_for_skill`**：它来自插件设置（`voiceRuleText` 默认取 `DEFAULT_VOICE_RULE_TEXT`，非空即写进覆盖），要等**重新渲染**才会更新。渲染有三个触发点：插件加载时（`lib/index.js` 的 `supervisor.renderConfig()`）、每次启动桥接器（`lib/process.js` 的 `doStart()` 里 `renderConfig()`）、设置页保存后（`lib/index.js` 的 `onConfigWritten` 回调）。
+
+两条合起来的结论：**在设置页里停止再启动一次桥接器**（或保存一次设置、重启 DSH）即可让音箱改口；桥接器自己每秒轮询渲染产物的 mtime 并热重载，但那是重读同一个文件，不会替我们重新渲染。这不是缓存，是「插件生成配置、桥接器只读生成物」的架构使然（`bridge/config.py` 是模板，禁止移出版本库，见 `bridge/AGENTS.md`）。
+
+#### 12.41.5 这一轮的检查
+
+`npm run check` 九条绿（含 `scripts/check-speak.mjs`）；`doc-check.mjs`、`changelog-check.mjs`、`check_agents_md.py --root .` 均绿；`bridge` 侧 `pytest -q` 仍是 **115 passed, 19 subtests**（b 侧没有断言这些默认文本，所以只改了值、没动测试）。
 
 
 

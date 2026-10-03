@@ -194,7 +194,7 @@ APP_CONFIG = {
         "continuous_conversation_mode": True,
         "exit_command_keywords": ["停止", "退下", "退出", "下去吧"],
         "max_listening_retries": 2,  # 最多连续重新唤醒次数
-        "exit_prompt": "再见，主人",
+        "exit_prompt": "再见",
         "continuous_conversation_keywords": ["开启连续对话", "启动连续对话", "我想跟你聊天"]
     },
     # TTS (Text-to-Speech) Configuration
@@ -234,7 +234,7 @@ APP_CONFIG = {
         #   - True：一直听着，直到静默超时或说出退出词
         "continuous_conversation": False,
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
-        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发来的语音。你的回复正文会被自动念出来（念之前会先做一次口语化润色），所以直接把要说的话写成回复正文就好：不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL，尽量 300 字以内。只有当你要逐字念出、不要润色的内容时，才调用 xiaoai_speak 工具",  # 追加在每条语音输入后面；插件设置页可覆盖
+        "rule_prompt_for_skill": "注意：这条消息是用户通过小爱音箱发来的语音。你的回复正文会被自动念出来（念之前会先做一次口语化润色），所以直接把要说的话写成回复正文就好：不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL，尽量 300 字以内。只有当你要逐字念出、不要润色的内容时，才调用 xiaoai_speak 工具",  # 追加在每条语音输入后面；插件设置页可覆盖
         "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话
         "wakeup_reply": "小爱来了",  # 唤醒成功后的播报语；留空用默认值
         "exit_reply": "小爱，再见",  # 退出连续对话时的播报语；留空用默认值
@@ -267,7 +267,7 @@ APP_CONFIG = {
         "session_tts_speakers": {},
         "exit_keywords": ["退出", "停止", "再见"],
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
-        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
+        "rule_prompt_for_skill": "注意：这条消息是用户通过小爱音箱发送的，对方看不到你回复的文字。字数控制在300字以内",
         "extra_body": {},
     },
 }
