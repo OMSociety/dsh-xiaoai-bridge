@@ -318,6 +318,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.20 归档会话自动重开（DSH 只有归档、没有删除，而宿主的 archived-session-gate
       会静默拒掉归档会话的每一个模型步，于是音箱看起来「谁也不连」；插件在复用前
       先查归档，命中就换新会话并记一条 `session-archived-rebound`；见 §12.43）
+- [x] 4.21 语音识别后端热生效与防呆（设置页改 `asr.model` / `asr.int8` /
+      `asr.model_dir` 立刻在后台重建识别器；切到本机没装模型的后端时保留旧的、
+      只警告一次，并把实况放进 `/api/health` 的 `data.asr` 与 `asr-model-unavailable`
+      诊断；见 §12.44）
 
 ## 9. 第 1 期实现决策
 
@@ -2778,6 +2782,55 @@ function isArchived(sessionId) {
 `scripts/check-session.mjs` 新增 case 12：把设备记录指向一个**在 `archivedSessionIds` 里**的会话，并在假宿主上给 `resumable: true`（能恢复却选择不恢复，才能证明检查真的生效），断言不复用也不恢复、只有一条 `session-archived-rebound`（`level === 'warn'`、detail 含旧 id）、落盘 `devices.json` 指向新会话、新会话重新被命名；case 12b 用 `archivedSessionIds: ['session-somebody-else']` 断言**未归档的照样恢复**，避免把「偏好新会话」当成归档检查。`harness()` 因此多收一个 `archivedSessionIds` 参数，假 `workspaceRegistry` 也改成能只提供归档集合（`list()` 返回空）。`scripts/check-diagnostics.mjs` 的 `used` 表加该码。
 
 改动落在 `lib/` 里，要**重启 DSH** 才生效；本机当前设备记录指向的 `session-56293798-4c38-4efb-9ce8-1b73a46e7cca` 就在归档集合里（`updatedAt` 一直在涨，说明归档后插件仍在投递），所以用户重启后的下一句语音会自动开一个新会话。
+
+### 12.44 语音识别后端的热生效与防呆
+
+用户原话（2026-10-04 01:29）：**「paraformer启动起来需要好一会，导致经常听不见我说了啥」**；随后他的口径是**「热重载要做好。切模型但用户无xx模型时等的配置项防呆设置要做好」**。这一节记两件事：为什么「慢」不是真正的原因，以及切后端为什么要立刻生效、装不上时凭什么不许把音箱弄哑。
+
+#### 12.44.1 实测：paraformer 并不慢，真正的毛病是「切了不生效」
+
+仓库外探针 `D:\WorkSpace\_oxb-wheels\probe-asr-load.py`（用桥接器自带的 venv 直接调 `sherpa_onnx.OfflineRecognizer`，`num_threads=2`、`provider="cpu"`，不走桥接器）在本机量到：
+
+| 后端 | 装载 | 解码 3 秒音频 |
+|---|---|---|
+| `sense_voice` | 1.64 s / 1.63 s | 0.09 s |
+| `paraformer` | 2.15 s / 2.11 s | 0.07 s |
+
+两者只差约 0.5 s，桥接器日志里「进程启动 → `[ASR] 📝 ASR: 语音识别服务启动`」那 2.6–3.6 s 也全是 `sense_voice` 的。**装载时间解释不了「需要好一会」。**
+
+真正的现场是这样的：正在跑的进程（`bridge.pid` 记 `2026-10-03T17:21:01.253Z`）在 `01:21:04.845` 装载的是 `sense_voice`；生成的 `C:\Users\Administrator\.dsh\xiaoai-bridge\config.py` 在 **`01:27:12`** 才被渲染成 `"asr": {"model": "paraformer"}`。`bridge/core/app.py` 的 `_watch_config_file()`（每秒轮询 mtime → `config.reload_app_config()`，日志 `[Config] Reloaded runtime config from …`）**确实重载了**，但 `bridge/core/services/audio/asr/sherpa.py` 的 `_ensure_loaded()` 第一句就是 `if self._recognizer is not None: return` → 不重建。日志里 `01:21:04` 之后再没有第二条 `语音识别服务启动`，`01:28:49` / `01:29:12` 两次识别仍然出自 `sense_voice`。也就是说：**在设置页切后端，要重启桥接器进程才生效，而界面一个字都不提示**。
+
+这不是「设计如此」，而是一处实现缺口：`lib/process.js` 那段注释明确写着这个一秒的 watcher 会热重载——「唤醒词也算，因为 `core/services/audio/kws` 在 `wakeup.keywords` 变化时会重建 spotter」。KWS 有这件东西，ASR 缺。
+
+#### 12.44.2 改法：照 KWS 的样子热重载
+
+`bridge/core/services/audio/asr/sherpa.py` 重写，装载逻辑现在长这样：
+
+- **载荷签名**：`_load_key(backend, model_dir)` 返回 `(backend, bool(asr.int8), model_dir)`。签名没变就直接返回，签名变了才重建——`asr.int8` 与 `asr.model_dir` 都算「不同的载荷」。
+- **监听器**：`_attach_reload_listener()` 在**第一次装载**时挂 `ConfigManager.instance().add_reload_listener(self._on_config_reload)`（VAD / KWS 是在构造时挂的；放到第一次装载是为了让 import 本模块不碰配置文件，`_SherpaASR.__init__` 因此只设字段），挂成功才置 `_listening`。
+- **后台重建**：`_on_config_reload()` 只做签名比较，真正的加载丢给 daemon 线程 `asr-reload`。理由很实在：监听器跑在每秒轮询配置文件的 watcher 线程上，而加载要 1~3 秒，**不能把轮询卡住**；`ConfigManager.reload_app_config()` 又是 `except: continue` 吞异常的（监听器必须自己兜住），所以 `_reload()` 里 `try/except` 后只记一条 `[ASR] 热重载语音识别模型失败: …`。重建成功的同时后端换了会记 `语音识别服务热重载: sense_voice → paraformer`。
+- **一把锁**：`_load_lock`。预热线程、重载线程和用户说的第一句话可能同时进来，没有锁就会建出两个识别器，内存与时间都翻倍。
+- **局部绑定**：`asr()` 先 `recognizer = self._recognizer` 再 `create_stream` / `decode_stream`——热重载随时可能在下一行把 `self._recognizer` 换掉，流的创建与解码落到两个识别器上会崩。
+
+#### 12.44.3 防呆（用户明确要求的那一半）
+
+三层，按「错得多严重」排序：
+
+1. **名字不认识**（`asr.model` 不在 `_BACKENDS` 里）：退回当前在用的后端，首次启动退回 `DEFAULT_BACKEND = "sense_voice"`，`_warn_once()` 只警告一次（旧行为是直接抛 `ValueError`）。
+2. **名字认识但装不上**（模型目录 / `tokens.txt` 缺失、onnxruntime 建不出来）：**继续用已经装好的那个识别器**，只警告一次，原因写进 `_last_error`；同时把请求签名记进 `_failed_key`，于是后面每一句话都不会再来白等一次必然失败的加载（否则每句话都要多等 1~3 秒，比现在还糟）。
+3. **一个都没装好**：先退 `DEFAULT_BACKEND` 试一次，两个都不行才抛——到那一步「让上层知道 ASR 不可用」才是对的状态，不能继续假装。
+
+可见性配套：`/api/health` 的 `data.asr` 由 `ASRService.status()` 给出 `{requested, known, active, available, error}`（只查文件、不建模型；`api_server.py` 里延迟 import，健康检查不能被 ASR 拖垮），插件 `probeBridgeApi()` 把它带回来，`collectFacts()` 在「名字不认识 / 请求的后端与生效的不一致 / 有 `error`」时记一条 `asr-model-unavailable`（`warn`，detail 带桥接器给的原因，按 code + detail 去重；`DIAGNOSTIC_CODES` 15 → **16**，中英标签在 `lib/client.js`，README 排错表加一行）。这样用户在设置页选了一个没装的模型，看到的是「用不了，原因是什么」，而不是「点了没反应」。
+
+#### 12.44.4 检查
+
+`bridge/tests/test_sherpa_asr_load.py` 新增 12 条（假模型目录 + 假 `sherpa_onnx.OfflineRecognizer`，**不加载真模型**，所以毫秒级）：装载请求的后端；第二次调用不重建；切后端不用重启就重建并记一条热重载事件；`int8` 与 `model_dir` 属于签名；watcher 回调能触发后台热切换；缺模型时保留旧识别器、`status()["error"]` 说清原因、只警告一次且后续不再重试；未知名字回落（有旧用旧的、首启用默认）；一个都装不上仍然抛；`_reload()` 只记日志不抛；`available_backends()` 只列装了的；`asr()` 用「它自己检查过的那个」识别器解码并套用 `asr.replacements`。`npm run check` 九条绿，桥接器全量 `pytest -q` 由 115 变 **127 passed, 19 subtests**。
+
+#### 12.44.5 生效方式与仍未做的两件事
+
+桥接器代码改动**要重启桥接器进程**才生效（这次改的就是加载逻辑本身）：重启后日志里会出现 `模型=paraformer`，或者一条 `[ASR] 切到 paraformer 失败（…），继续使用 sense_voice`。此后再在设置页切后端就是即时的（不用重启），失败也只警告不哑。
+
+两件**不在本轮范围**、但确实是「听不见我说了啥」另一半原因的事：① SenseVoice 的 `language` 硬编码成 `"auto"`（`sherpa.py` 的 `_BACKENDS`），极短音频会被判成日文（日志里的 `はみ。` / `八に。` / `あ嘛？`），要钉成 `zh` 得新增 `asr.language` 配置键 + `buildOverrides()` + 文档；② 唤醒词之后约 1.3 秒的盲窗：`before_wakeup` 握手 1.23 s（17:28:46.196 → 17:28:47.426）、之后还有 0.37 s 的「音箱正在播报」静音窗，`vad.resume("speech")` 要等这些走完才开始收音，所以唤醒后立刻开口的音频会被截断成碎片（`Sa.` / `谁？`）。
 
 
 

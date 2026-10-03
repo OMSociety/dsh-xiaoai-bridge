@@ -481,17 +481,24 @@ class APIServer:
         GET /api/health
         Health check endpoint
         """
-        return web.json_response({
-            "success": True,
-            "data": {
-                "status": "healthy",
-                "speaker_ready": get_speaker() is not None,
-                # "bearer" = non-loopback callers need the token;
-                # "loopback-only" = no token is configured, so only this machine
-                # is served (see core/services/api_auth.py).
-                "auth": auth_mode()
-            }
-        })
+        data = {
+            "status": "healthy",
+            "speaker_ready": get_speaker() is not None,
+            # "bearer" = non-loopback callers need the token;
+            # "loopback-only" = no token is configured, so only this machine
+            # is served (see core/services/api_auth.py).
+            "auth": auth_mode(),
+        }
+        # 语音识别后端是配置里最容易"选了却没生效"的一项（切到没装模型的后端、
+        # 或者模型名写错），所以把实况一起报出去，设置页据此提示用户。
+        # 延迟 import：健康检查不该被 ASR 的依赖拖垮。
+        try:
+            from core.services.audio.asr.service import ASRService
+
+            data["asr"] = ASRService.status()
+        except Exception as exc:  # noqa: BLE001 - 健康检查必须能答话
+            data["asr"] = {"requested": None, "active": None, "error": str(exc)}
+        return web.json_response({"success": True, "data": data})
 
     async def handle_tts_doubao(self, request: web.Request) -> web.Response:
         """

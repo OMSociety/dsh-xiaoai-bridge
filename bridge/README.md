@@ -297,7 +297,7 @@ curl POST /api/play/text → API Server → SpeakerManager → 小爱音箱
 | `POST` | `/api/wakeup`            | 唤醒小爱音箱       |
 | `POST` | `/api/interrupt`         | 打断当前播放       |
 | `GET`  | `/api/status`            | 获取播放状态       |
-| `GET`  | `/api/health`            | 健康检查         |
+| `GET`  | `/api/health`            | 健康检查（含语音识别后端实况 `asr`） |
 
 ### 💡 使用示例
 
@@ -677,6 +677,10 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
     | `doubao` | [火山引擎豆包语音识别](https://www.volcengine.com/docs/6561/1354868?lang=zh) | 云端录音文件识别，支持标准版和极速版，需要配置火山引擎 App Key / Access Key |
 
     使用本地模型时，将对应模型目录放到 `core/models/`（Docker 部署放 `./models/`）下即可，不配置默认使用 `sense_voice`。
+
+    切换 `model` / `int8` / `model_dir` 后**不用重启**：桥接器每秒轮询 `config.py`，重载后会在后台重建识别器（与唤醒词热重载同一机制），日志里会多一条 `语音识别服务热重载: sense_voice → paraformer`。
+
+    选了一个**本机没装模型**的后端也不会把音箱弄哑：桥接器继续用已经装好的那个模型，只记一条警告，也不会每句话都再重试一次失败的加载（失败过的后端会被记住，直到配置再变），原因同时进健康检查——`GET /api/health` 的 `data.asr` 是 `{requested, known, active, available, error}`，设置页的状态卡会把它显示成一条 `asr-model-unavailable`。`error` 与日志都会说明缺哪个文件；一个本地模型都没装好时会退回默认的 `sense_voice`，两个都不行才真的报错。
 
     使用豆包 ASR 时，将 `model` 改为 `"doubao"`，并填写 `asr.doubao`：
 
