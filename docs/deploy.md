@@ -311,6 +311,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       注入式样式表 + `--dsw-*` 主题变量、控件几何对齐宿主字段；见 §12.40）
 - [x] 4.18 提示词口径统一（「主人」→「用户」、回复器人格示例改成「鲸鱼娘」，
       含 `bridge/config.py` 模板里的默认值；见 §12.41）
+- [x] 4.19 提示词默认值进配置（`personality` / `replyStyle` / `behaviorStyle`
+      三格从空串改成代码里原本兜底的文本，设置页看得见也能改；语音规则拆成
+      「通道说明 + 行动准则」；并随用户当天追加的口径收短为「一般 50 字以内、
+      长回复最多 300 字」，设置页说明去掉「例如」；见 §12.42、§12.42.7）
 
 ## 9. 第 1 期实现决策
 
@@ -2660,6 +2664,67 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 #### 12.41.5 这一轮的检查
 
 `npm run check` 九条绿（含 `scripts/check-speak.mjs`）；`doc-check.mjs`、`changelog-check.mjs`、`check_agents_md.py --root .` 均绿；`bridge` 侧 `pytest -q` 仍是 **115 passed, 19 subtests**（b 侧没有断言这些默认文本，所以只改了值、没动测试）。
+
+### 12.42 提示词默认值进配置：人格 / 说话风格 / 行动准则（4.19，设置项）
+
+#### 12.42.1 用户要的是什么
+
+原话：「有默认提示词的就把默认提示词写到配置中。」当时的实情是：设置页「人格设定 / 说话风格 / 行动准则」三格在 `lib/config.js` 的 `DEFAULTS` 里都是 `''` —— 配置里没有任何文案，三格的「默认提示词」只活在代码里（人格是 `lib/replyer.js` 的 `REPLYER_IDENTITY`，风格拼在任务行尾巴上，规则是 `DEFAULT_VOICE_RULE_TEXT` 的后半段）。给用户看过三种读法（把代码里的兜底文案填进三格 / 只把模板里的说明抄进配置 / 只记账不改代码）之后，用户选定：**把空白的三格填上代码里的兜底文案**，设置页看得见、也能改。
+
+#### 12.42.2 三处默认文本的来源
+
+| 配置项 | 新默认值 | 原来藏在哪 |
+|---|---|---|
+| `personality` | `lib/replyer.js` 的 `REPLYER_IDENTITY`：「你是一个通过小爱音箱和用户说话的语音助手，你的回答会被直接念出来。」 | `buildReplyerPrompts()` 里 system 的第一行（常量） |
+| `replyStyle` | 新增导出 `DEFAULT_REPLY_STYLE`：「用日常、口语化的说法讲出来，就像对着用户说话一样。」 | 原先拼在任务行 `…把【要表达的意图】用日常、口语化的说法讲出来，就像对着用户说话一样。` 的尾巴上 |
+| `behaviorStyle` | 新增导出 `DEFAULT_BEHAVIOR_STYLE`：「不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL；一般 50 字以内、一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字。只有当你要逐字念出、不要润色的内容时，才调用 xiaoai_speak 工具。」（长度口径见 §12.42.7） | `DEFAULT_VOICE_RULE_TEXT` 的后半段 |
+
+`personality` 与 `replyStyle` 两个常量定义在 `lib/replyer.js`（提示词的真正使用者旁边），`lib/config.js` 从那里导入；`behaviorStyle` 与缩短后的 `DEFAULT_VOICE_RULE_TEXT` 相邻定义在 `lib/config.js`。schema 里这五项本来就写 `.default(DEFAULTS.<key>)`，所以只改 `DEFAULTS` 一处，设置页与文档自动跟着走。
+
+#### 12.42.3 人格那一格为什么要加守卫
+
+默认值现在**就是**身份句，而 `buildReplyerPrompts()` 原来的规则是「`personality` 非空就追加一行「关于你自己：…」」——两句相加会把同一句话写两遍。守卫改成 `personality.length > 0 && personality !== REPLYER_IDENTITY`：默认（或用户手打一句完全一样的）不再重复追加，默认配置下的人格部分与改动前**逐字一致**（system 的第一行仍是 `REPLYER_IDENTITY`，不多不少）；用户写了自己的人格仍照旧多出一行。`replyStyle` 走的是同一条路：默认值非空，所以「说话风格：…」这行在默认配置下就会出现，任务行里的风格子句因此删掉 —— 用词不变、只是从任务行尾挪到了独立一行，语义等价且不重复。
+
+#### 12.42.4 语音规则为什么拆成两段
+
+`lib/render-config.js` 的 `composeVoiceRule()` 会把 `behaviorStyle` 以「行动准则：」追加在 `voiceRuleText` 后面。原来这两段是**同一个** `DEFAULT_VOICE_RULE_TEXT` 常量：若把它整段填进 `behaviorStyle`，设置页与渲染产物里就会各出现一遍；拆开后默认渲染结果是「通道说明 + 空行 + 行动准则：+ 规则子句」——与改动前的「通道说明：规则子句」相比，用词一字未改，只是把原来的冒号连接改成了空行 + 「行动准则：」小标题（`composeVoiceRule()` 本来就是这么拼的，`behaviorStyle` 一旦非空就会有这个小标题）。
+
+取舍要写明：**已经手改过 `voiceRuleText` 的安装**升级后，覆盖里会多出默认的行动准则一段。若用户当时只写了自己版本的通道说明（没写规则），这正好补上；若用户把规则也抄进了 `voiceRuleText`，就会重复一次——把「行动准则」那一格清空即可回到旧行为。本机 `C:\Users\Administrator\.dsh\profiles\desktop\cordis.patch.yml` 的插件 `config` 只存了 6 个与提示词无关的键（`silentStart`、`wakeKeywords`、`wakeupReplyText`、`exitReplyText`、`ttsProvider`、`sessionCwd`），所以这台机器不会重复。
+
+#### 12.42.5 断言与检查
+
+- `scripts/check-config.mjs`：`bare` 的清空列表补上 `behaviorStyle: ''`（否则默认行动准则非空，`bare` 只等于唤醒超时与连续对话两条的断言会假红）；`dsh.rule_prompt_for_skill` 的期望值由 `DEFAULTS.voiceRuleText` 改成 `composeVoiceRule(DEFAULTS)`（新增从 `lib/render-config.js` 导入 `composeVoiceRule`），并加两条固化拆分语义的断言：它等于 `` `${DEFAULTS.voiceRuleText}\n\n行动准则：${DEFAULTS.behaviorStyle}` ``，且 `DEFAULTS.voiceRuleText` 本身不含「行动准则」。
+- `scripts/check-speak.mjs`：新增一条以 `DEFAULTS` 作 `cfg` 的断言（`the shipped defaults carry the identity, the speaking style and the limits`）——system 里要有「语音助手」、`说话风格：用日常、口语化的说法讲出来`、「不要 emoji」，且**不含**「关于你自己：」。原有两条断言不动：自定义人格 `你很耐心` 仍要求出现「关于你自己：」，`cfg: {}` 的 condense 仍靠 `REPLYER_IDENTITY` 兜底。
+- 检查：`npm run check` 九条绿；`doc-check.mjs`、`changelog-check.mjs`、`check_agents_md.py --root .` 绿；`bridge` 侧 `pytest -q` 仍是 **115 passed, 19 subtests**（桥接器只读渲染产物，模板没改）。`README.md` 的「人格与提示词」表三行默认值由「空」改为「内置」。
+
+#### 12.42.6 怎么生效，「留空」是什么意思
+
+改的是插件侧默认值，所以必须**重新渲染**渲染产物：在设置页保存一次（写配置 + 渲染），或在设置页里停止再启动一次桥接器，或重启 DSH —— 三条渲染触发点见 §12.41.4。
+
+「清空」与「恢复默认」现在是两件事（`hint.empty` 那句兜底文案只出现在**没有**自带说明的字段上，三格各有自己的说明，所以界面上没有新旧矛盾）：
+
+- **清空某一格再保存**，存进去的是空串，含义是「这类指令不再注入」：`personality` 空 → 不再有「关于你自己：…」（system 开头的身份句是硬编码的，仍在）；`replyStyle` 空 → 不再有「说话风格：…」，而任务行也不带风格子句，所以这一格是默认配置下**唯一**的风格来源，清空等于放弃风格引导；`behaviorStyle` 空 → 渲染产物里不再有「行动准则：…」这一段（这是拆分后新出现的「能关掉规则」的能力）。
+- **想拿回出厂文本**，用字段自带的**重置**：`stageReset()` 会把这一项从保存的配置里删掉（`lib/client.js` 的 `delete next[key]`），`DEFAULTS` 随即生效；或者把默认文本粘回框里。
+
+空串不会被 `sanitizeConfig()` 当成坏值回退（它只管类型/取值域），所以清空就是清空，不会被悄悄改回默认——这一点与 `voiceRuleText` 的「空则用桥接器模板里的默认值」不同（那里是 `buildOverrides()` 跳过空值、模板兜底），是本轮的取舍。
+
+#### 12.42.7 收短口径与说明文案（同日追加）
+
+用户看过改完的设置页截图后又提了两条（原话：「已经有默认文本就不用“例如”了。」「300字不太好，一般50 字以内，一两句话即可。必须长回复的时候用300字以内」）。
+
+**说明文案去掉「例如」。** 三格现在自带默认文本，说明里的示例句只会把同一件事说两遍；而且 `hint.personality` 的示例从 §12.41 起就与默认人格不一致（那一轮把它换成了「鲸鱼娘」，默认人格却是「语音助手」）。改成：
+
+| i18n 键 | 现在的中文说明 |
+|---|---|
+| `hint.personality` | 「回复器的人格设定，只影响音箱念出来的话。」 |
+| `hint.replyStyle` | 「回复器的说话风格。」 |
+| `hint.outputLimits` | 「写进回复器请求的硬性约束。」 |
+
+英文侧同一批改，`hint.personality` 的 `e.g. "you are a cat-girl assistant called XiaoAi"` 一并删掉（那个示例比中文侧还旧）。§12.41.2 表格里 `hint.personality` 那一行记的是**那一轮**的措辞，属历史取证，按本仓库约定不回改。
+
+**长度口径改成两档。** 统一成「一般 50 字以内，一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字」，落在四处：`DEFAULT_OUTPUT_LIMITS`（回复器请求的硬性约束）、`DEFAULT_BEHAVIOR_STYLE`（渲染成「行动准则：」）、`lib/tools.js` 里 `xiaoai_speak` 的 description，以及桥接器模板的两个 `rule_prompt_for_skill`（`dsh` 段与 `openai` 段；后者不被插件覆盖，会真的发给模型，`bridge/README.md` 的示例配置同步）。**刻意不动**的是 `dsh` / `openai` 两段的 `rule_prompt`：「将结果处理成纯文字版…字数控制在300字以内」是**处理指令**，300 在那里是播报上限而不是回复风格；`spokenMaxChars` 的默认值也保持 300，它是硬上限（超了先精简一次、再截断），不是模型该瞄准的目标。50 这个数字只写在提示词里，配置里没有对应开关。
+
+**检查。** `npm run check` 九条绿（没有断言引用这几段文本，所以只改了值）；`bridge` 侧 `pytest -q` 仍是 **115 passed, 19 subtests**（`tests/test_config_loader.py` 只断言键与合并语义，不比对提示词原文）；`doc-check.mjs`、`changelog-check.mjs`、`check_agents_md.py --root .` 绿。
 
 
 

@@ -24,6 +24,7 @@ import { bridgeChildEnv } from '../lib/process.js';
 import {
   GENERATED_HEADER,
   buildOverrides,
+  composeVoiceRule,
   pythonLiteral,
   renderConfigPath,
   splitList,
@@ -77,7 +78,7 @@ eq(splitList(''), [], 'empty text');
 eq(splitList(undefined), [], 'absent text');
 
 console.log('render-config: overrides');
-const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', asrBackend: '' });
+const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', behaviorStyle: '', asrBackend: '' });
 // Two keys are always written because the plugin owns them outright: the
 // conversation timeout (same 20 seconds as the template) and the single-shot
 // switch, whose false default is the documented behavior.
@@ -104,7 +105,13 @@ eq(full.dsh.tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
 eq(full.dsh.wakeup_reply, '在呢', 'dsh.wakeup_reply');
 eq(full.dsh.exit_reply, '拜拜', 'dsh.exit_reply');
 eq(full.dsh.fallback_text, '电脑睡了', 'dsh.fallback_text');
-eq(full.dsh.rule_prompt_for_skill, DEFAULTS.voiceRuleText, 'dsh.rule_prompt_for_skill');
+eq(full.dsh.rule_prompt_for_skill, composeVoiceRule(DEFAULTS), 'dsh.rule_prompt_for_skill');
+eq(
+  full.dsh.rule_prompt_for_skill,
+  `${DEFAULTS.voiceRuleText}\n\n行动准则：${DEFAULTS.behaviorStyle}`,
+  'the action rules are appended, not bundled into the voice rule',
+);
+eq(DEFAULTS.voiceRuleText.includes('行动准则'), false, 'the voice rule default is the channel note only');
 eq(full.dsh.continuous_conversation, false, 'dsh.continuous_conversation follows the page default');
 eq(
   buildOverrides({ ...DEFAULTS, continuousConversation: true }).dsh.continuous_conversation,

@@ -584,7 +584,7 @@ async def before_wakeup(speaker, text, source, app):
 ```python
 "dsh": {
     "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，并将字数控制在300字以内",
-    "rule_prompt_for_skill": "注意：这条消息是用户通过小爱音箱发送的，对方看不到你回复的文字。字数控制在300字以内",
+    "rule_prompt_for_skill": "注意：这条消息是用户通过小爱音箱发送的，对方看不到你回复的文字。一般 50 字以内、一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字",
 },
 ```
 

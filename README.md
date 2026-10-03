@@ -182,10 +182,10 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `personality` | 文本 | 空 | 回复器的人格设定 |
-| `replyStyle` | 文本 | 空 | 回复器的说话风格 |
-| `behaviorStyle` | 文本 | 空 | 只注入音箱发起的会话 |
-| `outputLimits` | 文本 | 内置 | 回复器必须避开的东西（emoji、markdown、括号动作、URL 等） |
+| `personality` | 文本 | 内置 | 回复器的人格设定，默认就是回复器的身份句（「你是一个通过小爱音箱和用户说话的语音助手…」）；**改成别的**才会在系统提示里多出一行「关于你自己：…」 |
+| `replyStyle` | 文本 | 内置 | 回复器的说话风格，默认「用日常、口语化的说法讲出来，就像对着用户说话一样。」 |
+| `behaviorStyle` | 文本 | 内置 | 只注入音箱发起的会话，渲染成「行动准则：…」；默认是「不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL；一般 50 字以内、一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字。…」 |
+| `outputLimits` | 文本 | 内置 | 回复器必须避开的东西（emoji、markdown、括号动作、URL 等），并声明长度口径：一般 50 字以内、长回复最多 300 字 |
 | `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
 
 ### 桥接器进程

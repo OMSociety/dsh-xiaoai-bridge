@@ -23,6 +23,7 @@ const { truncateSpokenText, resolveReplyerRoute, buildReplyerPrompts, replyerMes
 );
 const { createAutoSpeak, DEFAULT_FAILURE_TEXT, DEFAULT_APPROVAL_TEXT } = await import(new URL('../lib/auto-speak.js', import.meta.url).href);
 const { createSpeakTool, SPEAK_TOOL_NAME, SPEAK_TOOL_DESCRIPTION } = await import(new URL('../lib/tools.js', import.meta.url).href);
+const { DEFAULTS } = await import(new URL('../lib/config.js', import.meta.url).href);
 
 const dataDir = mkdtempSync(join(tmpdir(), 'xiaoai-speak-check-'));
 let failures = 0;
@@ -137,6 +138,13 @@ await check('the system prompt carries personality, style and output limits', ()
   assert.match(prompts.system, /你很耐心/);
   assert.match(prompts.system, /慢慢说/);
   assert.match(prompts.system, /不要 emoji/);
+});
+await check('the shipped defaults carry the identity, the speaking style and the limits', () => {
+  const defaults = buildReplyerPrompts({ intent: 'i', history: [], cfg: DEFAULTS });
+  assert.match(defaults.system, /语音助手/);
+  assert.match(defaults.system, /说话风格：用日常、口语化的说法讲出来/);
+  assert.match(defaults.system, /不要 emoji/);
+  assert.equal(defaults.system.includes('关于你自己：'), false, 'the shipped persona is not restated');
 });
 await check('the user prompt carries the transcript and the intent', () => {
   assert.match(prompts.user, /用户：一个问题/);
