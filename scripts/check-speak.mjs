@@ -11,11 +11,13 @@
  * Run: node scripts/check-speak.mjs
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { createSpokenLog, spokenLogPath, SPOKEN_LOG_FILE } = await import(new URL('../lib/speech-log.js', import.meta.url).href);
+const { createSpokenLog, spokenLogPath, SPOKEN_LOG_FILE, SPOKEN_LOG_ROTATED_FILE, SPOKEN_LOG_MAX_BYTES } = await import(
+  new URL('../lib/speech-log.js', import.meta.url).href
+);
 const { truncateSpokenText, resolveReplyerRoute, buildReplyerPrompts, replyerMessages, buildCondensePrompts, createReplyer } = await import(
   new URL('../lib/replyer.js', import.meta.url).href
 );
@@ -64,6 +66,38 @@ await check('the log lands under <dataDir>/spoken.jsonl', () => {
   assert.equal(logged.length, 1);
   assert.deepEqual(logged[0], { time: 't', device: 'dev', intent: 'i', spoken: 's', provider: 'p', model: 'm', source: 'replyer' });
 });
+
+// --- speech log: the file has a ceiling, the history has one slot ----------
+console.log('speech log: rotation');
+const rotatedDir = mkdtempSync(join(tmpdir(), 'xiaoai-speak-rotate-'));
+const line = { time: 't', device: 'dev', intent: 'i', spoken: 'x'.repeat(80), provider: 'p', model: 'm', source: 'replyer' };
+const small = createSpokenLog({ dataDir: rotatedDir, logger: quiet, maxBytes: 2000 });
+for (let i = 0; i < 30; i += 1) await small.write(line);
+await check('the shipped cap is 5 MiB', () => {
+  assert.equal(SPOKEN_LOG_MAX_BYTES, 5 * 1024 * 1024);
+  assert.equal(SPOKEN_LOG_ROTATED_FILE, 'spoken.jsonl.1');
+});
+await check('the live file never grows past its cap', () => {
+  assert.ok(statSync(spokenLogPath(rotatedDir)).size <= 2000, 'the live log is over the cap');
+});
+await check('size() reports the live file, which is what the card shows', async () => {
+  assert.equal(await small.size(), statSync(spokenLogPath(rotatedDir)).size);
+});
+await check('the older lines moved to the single rotation slot', () => {
+  const old = readFileSync(join(rotatedDir, SPOKEN_LOG_ROTATED_FILE), 'utf8').trim().split('\n');
+  assert.ok(old.length >= 1, 'the rotation slot is empty');
+  assert.ok(old.length < 30, 'the rotation slot kept every line, so nothing rotated');
+});
+await check('a second rotation replaces the slot instead of piling up', async () => {
+  // A different payload in the second round, so "the slot changed" is a
+  // statement about the rotation rather than about the line content.
+  const marked = { ...line, spoken: 'y'.repeat(80) };
+  for (let i = 0; i < 30; i += 1) await small.write(marked);
+  const after = readFileSync(join(rotatedDir, SPOKEN_LOG_ROTATED_FILE), 'utf8');
+  assert.ok(after.includes('yyyy'), 'the slot still holds the previous generation');
+  assert.ok(statSync(join(rotatedDir, SPOKEN_LOG_ROTATED_FILE)).size <= 2000, 'the slot grew past the cap');
+});
+rmSync(rotatedDir, { recursive: true, force: true });
 
 // --- replyer: pure prompt and route decisions ------------------------------
 console.log('replyer: prompts and routes');

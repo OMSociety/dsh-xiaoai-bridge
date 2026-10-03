@@ -53,6 +53,13 @@ try {
   const configB = join(workDir, 'config-b.py');
   writeConfig({ dataDir: workDir, templatePath: join(BRIDGE_DIR, 'config.py'), cfg: { ...DEFAULTS, wakeKeywords: '小爱小爱' }, path: configA });
   writeConfig({ dataDir: workDir, templatePath: join(BRIDGE_DIR, 'config.py'), cfg: { ...DEFAULTS, wakeKeywords: '你好小智\n测试唤醒词' }, path: configB });
+  // Full-width separators have to split the same way the settings page does:
+  // a keyword that still carries `，` is not a word sherpa can score, so it
+  // would be dropped in silence and the speaker would never wake.
+  const configC = join(workDir, 'config-c.py');
+  writeConfig({ dataDir: workDir, templatePath: join(BRIDGE_DIR, 'config.py'), cfg: { ...DEFAULTS, wakeKeywords: '小爱小爱，小爱同学' }, path: configC });
+  const renderedC = readFileSync(configC, 'utf8');
+  ok(renderedC.includes('["小爱小爱", "小爱同学"]'), 'a full-width comma splits wake words in the rendered config');
 
   const probe = `
 import json, os, shutil, sys

@@ -14,12 +14,12 @@
  * Run: node scripts/check-config.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULTS } from '../lib/config.js';
+import { DEFAULTS, sanitizeConfig, validateConfig } from '../lib/config.js';
 import { bridgeChildEnv } from '../lib/process.js';
 import {
   GENERATED_HEADER,
@@ -70,6 +70,9 @@ ok(threw, 'non-finite numbers are refused');
 console.log('render-config: list splitting');
 eq(splitList('小爱小爱\n小爱同学'), ['小爱小爱', '小爱同学'], 'newline separated');
 eq(splitList('退出, 停止 ,\n再见'), ['退出', '停止', '再见'], 'comma + whitespace + blank line');
+eq(splitList('小爱小爱，小爱同学'), ['小爱小爱', '小爱同学'], 'full-width comma separated');
+eq(splitList('你好小智、小爱小爱'), ['你好小智', '小爱小爱'], 'enumeration comma separated');
+eq(splitList('甲\r\n乙'), ['甲', '乙'], 'CRLF separated');
 eq(splitList(''), [], 'empty text');
 eq(splitList(undefined), [], 'absent text');
 
@@ -137,6 +140,17 @@ eq(
   'the silent-start switch reaches the child',
 );
 eq(childEnvBare.DSH_ENABLE, '1', 'the master switch is passed through');
+eq(
+  childEnvBare.LOGLEVEL,
+  'INFO',
+  'the log level uses the name the bridge logger reads (LOGLEVEL, not LOG_LEVEL)',
+);
+eq(
+  bridgeChildEnv({ ...DEFAULTS, logLevel: 'DEBUG' }, 'C:\\data\\config.py').LOGLEVEL,
+  'DEBUG',
+  'a changed log level reaches the child',
+);
+ok(!('LOG_LEVEL' in childEnvBare), 'the dead LOG_LEVEL spelling is gone');
 eq(childEnvBare.AUDIO_INPUT_ENABLE, '1', 'audio input stays enabled');
 eq(childEnvBare.CONFIG_PATH, 'C:\\data\\config.py', 'the child is pointed at the rendered config');
 eq(childEnvBare.API_SERVER_PORT, '9092', 'the API Server port is a string for the child');
@@ -167,6 +181,31 @@ try {
   ok(existsSync(target), `config written to ${target}`);
   ok(written.source.startsWith(GENERATED_HEADER), 'generated file carries the do-not-edit header');
   ok(!existsSync(`${target}.tmp`), 'the temp file is renamed away, not left behind');
+
+  // A destination the atomic install can never replace (here: a directory) must
+  // surface as an error and must not leave the half-written temp file behind.
+  // The Windows read window the retry exists for cannot be staged in-process
+  // (it needs a foreign handle opened without FILE_SHARE_DELETE), so the
+  // negative path is what this checker can hold down; the positive one — a real
+  // lock released mid-retry — is recorded in docs/deploy.md §12.31.3.
+  const blockedDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-blocked-'));
+  try {
+    const blockedTarget = renderConfigPath(blockedDir);
+    mkdirSync(blockedTarget);
+    let blockedError = null;
+    const startedAt = Date.now();
+    try {
+      writeConfig({ dataDir: blockedDir, templatePath: join(BRIDGE_DIR, 'config.py'), cfg: { ...DEFAULTS } });
+    } catch (err) {
+      blockedError = err;
+    }
+    const blockedMs = Date.now() - startedAt;
+    ok(blockedError !== null, `an uninstallable destination fails loudly (${blockedError?.code ?? 'no error'} after ${blockedMs} ms)`);
+    ok(!existsSync(`${blockedTarget}.tmp`), 'a failed install cleans up its own temp file');
+    ok(existsSync(blockedTarget), 'a failed install leaves the existing path alone');
+  } finally {
+    rmSync(blockedDir, { recursive: true, force: true });
+  }
 
   // The bridge reads config.py through core.utils.config_loader; run its own
   // interpreter against the rendered file rather than trusting the text.
@@ -246,6 +285,46 @@ print(json.dumps({
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }
+
+// The schema is the settings page's contract, not a guarantee about what
+// reaches `apply()`: a local `POST /config`, a composition base or a patch
+// stored before a rule was tightened can all hand over a value it would have
+// rejected. The runtime path repairs such a section instead of starting a
+// bridge that cannot work, and the strict path is what a writer calls first.
+console.log('config: unusable values are repaired, not passed through');
+const repaired = sanitizeConfig({
+  ...DEFAULTS,
+  apiServerPort: 70000,
+  wakeupTimeout: 20.5,
+  logLevel: 'TRACE',
+  apiServerHost: '   ',
+  spokenMaxChars: 3,
+});
+eq(repaired.value.apiServerPort, DEFAULTS.apiServerPort, 'an out-of-range port falls back to the default');
+eq(repaired.value.wakeupTimeout, DEFAULTS.wakeupTimeout, 'a fractional timeout falls back to the default');
+eq(repaired.value.logLevel, DEFAULTS.logLevel, 'an unknown log level falls back to the default');
+eq(repaired.value.apiServerHost, DEFAULTS.apiServerHost, 'a blank host falls back to the default');
+eq(repaired.value.spokenMaxChars, DEFAULTS.spokenMaxChars, 'a too-small spoken limit falls back to the default');
+eq(
+  repaired.repairs.map((repair) => repair.key).sort(),
+  ['apiServerHost', 'apiServerPort', 'logLevel', 'spokenMaxChars', 'wakeupTimeout'],
+  'every repaired field is reported by name',
+);
+eq(sanitizeConfig({ ...DEFAULTS }).repairs.length, 0, 'a usable section reports no repairs');
+
+/** @param {object} patch @returns {boolean} whether the strict check refused it */
+function refused(patch) {
+  try {
+    validateConfig({ ...DEFAULTS, ...patch });
+    return false;
+  } catch {
+    return true;
+  }
+}
+ok(refused({ wakeupTimeout: 20.5 }), 'a fractional wakeupTimeout is refused by the strict check');
+ok(refused({ apiServerPort: 70000 }), 'an out-of-range port is refused by the strict check');
+ok(refused({ apiServerHost: '' }), 'a blank host is refused by the strict check');
+ok(!refused({}), 'a usable section passes the strict check');
 
 console.log(failures === 0 ? '\nconfig check OK' : `\nconfig check FAILED (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

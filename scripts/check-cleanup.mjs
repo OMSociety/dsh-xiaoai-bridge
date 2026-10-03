@@ -82,6 +82,28 @@ function makeDataDir(prefix) {
   rmSync(dir, { recursive: true, force: true });
 }
 
+// 2b. A bridge process may still be alive: the pid file is the one thing the
+// next start needs to adopt it, so the caller can ask for it to survive a
+// teardown that could not prove the process was gone.
+{
+  const dir = makeDataDir('xiaoai-keep-');
+  const cleanup = createCleanup({ dataDir: dir });
+  const result = cleanup.removeGenerated({ keep: ['bridge.pid'] });
+  check('a kept generated file stays on disk', existsSync(join(dir, 'bridge.pid')));
+  check('the other generated entries still go',
+    !existsSync(join(dir, 'config.py')) && !existsSync(join(dir, '__pycache__')));
+  check('the kept file is not reported as removed',
+    !result.removed.includes('bridge.pid') && result.removed.includes('config.py'));
+  check('the kept file is still reported as kept', result.kept.includes('bridge.pid'));
+  check('the rotation slot is history, so it survives both passes', classify('spoken.jsonl.1') === 'history');
+  writeFileSync(join(dir, 'spoken.jsonl.1'), '{"spoken":"上一轮"}\n');
+  const later = cleanup.removeGenerated();
+  check('a later pass without the keep list removes the pid file',
+    later.removed.includes('bridge.pid') && !existsSync(join(dir, 'bridge.pid')));
+  check('the rotation slot is never removed as generated', existsSync(join(dir, 'spoken.jsonl.1')));
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // 3. wipe(): what a real uninstall wants, history included.
 {
   const dir = makeDataDir('xiaoai-wipe-');

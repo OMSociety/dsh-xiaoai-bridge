@@ -132,12 +132,42 @@ function spyLogger() {
   const known = new Set(DIAGNOSTIC_CODES);
   const { logger } = spyLogger();
   const diagnostics = createDiagnostics({ logger });
-  const used = ['bridge-unreachable', 'bridge-rejected', 'bridge-error', 'bridge-timeout', 'start-failed', 'plugin-rejected', 'watchdog-gave-up'];
+  const used = ['bridge-unreachable', 'bridge-rejected', 'bridge-error', 'bridge-timeout', 'start-failed', 'plugin-rejected', 'watchdog-gave-up', 'token-not-applied'];
   for (const code of used) {
     diagnostics.note({ code, detail: code });
     check(`${code} is a declared code`, known.has(code));
   }
   check('no duplicate entries after a clear', (diagnostics.clear(), diagnostics.recent().length === 0));
+}
+
+// 5. The level is honoured: `level` used to be a parameter that did nothing,
+// so a hint and a failure both went out as warnings.
+{
+  const seen = [];
+  const logger = {
+    warn: (line) => seen.push(['warn', String(line)]),
+    error: (line) => seen.push(['error', String(line)]),
+    info: () => {},
+    debug: () => {},
+  };
+  const diagnostics = createDiagnostics({ logger });
+  diagnostics.note({ code: 'bridge-error', detail: 'POST /api/play/text: HTTP 500' });
+  diagnostics.note({ code: 'token-not-applied', detail: 'restart the bridge to apply it', level: 'warn' });
+  check('an unqualified note goes to the error sink', seen[0]?.[0] === 'error');
+  check('an explicit warn note goes to the warn sink', seen[1]?.[0] === 'warn');
+
+  const lines = [];
+  const warnOnly = createDiagnostics({ logger: { warn: (line) => lines.push(String(line)) } });
+  warnOnly.note({ code: 'bridge-error', detail: 'this logger has no error sink' });
+  check('a logger without an error sink still gets the line', lines.length === 1);
+  check('a logger with no sinks at all does not throw', (() => {
+    try {
+      createDiagnostics({ logger: {} }).note({ code: 'bridge-error', detail: 'nowhere to say it' });
+      return true;
+    } catch {
+      return false;
+    }
+  })());
 }
 
 if (failures > 0) {
