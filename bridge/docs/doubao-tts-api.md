@@ -60,7 +60,7 @@
 | |   * seed-icl-1.0-concurr（声音复刻1.0并发版） |\
 | |   * seed-icl-2.0 (声音复刻2.0字符版) |\
 | | |\
-| |**注意：** |\
+| |**注意**： |\
 | | |\
 | |* "豆包语音合成模型1.0"的资源信息ID仅适用于["豆包语音合成模型1.0"的音色](https://www.volcengine.com/docs/6561/1257544) |\
 | |* "豆包语音合成模型2.0"的资源信息ID仅适用于["豆包语音合成模型2.0"的音色](https://www.volcengine.com/docs/6561/1257544) |Yes |* 豆包语音合成模型1.0： |\
@@ -263,7 +263,7 @@ TTS服务参数具体如下：
 |req_params.additions.max_length_to_filter_parenthesis |是否过滤括号内的部分，0为不过滤，100为过滤 | |int |100 |
 | | | | | | \
 |req_params.additions.explicit_language（明确语种） |仅读指定语种的文本 |\
-| |**精品音色和 声音复刻ICL 1.0场景：** |\
+| |**精品音色和 声音复刻ICL 1.0场景**： |\
 | | |\
 | |* 不给定参数，正常中英混 |\
 | |* `crosslingual` 启用多语种前端（包含`zh/en/ja/es-ms/id/pt-br`） |\
@@ -274,7 +274,7 @@ TTS服务参数具体如下：
 | |* `id` 仅印尼 |\
 | |* `pt-br` 仅巴葡 |\
 | | |\
-| |**DIT 声音复刻场景：** |\
+| |**DIT 声音复刻场景**： |\
 | |当音色是使用model_type=2训练的，即采用dit标准版效果时，建议指定明确语种，目前支持：  |\
 | | |\
 | |* 不给定参数，启用多语种前端`zh,en,ja,es-mx,id,pt-br,de,fr` |\
@@ -294,7 +294,7 @@ TTS服务参数具体如下：
 | |* `zh-cn` 中文为主，支持中英混  |\
 | |* `en` 仅英文 |\
 | | |\
-| |**声音复刻 ICL2.0场景：** |\
+| |**声音复刻 ICL2.0场景**： |\
 | |当音色是使用model_type=4训练的 |\
 | | |\
 | |* 不给定参数，正常中英混 |\
@@ -872,7 +872,7 @@ mix请求参数示例：
 2. `CancelSession`包发送的最佳时机：收到SessionStarted后，发送FinishSession之前。
 3. 客户端在收到`SessionCanceled`包之后，如果想要继续合成，需要重新创建session，即重新执行`StartSession`。
 
-**Connection 类：**
+**Connection 类**：
 
 * `StartConnection`包（RequestMeta）：
 
@@ -989,7 +989,7 @@ mix请求参数示例：
 | | | |* 既可能是客户端错误，又可能是服务端错误 |\
 | | | |* 仅含status_code和message字段 | |
 
-**Session 类：**
+**Session 类**：
 
 * `StartSession`包（RequestMeta）：
 
@@ -1155,7 +1155,7 @@ mix请求参数示例：
 * `SessionFailed`包（ResponseMeta）：与`SessionFinished`类似
 * `SessionCanceled`包（ResponseMeta）：与`SessionFinished`类似
 
-**数据类：**
+**数据类**：
 
 * 音频，含Event（以上行`Event_TaskRequest`事件为例）：
 

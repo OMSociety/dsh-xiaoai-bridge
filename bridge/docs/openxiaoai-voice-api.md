@@ -60,7 +60,7 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 检查服务状态。
 
-**Response:**
+**Response**:
 ```json
 {
   "success": true,
@@ -86,7 +86,7 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 获取当前音箱的播放状态。
 
-**Response:**
+**Response**:
 ```json
 {
   "success": true,
@@ -96,7 +96,7 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 }
 ```
 
-**字段说明：**
+**字段说明**：
 
 | 字段 | 说明 |
 |------|------|
@@ -110,13 +110,13 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 唤醒小爱音箱（相当于说"小爱同学"）。
 
-**Request Body:**
+**Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | silent | bool | 否 | 是否静默唤醒（不播放提示音），默认 `false` |
 
-**Example:**
+**Example**:
 ```bash
 curl -X POST http://{host}:9092/api/wakeup \
   -H "Content-Type: application/json" \
@@ -131,7 +131,7 @@ curl -X POST http://{host}:9092/api/wakeup \
 
 打断当前播放（相当于按音箱的暂停/打断键）。
 
-**Example:**
+**Example**:
 ```bash
 curl -X POST http://{host}:9092/api/interrupt
 ```
@@ -144,14 +144,14 @@ curl -X POST http://{host}:9092/api/interrupt
 
 上传音频文件并播放。
 
-**Parameters:**
+**Parameters**:
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | file | file | 是 | 音频文件 (mp3, wav, etc.) |
 | blocking | bool | 否 | 是否阻塞等待播放完成，默认 `false` |
 
-**Example (curl):**
+**Example (curl)**:
 ```bash
 curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
   -F "file=@/path/to/audio.mp3"
@@ -165,7 +165,7 @@ curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
 
 使用小爱自带 TTS 播放文字。
 
-**Request Body:**
+**Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -173,7 +173,7 @@ curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
 | blocking | bool | 否 | 是否阻塞等待，默认 `false` |
 | timeout | int | 否 | 超时时间（毫秒），默认 600000 |
 
-**Example:**
+**Example**:
 ```bash
 curl -X POST http://{host}:9092/api/play/text \
   -H "Content-Type: application/json" \
@@ -188,7 +188,7 @@ curl -X POST http://{host}:9092/api/play/text \
 
 播放远程音频 URL。
 
-**Request Body:**
+**Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -196,7 +196,7 @@ curl -X POST http://{host}:9092/api/play/text \
 | blocking | bool | 否 | 是否阻塞等待，默认 `false` |
 | timeout | int | 否 | 超时时间（毫秒），默认 600000 |
 
-**Example:**
+**Example**:
 ```bash
 curl -X POST http://{host}:9092/api/play/url \
   -H "Content-Type: application/json" \
@@ -211,7 +211,7 @@ curl -X POST http://{host}:9092/api/play/url \
 
 使用豆包（字节跳动火山引擎）语音合成播放。
 
-**Request Body:**
+**Request Body**:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -225,14 +225,14 @@ curl -X POST http://{host}:9092/api/play/url \
 | context_texts | array | 否 | 上下文指令（仅 2.0 音色支持） |
 | blocking | bool | 否 | 是否阻塞等待（默认 `false`） |
 
-**Example - 基础调用:**
+**Example - 基础调用**:
 ```bash
 curl -X POST http://{host}:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
   -d '{"text": "你好，我是豆包语音助手"}'
 ```
 
-**Example - 指定音色和情感:**
+**Example - 指定音色和情感**:
 ```bash
 curl -X POST http://{host}:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
@@ -243,7 +243,7 @@ curl -X POST http://{host}:9092/api/tts/doubao \
   }'
 ```
 
-**Example - 2.0 音色 + 指令控制:**
+**Example - 2.0 音色 + 指令控制**:
 ```bash
 curl -X POST http://{host}:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
@@ -262,13 +262,13 @@ curl -X POST http://{host}:9092/api/tts/doubao \
 
 获取豆包 TTS 可用音色列表。
 
-**Query Parameters:**
+**Query Parameters**:
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | version | string | 否 | 版本筛选：`"1.0"`, `"2.0"`, `"all"` |
 
-**Example:**
+**Example**:
 ```bash
 # 获取所有版本概览
 curl http://{host}:9092/api/tts/doubao_voices
