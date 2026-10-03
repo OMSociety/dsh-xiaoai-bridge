@@ -38,6 +38,17 @@ def load_config_module(force_reload: bool = False):
         raise ImportError(f"Failed to load config module from: {config_path}")
 
     module = importlib.util.module_from_spec(spec)
+    # 只有 exec 成功后才把模块对象登记进 sys.modules：exec 中途抛异常时它是个
+    # 半成品（属性可能只定义了一半），先塞进去会让别处 `import config` 拿到它。
+    # 失败时保留原来的模块 —— 热重载失败要继续用旧配置。
+    previous_module = sys.modules.get("config")
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        if previous_module is not None:
+            sys.modules["config"] = previous_module
+        else:
+            sys.modules.pop("config", None)
+        raise
     sys.modules["config"] = module
-    spec.loader.exec_module(module)
     return module

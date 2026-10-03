@@ -1,10 +1,10 @@
-import asyncio
 import os
 from typing import Literal
 
 import open_xiaoai_server
 
 from core.ref import get_xiaoai, set_speaker
+from core.utils.background import spawn_background
 from core.utils.base import json_decode, json_encode
 from core.utils.logger import logger
 from core.utils.playback_gate import PlaybackGate, estimate_speech_seconds
@@ -89,8 +89,20 @@ class SpeakerManager:
             data = json_encode({"text": text or "你好", "save": 0})
             command = f"ubus call mibrain text_to_speech '{data}'"
 
-        # 异步播报：命令立刻返回，声音还在后面慢慢放，只能按文本估时长。
-        PlaybackGate.hold_for(estimate_speech_seconds(text if not url else ""))
+        # 异步播报：命令立刻返回，声音还在后面慢慢放。闸门不再按文本估时，
+        # 而是由设备自己上报的播放状态驱动（AudioPlayer 的 playing/idle）：
+        #   * URL 播放没有文本可估，按空串估出来的 1.5 秒几乎立刻到期，声音
+        #     还在放闸门就开了（回声进来）；
+        #   * 估时也盖不住"命令发出~首条 playing 事件"之间的空窗。
+        # `max_seconds` 只是设备不上报事件时的兜底上限，不是关闭时刻。
+        if url:
+            # URL 没有文本可估，兜底用请求的 timeout（毫秒）。
+            max_hold_seconds = max(timeout, 0) / 1000
+        else:
+            # 文本播报仍以估时作为兜底上限（与旧行为一致的最长关闸时间），
+            # 设备上报放完时可以提前打开。
+            max_hold_seconds = estimate_speech_seconds(text)
+        PlaybackGate.hold_until_device_stops(max_seconds=max_hold_seconds)
 
         res = await self.run_shell(command, timeout=timeout)
         return '"code": 0' in res.stdout if res else False
@@ -121,8 +133,9 @@ class SpeakerManager:
         # 异步播放本机文件时闸门无从估算时长，只保证最短关闸时间；
         # 需要严格半双工的调用方应使用 blocking=True。
         PlaybackGate.hold_for(estimate_speech_seconds(""))
-        asyncio.create_task(
-            open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
+        spawn_background(
+            open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate),
+            name=f"speaker-play-file-{os.path.basename(file_path)}",
         )
         return True
 

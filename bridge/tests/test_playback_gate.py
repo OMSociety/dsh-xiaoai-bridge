@@ -128,6 +128,56 @@ class PlaybackGateTest(_GateTestCase):
         self.gate.set_device_playing(False)
         self.assertTrue(self.gate.closed)
 
+    def test_async_hold_is_released_by_the_real_end_of_playback(self):
+        """异步 ubus 播报：设备报"放完了"就开闸，不等估时。"""
+        self.gate.hold_until_device_stops(max_seconds=30.0)
+        self.assertTrue(self.gate.closed)
+        self.gate.set_device_playing(True)
+        self.assertTrue(self.gate.closed)
+        self.gate.set_device_playing(False)
+        self.assertFalse(self.gate.closed)
+
+    def test_a_bare_idle_event_does_not_open_an_async_hold(self):
+        """首条 playing 之前的 idle 不能当成"放完了" —— 那正是过去的空窗。"""
+        self.gate.hold_until_device_stops(max_seconds=30.0)
+        self.gate.set_device_playing(False)
+        self.assertTrue(self.gate.closed)
+        self.gate.reset()
+
+    def test_async_hold_falls_back_to_its_deadline(self):
+        """设备一个事件都不上报时，兜底上限到期也要开闸（不能永久静音）。"""
+        self.gate.hold_until_device_stops(max_seconds=0.05)
+        self.assertTrue(self.gate.closed)
+        asyncio.run(asyncio.sleep(0.08))
+        self.assertFalse(self.gate.closed)
+
+    def test_zero_deadline_does_not_hold_at_all(self):
+        self.gate.hold_until_device_stops(max_seconds=0)
+        self.assertFalse(self.gate.closed)
+
+    def test_wait_until_open_returns_when_the_gate_reopens(self):
+        async def scenario():
+            self.gate.hold_until_device_stops(max_seconds=5.0)
+            self.gate.set_device_playing(True)
+
+            async def finish():
+                await asyncio.sleep(0.05)
+                self.gate.set_device_playing(False)
+
+            finisher = asyncio.ensure_future(finish())
+            reopened = await self.gate.wait_until_open(timeout=2.0)
+            await finisher
+            return reopened
+
+        self.assertTrue(asyncio.run(scenario()))
+
+    def test_wait_until_open_gives_up_at_the_deadline(self):
+        async def scenario():
+            self.gate.hold_until_device_stops(max_seconds=30.0)
+            return await self.gate.wait_until_open(timeout=0.05, poll_interval=0.01)
+
+        self.assertFalse(asyncio.run(scenario()))
+
     def test_estimate_counts_characters_not_bytes(self):
         estimate = self.gate_module.estimate_speech_seconds
         self.assertEqual(self.gate_module.MIN_ASYNC_HOLD_SECONDS, estimate(""))
@@ -265,7 +315,7 @@ class SpeakerGateTest(_GateTestCase):
         self.assertEqual([True], seen)
         self.assertFalse(self.gate.closed)
 
-    def test_async_tts_holds_the_gate_for_the_estimate(self):
+    def test_async_tts_holds_the_gate_until_the_device_reports_back(self):
         async def fake_shell(command, timeout=None):
             return types.SimpleNamespace(exit_code=0, stdout='"code": 0')
 
@@ -273,8 +323,30 @@ class SpeakerGateTest(_GateTestCase):
         ok = asyncio.run(self.speaker.play(text="你好你好你好你好", blocking=False))
 
         self.assertTrue(ok)
-        # 命令立刻返回，但闸门要按文本估的 2 秒继续关着
+        # 命令立刻返回，声音还在后面放：闸门要一直关着，直到设备报"放完了"，
+        # 文本估时只是设备不上报事件时的兜底上限。
         self.assertTrue(self.gate.closed)
+        self.gate.set_device_playing(True)
+        self.gate.set_device_playing(False)
+        self.assertFalse(self.gate.closed)
+
+    def test_async_url_playback_waits_for_the_device_not_the_estimate(self):
+        """URL 没有文本可估：过去按空文本估成 1.5 秒，长音频提前开闸。"""
+
+        async def fake_shell(command, timeout=None):
+            return types.SimpleNamespace(exit_code=0, stdout='"code": 0')
+
+        self._stub_shell(fake_shell)
+        ok = asyncio.run(
+            self.speaker.play(url="http://example.com/long.mp3", blocking=False)
+        )
+
+        self.assertTrue(ok)
+        self.assertTrue(self.gate.closed)
+        self.gate.set_device_playing(True)
+        self.assertTrue(self.gate.closed)
+        self.gate.set_device_playing(False)
+        self.assertFalse(self.gate.closed)
 
 
 class ListeningWindowTest(_GateTestCase):

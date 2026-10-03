@@ -240,7 +240,13 @@ class MainApp:
                     self.config.reload_app_config()
                     logger.info(f"[Config] Reloaded runtime config from {config_path}")
             except Exception as exc:
-                logger.warning(f"[Config] Failed to reload config: {exc}")
+                # 先把 mtime 记下再重载，所以失败后不会每秒刷屏：重试靠文件
+                # 下一次变化（改好并保存后 1 秒内生效），旧配置继续生效。
+                logger.warning(
+                    f"[Config] Failed to reload config from {config_path}: "
+                    f"{type(exc).__name__}: {exc}; keeping the previous config, "
+                    "will retry when the file changes again"
+                )
 
             time.sleep(1)
 

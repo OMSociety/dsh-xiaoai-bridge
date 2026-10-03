@@ -2,6 +2,10 @@
 """
 Compare end-to-end streaming latency between different Doubao audio formats.
 
+手动脚本，不是单测：需要真设备与真配置，会走真实 TTS 链路。用
+`python tests/test_tts_latency.py` 跑；`tests/conftest.py` 已把本文件排除在
+pytest 默认收集之外。
+
 Usage:
   python3 tests/test_tts_latency.py
   python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 6

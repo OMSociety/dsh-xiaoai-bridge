@@ -267,7 +267,12 @@ class ExternalConversationController:
         # 后者会立即清掉 Future，导致后续 _wait_response 拿不到回复
         run_id = await self.backend._send_and_track(full_text)
         await self._play_send_sound()
-        response = await self.backend._wait_response(run_id) if run_id else None
+        # `_wait_response_and_release`（而不是裸 `_wait_response`）顺手清掉本轮
+        # 登记的 TTS 音色：后者的 finally 只清 events/texts，漏掉音色就会每轮
+        # 在 `_response_tts_speakers` 里留一条。
+        response = (
+            await self.backend._wait_response_and_release(run_id) if run_id else None
+        )
         if response is None:
             logger.warning(f"No response from {self.BACKEND_NAME}", module=self.LOG_MODULE)
             speaker = get_speaker()

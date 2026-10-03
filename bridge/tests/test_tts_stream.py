@@ -2,6 +2,10 @@
 """
 Smoke test Doubao streaming TTS without XiaoAI speaker playback.
 
+手动脚本，不是单测：需要真设备与真配置（真流式 TTS 链路）。用
+`python tests/test_tts_stream.py` 跑；`tests/conftest.py` 已把本文件排除在
+pytest 默认收集之外。
+
 Usage:
   python3 tests/test_tts_stream.py
   python3 tests/test_tts_stream.py --speaker-id S_xxx --resource-id seed-icl-2.0

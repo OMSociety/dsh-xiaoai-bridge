@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 
+from core.utils.background import spawn_background
 from core.utils.base import get_env
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
@@ -183,7 +184,12 @@ class OpenAIManager:
         if run_id is None:
             return None
         if not wait_response:
-            asyncio.create_task(cls._wait_response(run_id))
+            # fire-and-forget 也要有人收尾（清 `_response_tts_speakers`），
+            # 且任务必须持强引用，否则这条等回复的协程可能被 GC 回收。
+            spawn_background(
+                cls._wait_response_and_release(run_id),
+                name=f"openai-wait-response-{run_id}",
+            )
             return run_id
         try:
             return await cls._wait_response(run_id)
@@ -196,7 +202,10 @@ class OpenAIManager:
         if run_id is None:
             return None
         if not wait_response:
-            asyncio.create_task(cls._wait_and_play_response(run_id))
+            spawn_background(
+                cls._wait_and_play_response(run_id),
+                name=f"openai-wait-and-play-{run_id}",
+            )
             return run_id
         try:
             response_text = await cls._wait_response(run_id)
@@ -223,7 +232,10 @@ class OpenAIManager:
         cls._response_texts[run_id] = ""
         cls._response_tts_speakers[run_id] = cls.get_tts_speaker_for_session_key()
         logger.user_speech(text, module=f"OpenAI({cls._session_key})")
-        asyncio.create_task(cls._run_chat_completion(run_id, text))
+        spawn_background(
+            cls._run_chat_completion(run_id, text),
+            name=f"openai-chat-completion-{run_id}",
+        )
         return run_id
 
     @classmethod
@@ -241,6 +253,20 @@ class OpenAIManager:
         finally:
             cls._response_events.pop(run_id, None)
             cls._response_texts.pop(run_id, None)
+
+    @classmethod
+    async def _wait_response_and_release(cls, run_id: str) -> str | None:
+        """等回复，并把本轮登记的 TTS 音色一并释放。
+
+        `_wait_response` 的 finally 只清 events/texts；fire-and-forget 路径
+        没有外层调用者来 pop 音色，漏掉它每说一句就在 `_response_tts_speakers`
+        里积一条，长跑进程内存单调增长。所有返回路径（正常/超时/异常）都在
+        这里收尾。
+        """
+        try:
+            return await cls._wait_response(run_id)
+        finally:
+            cls._response_tts_speakers.pop(run_id, None)
 
     @classmethod
     async def _run_chat_completion(cls, run_id: str, text: str):

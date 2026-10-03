@@ -2,6 +2,10 @@
 """
 Test Doubao TTS - supports compare mode and normal test mode (MP3 playback)
 
+手动脚本，不是单测：需要真设备与真配置，`--play` 会让音箱直接出声。用
+`python tests/test_tts.py` 跑（见下面用法）；`tests/conftest.py` 已把本文件
+排除在 pytest 默认收集之外。
+
 Usage:
   python test_tts.py              # Normal mode: synthesize MP3 and play
   python test_tts.py --compare    # Compare mode: compare ogg_opus vs mp3

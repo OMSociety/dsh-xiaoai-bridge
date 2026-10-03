@@ -7,17 +7,77 @@ import asyncio
 import json
 import os
 import tempfile
-from collections.abc import Coroutine
-from typing import Any
+import threading
+import weakref
 
 import open_xiaoai_server
 from aiohttp import web
 from core.ref import get_speaker, get_xiaoai
 from core.services.api_auth import auth_mode, bearer_auth
 from core.services.tts.doubao import DoubaoTTS
+from core.utils.background import spawn_background
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
 from core.utils.playback_gate import PlaybackGate, estimate_speech_seconds
+
+
+# ---- 播报串行化 ----
+# 插件侧每个会话各自独立（lib/auto-speak.js），定时提醒与对话回复会同时打
+# `/api/play/text`；两路 ubus TTS 撞在一起就是叠音。桥接器是唯一能兜住的地方：
+# 同一时刻只允许一路真正出声，其余在锁上排队。队列有界，满了立刻回明确的
+# 503（调用方拿到 ok:false 会记一条警告），不无限堆积。
+MAX_PENDING_PLAYS = 8
+_pending_plays = 0
+# asyncio.Lock 首次 await 后会绑定当时的事件循环，跨循环复用会抛
+# "bound to a different event loop"，所以按 loop 各持一把（测试会换 loop）。
+_play_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+_play_locks_guard = threading.Lock()
+
+
+def _playback_lock() -> asyncio.Lock:
+    """取当前事件循环的播报锁。"""
+    loop = asyncio.get_running_loop()
+    with _play_locks_guard:
+        lock = _play_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _play_locks[loop] = lock
+        return lock
+
+
+def _reserve_play_slot() -> bool:
+    """占一个队列名额；队列满时返回 False，调用方据此立刻回失败。"""
+    global _pending_plays
+    if _pending_plays >= MAX_PENDING_PLAYS:
+        return False
+    _pending_plays += 1
+    return True
+
+
+def _release_play_slot() -> None:
+    """归还队列名额。"""
+    global _pending_plays
+    if _pending_plays > 0:
+        _pending_plays -= 1
+
+
+async def _play_text_serially(speaker, text: str, timeout: int) -> None:
+    """排队后真正出声，直到设备放完才让出锁。
+
+    `speaker.play(blocking=False)` 只是把文本交给设备就返回，声音还在后面放；
+    锁必须等到闸门重新打开（设备上报播完，或闸门的兜底到期）才算这一路结束，
+    否则第二路的命令会叠在第一路的声音上。`timeout` 兼作等待上限。
+    """
+    try:
+        async with _playback_lock():
+            await speaker.play(text=text, blocking=False, timeout=timeout)
+            await PlaybackGate.wait_until_open(timeout=max(timeout, 0) / 1000)
+    except Exception as exc:
+        logger.error(f"[APIServer] Background text playback failed: {exc}")
+    finally:
+        _release_play_slot()
 
 
 class APIServer:
@@ -38,6 +98,8 @@ class APIServer:
     def _setup_routes(self):
         """Setup API routes"""
         self.app.router.add_post("/api/play/text", self.handle_play_text)
+        # `/api/play/url` 是上游遗留端点：本插件侧零调用方（插件只走
+        # /api/play/text）。保留接口不动，详见 handle_play_url 的说明。
         self.app.router.add_post("/api/play/url", self.handle_play_url)
         self.app.router.add_post("/api/play/file", self.handle_play_file)
         self.app.router.add_get("/api/status", self.handle_get_status)
@@ -47,23 +109,6 @@ class APIServer:
         # TTS endpoints
         self.app.router.add_post("/api/tts/doubao", self.handle_tts_doubao)
         self.app.router.add_get("/api/tts/doubao_voices", self.handle_tts_voices)
-
-    def _create_background_task(
-        self,
-        coro: Coroutine[Any, Any, Any],
-        name: str,
-    ) -> asyncio.Task:
-        """Create a background task and log any unhandled exception."""
-        task = asyncio.create_task(coro)
-
-        def _log_task_result(done_task: asyncio.Task):
-            try:
-                done_task.result()
-            except Exception as exc:
-                logger.error(f"[APIServer] Background task failed ({name}): {exc}")
-
-        task.add_done_callback(_log_task_result)
-        return task
 
     async def start(self):
         """Start the HTTP server"""
@@ -100,6 +145,10 @@ class APIServer:
                 "blocking": false,        # optional, default false
                 "timeout": 60000          # optional, timeout in ms
             }
+
+        播报是**桥接器侧串行**的：同一时刻只有一路真正出声，其余排队。非阻塞
+        请求在入队后立刻返回（响应里 `queued`/`serialized` 说明这一点），真正
+        的 TTS 在后台任务里持锁完成；队列满则回 503 + `queued: false`。
         """
         try:
             data = await request.json()
@@ -123,11 +172,43 @@ class APIServer:
 
             # Run in background to not block the response
             if blocking:
-                result = await speaker.play(text=text, blocking=True, timeout=timeout)
+                if not _reserve_play_slot():
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "error": "Playback queue is full",
+                            "queued": False,
+                        },
+                        status=503,
+                    )
+                try:
+                    async with _playback_lock():
+                        result = await speaker.play(text=text, blocking=True, timeout=timeout)
+                finally:
+                    _release_play_slot()
                 return web.json_response({"success": result})
             else:
-                asyncio.create_task(speaker.play(text=text, blocking=False, timeout=timeout))
-                return web.json_response({"success": True, "message": "Playing text in background"})
+                if not _reserve_play_slot():
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "error": "Playback queue is full",
+                            "queued": False,
+                        },
+                        status=503,
+                    )
+                # 持强引用的后台任务：这条协程可能被 GC 回收（见 utils/background.py），
+                # 而且要串行到设备真的放完才让出锁。
+                spawn_background(
+                    _play_text_serially(speaker, text, timeout),
+                    name="api-play-text",
+                )
+                return web.json_response({
+                    "success": True,
+                    "message": "Playing text in background",
+                    "queued": True,
+                    "serialized": True,
+                })
 
         except json.JSONDecodeError:
             return web.json_response(
@@ -145,6 +226,11 @@ class APIServer:
         """
         POST /api/play/url
         Play audio from URL
+
+        上游遗留端点：本插件的任何调用方都不用它（插件只走 `/api/play/text`，
+        `lib/**` 里 grep `playUrl` 零命中），保留是为了不破坏上游 API 兼容。
+        它对应的 `speaker.play(url=..., blocking=False)` 已不再按文本估时长关
+        闸门，而是等设备上报的播放结束事件（见 utils/playback_gate.py）。
 
         Request body:
             {
@@ -177,7 +263,10 @@ class APIServer:
                 result = await speaker.play(url=url, blocking=True, timeout=timeout)
                 return web.json_response({"success": result})
             else:
-                asyncio.create_task(speaker.play(url=url, blocking=False, timeout=timeout))
+                spawn_background(
+                    speaker.play(url=url, blocking=False, timeout=timeout),
+                    name="api-play-url",
+                )
                 return web.json_response({"success": True, "message": "Playing URL in background"})
 
         except json.JSONDecodeError:
@@ -282,7 +371,7 @@ class APIServer:
                 })
             else:
                 # Run in background
-                asyncio.create_task(play_audio())
+                spawn_background(play_audio(), name=f"api-play-file-{filename}")
                 return web.json_response({
                     "success": True,
                     "message": f"Playing file: {filename}",
