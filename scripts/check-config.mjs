@@ -79,10 +79,15 @@ eq(splitList(undefined), [], 'absent text');
 
 console.log('render-config: overrides');
 const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', behaviorStyle: '', asrBackend: '' });
-// Two keys are always written because the plugin owns them outright: the
-// conversation timeout (same 20 seconds as the template) and the single-shot
-// switch, whose false default is the documented behavior.
-eq(bare, { wakeup: { timeout: DEFAULTS.wakeupTimeout }, dsh: { continuous_conversation: DEFAULTS.continuousConversation } }, 'emptied fields fall back to the template default');
+// Four values are always written because the plugin owns them outright: the
+// conversation timeout (same 20 seconds as the template), the single-shot switch
+// (whose false default is the documented behavior) and the two Doubao playback
+// controls the settings page shows (streaming on, speed 1.0).
+eq(bare, {
+  wakeup: { timeout: DEFAULTS.wakeupTimeout },
+  dsh: { continuous_conversation: DEFAULTS.continuousConversation, tts_speed: DEFAULTS.ttsSpeed },
+  tts: { doubao: { stream: DEFAULTS.doubaoStream } },
+}, 'emptied fields fall back to the template default');
 const full = buildOverrides({
   ...DEFAULTS,
   wakeKeywords: '你好小智\n小爱小爱',
@@ -119,20 +124,31 @@ eq(
   'dsh.continuous_conversation flips with the switch',
 );
 // The provider follows the switch, but only for a provider the bridge can load:
-// an empty choice keeps the router's own voice-id rule, and the reserved `mimo`
-// choice must never reach the bridge, which would raise on it.
+// an empty choice keeps the router's own voice-id rule.
 ok(!('tts_provider' in bare.dsh), 'an empty provider choice writes nothing');
 eq(buildOverrides({ ...DEFAULTS, ttsProvider: 'xiaoai' }).dsh.tts_provider, 'xiaoai', 'the native provider is written');
-ok(!('tts_provider' in buildOverrides({ ...DEFAULTS, ttsProvider: 'mimo' }).dsh), 'the reserved provider is not written');
-const reservist = buildOverrides({
+eq(buildOverrides({ ...DEFAULTS, ttsProvider: 'doubao' }).dsh.tts_provider, 'doubao', 'the Doubao provider is written');
+const doubaoFull = buildOverrides({
   ...DEFAULTS,
-  ttsProvider: 'mimo',
-  mimoBaseUrl: 'https://mimo.invalid/v1/audio/speech',
-  mimoApiKeyCredential: 'MIMO_API_KEY',
-  mimoModel: 'mimo-tts',
-  mimoVoice: 'zh_female_1',
+  doubaoAppId: 'app-1',
+  doubaoSpeaker: 'zh_female_1',
+  doubaoAudioFormat: 'ogg_opus',
+  ttsSpeed: 1.5,
 });
-ok(!Object.keys(reservist.dsh).some((key) => key.includes('mimo')), 'the MiMo placeholders stay out of the bridge config');
+eq(doubaoFull.tts.doubao.app_id, 'app-1', 'tts.doubao.app_id follows the settings page');
+eq(doubaoFull.tts.doubao.default_speaker, 'zh_female_1', 'tts.doubao.default_speaker follows the settings page');
+eq(doubaoFull.tts.doubao.audio_format, 'ogg_opus', 'tts.doubao.audio_format follows the settings page');
+eq(doubaoFull.tts.doubao.stream, true, 'tts.doubao.stream follows the switch');
+eq(doubaoFull.dsh.tts_speed, 1.5, 'dsh.tts_speed follows the speed field');
+// The Access Token travels through the child environment, never this file.
+ok(
+  !JSON.stringify(doubaoFull).includes('access_key'),
+  'the Doubao Access Token never reaches config.py',
+);
+const doubaoBare = buildOverrides({ ...DEFAULTS, doubaoAppId: '', doubaoSpeaker: '', doubaoAudioFormat: '' });
+eq(doubaoBare.tts.doubao.app_id, undefined, 'an emptied App ID writes nothing');
+eq(doubaoBare.tts.doubao.default_speaker, undefined, 'an emptied voice writes nothing');
+eq(doubaoBare.tts.doubao.audio_format, undefined, 'an emptied audio format writes nothing');
 eq(full.asr.model, 'paraformer', 'asr.model');
 
 // Half of this plugin's settings never reach config.py: they become the child
@@ -162,6 +178,7 @@ eq(childEnvBare.AUDIO_INPUT_ENABLE, '1', 'audio input stays enabled');
 eq(childEnvBare.CONFIG_PATH, 'C:\\data\\config.py', 'the child is pointed at the rendered config');
 eq(childEnvBare.API_SERVER_PORT, '9092', 'the API Server port is a string for the child');
 ok(!('XIAOAI_API_TOKEN' in childEnvBare), 'the token is added by the caller, never here');
+ok(!('DOUBAO_ACCESS_KEY' in childEnvBare), 'the Doubao Access Token is added by the caller too');
 
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-config-'));
 try {
@@ -234,6 +251,8 @@ print(json.dumps({
     "dsh_fallback_text": module.APP_CONFIG["dsh"]["fallback_text"],
     "dsh_continuous_conversation": module.APP_CONFIG["dsh"]["continuous_conversation"],
     "dsh_tts_provider": module.APP_CONFIG["dsh"].get("tts_provider"),
+    "dsh_tts_speed": module.APP_CONFIG["dsh"].get("tts_speed"),
+    "tts_doubao_stream": module.APP_CONFIG["tts"]["doubao"].get("stream"),
     "asr_model": module.APP_CONFIG["asr"]["model"],
     "hooks": [callable(module.before_wakeup), callable(module.after_wakeup)],
     "untouched_default": module.APP_CONFIG["kws"]["keywords_score"],
@@ -263,6 +282,8 @@ print(json.dumps({
   eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
   eq(loaded.dsh_continuous_conversation, true, 'the switch reaches the bridge as a real boolean');
   eq(loaded.dsh_tts_provider, 'xiaoai', 'the provider switch reaches the bridge as a string');
+  eq(loaded.dsh_tts_speed, DEFAULTS.ttsSpeed, 'the Doubao speed reaches the bridge as a number');
+  eq(loaded.tts_doubao_stream, true, 'the streaming switch reaches the bridge as a real boolean');
   eq(loaded.asr_model, 'paraformer', 'asr.model');
   eq(loaded.hooks, [true, true], 'both wake hooks survive the overlay');
   eq(loaded.hook_globals_match, true, 'the hooks see the overridden values, not the template ones');
@@ -286,9 +307,10 @@ print(json.dumps({
   ok(!sparseSource.includes('"rule_prompt"'), 'template-only keys are never restated in the generated file');
   ok(sparseSource.includes('"continuous_conversation": False'), 'a false switch is still written, as a Python literal');
   ok(!sparseSource.includes('tts_provider'), 'the provider stays out of the file while the choice is empty');
-  ok(!sparseSource.includes('mimo'), 'the reserved MiMo fields never reach the generated file');
+  ok(sparseSource.includes('"stream": True'), 'a page-owned switch is written even at its default');
+  ok(sparseSource.includes('"tts_speed": 1'), 'a page-owned number is written even at its default');
   ok(!sparseSource.includes('response_timeout'), 'template-only keys are never restated in the generated file');
-  ok(!sparseSource.includes('doubao'), 'untouched sections stay out of the generated file');
+  ok(!sparseSource.includes('openai'), 'untouched sections stay out of the generated file');
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

@@ -8,6 +8,7 @@ import dsh_xiaoai_server
 from core.services.tts.doubao import DoubaoTTS
 from core.services.tts.mlx_audio import MLXAudioTTS
 from core.services.tts.openai import PLAYBACK_SUPPORTED_FORMATS, OpenAITTS
+from core.utils.base import get_env
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
 from core.utils.playback_gate import PlaybackGate
@@ -93,7 +94,11 @@ class TTSRouter:
     ) -> None:
         tts_config = ConfigManager.instance().get_app_config("tts.doubao", {})
         app_id = tts_config.get("app_id")
-        access_key = tts_config.get("access_key")
+        # The Access Token lives in the DSH credential store and reaches the
+        # bridge through the plugin's spawn environment, so prefer the env var
+        # and treat the config value as a fallback for manual runs — the same
+        # rule `core/dsh.py` applies to XIAOAI_API_TOKEN.
+        access_key = get_env("DOUBAO_ACCESS_KEY") or tts_config.get("access_key")
         if not app_id or not access_key:
             raise ValueError("Doubao TTS credentials are not configured")
 

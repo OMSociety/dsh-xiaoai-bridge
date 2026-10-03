@@ -60,7 +60,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 要守住的边界：
 
 - Rust 导出面就是 Python 侧的契约。`lib.rs` 注册 `start_server` / `start_recording` / `stop_recording` / `start_playing` / `stop_playing` / `run_shell` / `on_output_data`；`native/src/tts/mod.rs` 另注册 `tts_play` / `tts_play_background` / `tts_stream_play` / `tts_stream_play_background` / `tts_stream_collect` / `begin_playback_session` / `stop_tts_playback` / `decode_audio` / `play_audio_file`。改名或改签名要同时改全部调用点，Python 侧没有任何类型检查兜底
-- 环境变量分两侧读：Python 侧是 `main.py` / `core/app.py` / `core/utils/*`；Rust 侧 `native/src/server.rs` 读 `AUDIO_INPUT_ENABLE`、`SILENT_START_ENABLE`、`DSH_XIAOAI_TOKEN`（`4399` 的客户端鉴权，留空即不鉴权）。API Server 的开关与监听地址只由环境变量决定，`config.py` 里没有 `api_server` 段。另有 `core/dsh.py` 读 `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST`（插件侧由 `lib/process.js` 按设置项写入）：它们是设备绑定随每次 `/asr` 提交的来源，改设备绑定要确认这两条没有被绕过
+- 环境变量分两侧读：Python 侧是 `main.py` / `core/app.py` / `core/utils/*`；Rust 侧 `native/src/server.rs` 读 `AUDIO_INPUT_ENABLE`、`SILENT_START_ENABLE`、`DSH_XIAOAI_TOKEN`（`4399` 的客户端鉴权，留空即不鉴权）。API Server 的开关与监听地址只由环境变量决定，`config.py` 里没有 `api_server` 段。另有 `core/dsh.py` 读 `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST`（插件侧由 `lib/process.js` 按设置项写入）：它们是设备绑定随每次 `/asr` 提交的来源，改设备绑定要确认这两条没有被绕过。豆包语音合成的凭据同理走两条：`core/services/tts/router.py` 的 `_play_doubao` 先读 `DOUBAO_ACCESS_KEY`（插件侧按设置项的凭据名从 DSH 凭据库取真值，写进子进程环境），取不到才回退渲染配置的 `tts.doubao.access_key`
 - 会话后端之间不互相调用；要出声一律走 `core/services/tts/router.py` 的 `TTSRouter`，不要在某个后端里直接实例化 provider
 - 设备命令集中在 `core/services/speaker.py`，**新代码不要另拼 shell**。既存例外只有 `core/xiaoai.py` 里那一份打断命令串与 `run_shell` 直调（历史遗留，改打断路径时两处都要看），它不是可以照抄的范例。Rust 导出的播放类函数（`on_output_data` / `play_audio_file` / `start_playing` / `tts_play*`）是**不带闸门的底层出口**，现有调用点分布在 `speaker.py`、`core/xiaoai.py`、`core/wakeup_session.py`、`core/services/api_server.py` 与 TTS router；新代码要出声就走 `speaker.play(...)` 或 `TTSRouter`，新增直调就必须自己承担闸门责任（这条与下一条是同一件事：直接调那些导出等于绕过闸门）
 - 任何播报路径都必须过 `core/utils/playback_gate.py` 的单例 `PlaybackGate`，不要自己另写一份计时。闸门由 `speaker.play()` 内部按 buffer 时长 `hold_for(...)` 关、放完自动放；`core/external_conversation.py` 里 `play(buffer=…)` 之后那个 `asyncio.sleep(len(_NOTIFY_PCM)/(24000*2))` 只是等这一句放完，**不是**闸门的替代品
@@ -68,7 +68,8 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 ## 修改契约
 
 - 改配置项：改 `bridge/config.py` 的默认值与注释。插件渲染的 `<dataDir>/config.py` 以它为模板，所以还要确认插件侧 `lib/render-config.js` 的 `buildOverrides()` 会写这个键，否则设置页改了不生效。跑 `pytest -q tests/test_config_loader.py`
-- 加 TTS provider：名字必须进 `core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS`，否则会被当未知 provider **回退**（`logger.warning` 记一条 `Unknown tts_provider=`，再按 `tts_speaker` 选 xiaoai / doubao），**不报错**——所以「没报错」不等于「接上了」。跑 `pytest -q tests/test_tts_router.py`。还要动插件侧两张表：`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`（不加就永远不把 `tts_provider` 写进渲染配置，设置页选中等于没选）与 `lib/config.js` 的 `TTS_PROVIDER_VALUES`（设置页能选什么，允许先于桥接器存在，那就是「预留」）
+- 加 TTS provider：名字必须进 `core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS`，否则会被当未知 provider **回退**（`logger.warning` 记一条 `Unknown tts_provider=`，再按 `tts_speaker` 选 xiaoai / doubao），**不报错**——所以「没报错」不等于「接上了」。跑 `pytest -q tests/test_tts_router.py`。还要动插件侧两张表：`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`（不加就永远不把 `tts_provider` 写进渲染配置，设置页选中等于没选）与 `lib/config.js` 的 `TTS_PROVIDER_VALUES`（设置页能选什么；两张表都不许留没人接的占位名字）
+- 改豆包语音合成：播放路径在 `core/services/tts/router.py` 的 `_play_doubao`（凭据 `DOUBAO_ACCESS_KEY` 优先、`tts.doubao.access_key` 兜底；`app_id`/`access_key` 缺一即抛 `Doubao TTS credentials are not configured`），合成客户端在 `core/services/tts/doubao.py`（`resource_id` 按音色前缀自动判定、`audio_format = auto` 时按字数在 pcm / mp3 之间选）。配置键的默认值与注释在 `bridge/config.py` 的 `tts.doubao`，插件侧设置项与渲染在 `lib/config.js` / `lib/render-config.js`。跑 `pytest -q tests/test_tts_router.py`
 - 改 API Server：端点在 `core/services/api_server.py` 的 setup 里注册，鉴权由 `api_auth.py` 的 middleware 统一加，不要在 handler 里另判令牌。新增端点同步更新 `bridge/README.md` 的端点表，跑 `pytest -q tests/test_api_server_auth.py tests/test_api_server_playback_queue.py`
 - 改 Rust 扩展：先停桥接器 → `uv sync` → 跑测试。`native/src/**/*.rs` 改过必须重编译，`pyproject.toml` 的 `tool.uv.cache-keys` 已声明触发路径
 - 改音频链路（VAD / KWS / ASR）：代码在 `core/services/audio/`，模型放 `core/models/`（不入库）。牢记前提「设备说话时麦克风仍在往本进程送音频」。**配置热生效是契约**：`vad` / `kws` / `asr` 都靠 `ConfigManager.add_reload_listener` 在每秒的配置轮询里生效，别再引入「启动时读一次」的路径（`asr` 用 `_load_key()` 当载荷签名，签名变了才在后台线程重建，不能占住 watcher 线程）；ASR 还多两条要求——①「切到本机没装模型的后端」不能把音箱弄哑：保留已装好的 recognizer、只警告一次、把原因写进 `_last_error` 与 `/api/health` 的 `data.asr`；② SenseVoice 的 `language` 固定 `"zh"`（本项目只服务中文用户，`auto` 会把短音频判成日文），不要重新暴露成配置项。改这三块后跑 `pytest -q tests/test_sherpa_asr_load.py`
@@ -93,7 +94,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 改动完成 = 下列全部通过：
 
-1. `.\.venv\Scripts\python.exe -m pytest -q`：基线 `115 passed, 19 subtests passed`，只许升不许降
+1. `.\.venv\Scripts\python.exe -m pytest -q`：基线 `130 passed, 19 subtests passed`，只许升不许降
 2. 改过 `.py`：桥接器真的起得来。停掉旧进程 → 起 `main.py` → 日志里没有 `Traceback`
 3. 改过 `native/src/**/*.rs`：`uv sync` 编译通过，且 `import dsh_xiaoai_server` 成功
 4. 仓库根 `npm run check` 全绿（九条离线检查）
@@ -111,6 +112,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 | `core/services/api_server.py` + `api_auth.py` | 监听地址可被设成 `0.0.0.0`，等于把音箱的播放与唤醒交给整个局域网 | 新端点走既有 middleware，不要绕过 |
 | `core/utils/config.py` + `config_loader.py` | 配置由插件渲染到 `<dataDir>/config.py` 并秒级热重载 | 不要在模块顶层缓存配置值（`api_auth.py` 就是每请求读） |
 | `core/dsh.py` | 令牌来源（`XIAOAI_API_TOKEN` 优先、渲染配置的 `dsh.token` 兜底）与 `run_id` 关联 | 令牌单源；取不到值会让音箱每句被插件 503 |
+| `core/services/tts/router.py` 的豆包分支 | 凭据也是两条来源（`DOUBAO_ACCESS_KEY` 优先、`tts.doubao.access_key` 兜底）；环境变量在进程启动时快照，插件里换了凭据名要重启桥接器才带上新值 | 不要把凭据读成模块级常量；缺 app_id / access_key 时明确抛错，不要静默换 provider |
 | `bridge/README.md` 的示例 | 快速开始与配置示例还是旧值（`session_key` 写作 `agent:main:open-xiaoai-bridge`） | 默认值以 `bridge/config.py` 的 `dsh.session_key` / `openai.session_key` 为准 |
 | `bridge/.venv` 里的 `.pyd` | Windows 上文件被占用就删不掉 | 改 Rust 前先停桥接器 |
 

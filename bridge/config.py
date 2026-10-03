@@ -204,7 +204,7 @@ APP_CONFIG = {
             # 文档地址: https://www.volcengine.com/docs/6561/1598757?lang=zh
             # 产品地址: https://www.volcengine.com/docs/6561/1871062
             "app_id": "xxxx",         # 你的 App ID
-            "access_key": "xxxxxx",       # 你的 Access Key
+            "access_key": "xxxxxx",       # 你的 Access Key；运行时优先使用环境变量 DOUBAO_ACCESS_KEY
             "default_speaker": "zh_female_vv_uranus_bigtts",  # 音色 https://www.volcengine.com/docs/6561/1257544?lang=zh
             "audio_format": "pcm",  # 推荐默认值：局域网稳定环境下首音更快、播放更顺
             "stream": True,  # 推荐默认值：边合成边播放，首音延迟更低

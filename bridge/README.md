@@ -122,6 +122,7 @@ DSH_XIAOAI_TOKEN=your-secret-token API_SERVER_ENABLE=1 ./scripts/start.sh
 | `API_SERVER_PORT`    | API 监听端口    | `9092`        |
 | `DSH_XIAOAI_TOKEN`  | Client 鉴权 token，设置后仅持有相同 token 的 Client 才能连接 | 不鉴权 |
 | `XIAOAI_API_TOKEN`   | DSH 后端的 API Token（优先级高于 `dsh.token`） | 空             |
+| `DOUBAO_ACCESS_KEY`  | 豆包 TTS 的 Access Key（优先级高于 `tts.doubao.access_key`） | 空             |
 | `CONFIG_PATH`        | 自定义配置文件路径   | `./config.py` |
 | `LOGLEVEL`           | 日志级别        | `INFO`        |
 
@@ -394,6 +395,8 @@ Bridge 的 TTS provider 配置跟随各个后端，配置层级保持不变：
 ```
 
 音色 ID 见 [火山引擎音色库](https://www.volcengine.com/docs/6561/1257544?lang=zh)。豆包的流式配置和声音复刻说明见下方 [豆包 TTS 常见问题](#-豆包-tts-常见问题)。
+
+凭据按两条来源取：环境变量 `DOUBAO_ACCESS_KEY` 优先，取不到才用 `tts.doubao.access_key`。环境变量在进程启动时读一次，改完要重启桥接器；`app_id` 与 Access Key 缺任何一个都会明确报错，不会静默换 provider。
 
 ### OpenAI / 兼容服务 TTS
 

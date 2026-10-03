@@ -130,7 +130,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 ## 配置项
 
-设置页里改；下面是常用项与默认值。页面按 7 个可折叠分区排：基本 / 唤醒与语音 / 应答与兜底 / 播报与回复器 / 人格与提示词 / 桥接器进程 / 本地 API 服务；`bridgeDir` 与 `pythonPath` 这类排障项收在「桥接器进程」下的**高级**折叠里。折叠与联动只改显示：某个开关关掉时它管着的那组项会隐藏，但已经填过的值和暂存的草稿都还在，开关打开就回来（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.39）。版式不是自画的：分区头用宿主的折叠行原语，字段用宿主的设置字段组件，颜色与圆角全部取 `--dsw-*` 主题变量，所以深浅色跟随宿主、和插件市场里其它插件的设置页一致（见 §12.40）。
+设置页里改；下面是常用项与默认值。页面按 8 个可折叠分区排：基本 / 唤醒与语音 / 豆包语音合成 / 应答与兜底 / 播报与回复器 / 人格与提示词 / 桥接器进程 / 本地 API 服务；`bridgeDir` 与 `pythonPath` 这类排障项收在「桥接器进程」下的**高级**折叠里。折叠与联动只改显示：某个开关关掉时它管着的那组项会隐藏，但已经填过的值和暂存的草稿都还在，开关打开就回来（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.39）。版式不是自画的：分区头用宿主的折叠行原语，字段用宿主的设置字段组件，颜色与圆角全部取 `--dsw-*` 主题变量，所以深浅色跟随宿主、和插件市场里其它插件的设置页一致（见 §12.40）。
 
 保存走 `POST /plugin/xiaoai/config`，写入前会用 `validateConfig()` 严格校验：不合法的值**当场回 400**（错误信息里带着是哪一项，例如 `wakeupTimeout must be a whole number of seconds in [1, 600]`），不会先存进去再说。校验在 revision 围栏之前跑，所以「既过期又不合法」的请求回的是 400 而不是 409。已经躺在设置里的坏值（手改过配置文件、或旧版本写进去的）走另一条路：载入时由 `sanitizeConfig()` 逐键回退成默认值，并只告警一次 `unusable config repaired with defaults: …`。
 
@@ -153,9 +153,19 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `wakeupTimeout` | 数字 | `20` | 静默多少秒后结束对话；必须是 `1`–`600` 的整数，非整数或越界会被回退成默认值并在日志里告警一次 |
 | `continuousConversation` | 布尔 | 关 | 开：一次唤醒可接着说；关：一句一次唤醒。只有打开时，「退出词」才出现 |
 | `asrBackend` | 枚举 | `sense_voice` | 桥接器使用的语音识别后端 |
-| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / MiMo（预留，暂不生效）；选 MiMo 时下面四项才出现 |
-| `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS；`ttsProvider` 选 MiMo 时这一项隐藏 |
-| `mimoBaseUrl`、`mimoApiKeyCredential`、`mimoModel`、`mimoVoice` | 文本 | 空 | MiMo 预留占位，只在 `ttsProvider` 选 MiMo 时出现；凭据只存名字，目前不发给桥接器 |
+| `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / 豆包；「跟随音色」由桥接器按音色判断，「豆包」强制走豆包语音合成 |
+| `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS |
+
+### 豆包语音合成
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `doubaoAppId` | 文本 | 空 | 火山引擎控制台里豆包语音服务的 App ID；空则沿用桥接器 `config.py` 里的值 |
+| `doubaoAccessKeyCredential` | 文本 | `DOUBAO_ACCESS_KEY` | 存放 Access Token 的 DSH 凭据名；令牌本身不进设置，插件把它放进桥接器进程的环境变量 `DOUBAO_ACCESS_KEY`，改完要重启桥接器 |
+| `doubaoSpeaker` | 文本 | 空 | 强制用豆包时朗读的音色；空则沿用桥接器配置里的 `tts.doubao.default_speaker` |
+| `doubaoAudioFormat` | 枚举 | 沿用配置 | 沿用配置 / 自动 / PCM / MP3 / OGG Opus；「自动」按文本长短在 PCM 与 MP3 间选 |
+| `doubaoStream` | 布尔 | 开 | 边合成边播放，首音更早；关则整段合成完再播 |
+| `ttsSpeed` | 数字 | `1` | 豆包朗读速度，`0.5`–`2.0` |
 
 ### 应答与兜底
 
@@ -310,7 +320,7 @@ skills/xiaoai-speak/  教模型什么时候开口的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            九个自检脚本 + check-all.mjs 聚合入口（`npm run check`），改动前后都该跑
 docs/deploy.md      实施与验证记录：每一期的决策、坑与取证（不随包发布）
-TODO.md             发布前待办：MiMo TTS 接线、版本收口、实机验收（不随包发布）
+TODO.md             发布前待办：版本收口、实机验收（不随包发布）
 ```
 
 ## 更新日志

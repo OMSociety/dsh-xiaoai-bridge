@@ -254,9 +254,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.3 审批提示语（`approval/asked` → 只念「需要你到电脑上确认一下」，
       审批正文永不出口；设置项 `approvalText`；见 §12.24；
       `scripts/check-speak.mjs` 的「approvals」6 条）
-- [x] 4.4 MiMo TTS 预留（设置页「语音合成方式」：跟随音色 / 小爱原生 / MiMo（预留）；
-      MiMo 四个占位字段只存不写；见 §12.25；`scripts/check-config.mjs` 与
-      `scripts/check-client.mjs` 的新断言）
+- [x] 4.4 语音合成方式与豆包配置（设置页「语音合成方式」：跟随音色 / 小爱原生 / 豆包；
+      豆包六项参数与凭据名；见 §12.25；`scripts/check-config.mjs`、`scripts/check-client.mjs`
+      与 `bridge/tests/test_tts_router.py` 的新断言）
 - [x] 4.5 状态卡（`lib/diagnostics.js` 记录最近错误；`/health` 增发实时探测的
       `bridgeApi` 与 `diagnostics`；设置页「运行状态」显示接口连通、鉴权方式、
       令牌是否配置、看门狗重启次数与最近错误；见 §12.26；
@@ -328,6 +328,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.23 音箱会话补回终端与待办（真机投诉「该有的工具没有」：预设加
       `dsh-tool-pwsh`/`dsh-tool-bash`、`dsh-tool-jobs`、`dsh-tool-todo` 四行，
       沙箱与审批仍在宿主侧、跟着会话权限预设走；见 §12.36.8）
+- [x] 4.24 砍掉 MiMo 预留、补全豆包语音合成（「语音合成方式」只留跟随音色 / 小爱原生 /
+      豆包；新增「豆包语音合成」分区的 App ID、凭据名、音色、音频格式、边合成边播放与
+      0.5–2.0 语速；凭据真值走 DSH 凭据库 → 子进程环境变量 `DOUBAO_ACCESS_KEY` →
+      桥接器优先读环境变量；见 §12.45）
 
 ## 9. 第 1 期实现决策
 
@@ -1403,17 +1407,18 @@ def keeps_listening(self) -> bool:
 `DEFAULT_APPROVAL_TEXT`；插件从未见过的 session 不发声。
 
 
-### 12.25 语音合成方式与 MiMo 预留：只写桥接器认得的 provider（4.4）
+### 12.25 语音合成方式：跟随音色 / 小爱原生 / 豆包（4.4）
 
-设置页「唤醒与语音」里新增**语音合成方式**（`ttsProvider`）三选一，以及四个 **MiMo 占位
-字段**（`mimoBaseUrl` / `mimoApiKeyCredential` / `mimoModel` / `mimoVoice`，全部默认空）。
+设置页「唤醒与语音」里有**语音合成方式**（`ttsProvider`）三选一，豆包的六项参数在
+「豆包语音合成」分区（`doubaoAppId` / `doubaoAccessKeyCredential` / `doubaoSpeaker` /
+`doubaoAudioFormat` / `doubaoStream` 与 `ttsSpeed`）。
 
-**桥接器其实早就有 provider 抽象。** `bridge/core/services/tts/router.py` 的
-`TTSRouter.SUPPORTED_PROVIDERS = {"xiaoai", "doubao", "openai", "mlx_audio"}`，
-`resolve_provider(configured_provider, tts_speaker)` 的规则是：配置了就用配置，**不认识的值直接抛**
-`Unknown tts_provider=...`；没配置则按音色判断 —— `tts_speaker == "xiaoai"` 用 `_play_xiaoai`
-（音箱自带合成），其他音色 ID 当豆包音色走 `_play_doubao`。`bridge/config.py` 里
-`dsh.tts_provider` 默认 `None`，就是这个「没配置」的旧规则。
+**桥接器早就有 provider 抽象。** `bridge/core/services/tts/router.py` 的
+`TTSRouter.SUPPORTED_PROVIDERS = frozenset(("xiaoai", "doubao", "openai", "mlx_audio"))`；
+`resolve_provider(configured_provider, tts_speaker)` 的规则是：配置了就用配置，**不认识的值记一条
+`logger.warning("Unknown tts_provider=...")` 再按音色回退（回退、不是报错）**；没配置则按音色判断
+—— `tts_speaker == "xiaoai"` 用 `_play_xiaoai`（音箱自带合成），其他音色 ID 当豆包音色走
+`_play_doubao`。`bridge/config.py` 里 `dsh.tts_provider` 默认 `None`，就是这个「没配置」的旧规则。
 
 **三个选项各自写什么：**
 
@@ -1421,20 +1426,29 @@ def keeps_listening(self) -> bool:
 | --- | --- | --- |
 | 跟随音色（`''`，默认） | 什么都不写 | 保留上面那条按音色判断的旧规则，豆包音色 ID 照常可用 |
 | 小爱原生（`xiaoai`） | `dsh.tts_provider = "xiaoai"` | 强制音箱自带合成，即使音色字段填的是豆包音色 |
-| MiMo（预留，`mimo`） | **什么都不写** | 只记住这个选择，播放方式不变 |
+| 豆包（`doubao`） | `dsh.tts_provider = "doubao"` | 强制走豆包客户端，音色取 `tts.doubao.default_speaker` |
 
-**为什么 MiMo 只存不写。** 桥接器没有 MiMo 客户端，把 `tts_provider = "mimo"` 写进去不是
-「预留」，而是让 TTS 路由在播放那一刻抛异常——从一个不生效的选项变成一个不出声的音箱。
-所以选择留在设置里（将来接上就能直接生效，不用让用户重选一遍），映射表
-`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS = { xiaoai: 'xiaoai' }` 里没有它，
-`buildOverrides()` 也就永远不发生成 `mimo` 的文件。选中的后果写在页面提示里
-（「选中只会记住这个选择，播放仍是当前方式」）。
+**两张表只留真接上的 provider。** 映射表 `lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`
+与设置页能选的 `TTS_PROVIDER_VALUES` 现在都是 `xiaoai` / `doubao`。曾经有一个「MiMo（预留）」
+选项配四个只存不写的占位字段：桥接器没有 MiMo 客户端，选中的效果只是「记住这个选择、播放方式
+不变」，属于永远不生效的选项；它已经删掉，两张表都不许留没人接的占位名字。
 
-**MiMo 占位字段的形状。** 四个字段对应一次 OpenAI 兼容的语音合成请求
-（`POST /v1/audio/speech`：endpoint + 凭据 + model + voice），这正是桥接器**已经**支持的那条
-`openai` 通道的形状，所以将来接入时只需把字段接到 `tts.openai` 上，页面不会再变。凭据字段
-存的是**凭据名**（DSH 凭据库里的引用，同「访问令牌凭据名」的约定），明文永远不进设置、
-不进生成的文件——第 4.10 项「无真实凭据入库」在预留字段上同样成立。
+**豆包六项与渲染规则。** `doubaoAppId` 是控制台的 App ID；`doubaoSpeaker` 留空沿用
+`bridge/config.py` 的 `default_speaker`；`doubaoAudioFormat` 留空沿用模板、`auto` 按字数在
+pcm / mp3 之间选、也可以显式 `pcm` / `mp3` / `ogg_opus`；`doubaoStream` 是边合成边播放；
+`ttsSpeed` 取 0.5–2.0，映射 `dsh.tts_speed`，只有豆包 TTS 用它。`tts_provider` 只在页面真选中
+时才写；`tts.doubao` 里空字符串字段不写；`stream` 与 `tts_speed` 是页面独占项，**取默认值也照写**
+——它们的默认来源在页面，不在桥接器模板。
+
+**凭据只存名字。** `doubaoAccessKeyCredential` 存的是 DSH 凭据库里的**凭据名**（默认
+`DOUBAO_ACCESS_KEY`），明文既不进设置也不进渲染出的文件：`buildOverrides()` 只写 `app_id` /
+`default_speaker` / `audio_format` / `stream`，`scripts/check-config.mjs` 有一条断言渲染结果里不含
+`access_key`。真值由插件按凭据名取出来，写进桥接器子进程的环境变量 `DOUBAO_ACCESS_KEY`；
+`router.py` 的 `_play_doubao` 先读环境变量，取不到才回退 `tts.doubao.access_key`——与
+`core/dsh.py` 对 `XIAOAI_API_TOKEN` 同规则。取不到凭据时插件既不注入也不删除继承来的同名变量
+（手工设环境变量这条退路留着）；环境变量在进程启动时快照，换了凭据名要重启桥接器才带上新值。
+`app_id` 与 Access Key 缺任何一个都明确抛 `Doubao TTS credentials are not configured`，
+不会静默换 provider。
 
 **顺手改掉一个错标签。** `ttsSpeaker` 原来写的是「朗读音箱插件」/「Speaking plug-in」，
 但桥接器把 `tts_speaker` 当**音色 ID** 解析（`xiaoai` = 小爱原生，其他值 = 豆包音色），
@@ -1448,12 +1462,16 @@ spec 可以带 `optionLabels: { 值: i18n key }`，取值时 `translate()`，没
 同一个分支的 `value` 也补上了和会话工作区 `<select>` 一样的兜底：
 `draft[key] === undefined || null ? "" : String(...)`，否则未播种的草稿会渲染成 `"undefined"`。
 
-**测试**：`scripts/check-config.mjs` —— 空选择不写 `tts_provider`、选 `xiaoai` 时写成字符串、
-选 `mimo` 时不写、四个 MiMo 字段一个都不进 `dsh`、稀疏文件里既没有 `tts_provider` 也没有
-`mimo`，并且用真 Python 加载渲染结果确认 `APP_CONFIG["dsh"]["tts_provider"]` 真是 `"xiaoai"`。
-`scripts/check-client.mjs` —— 段控件数量 2 → 3，`xiaoai-ttsProvider` 的选项值/标签是
-`["=跟随音色", "xiaoai=小爱原生", "mimo=MiMo（预留）"]` 且未播种时 `value` 是空串，
+**测试**：`scripts/check-config.mjs` —— 空选择不写 `tts_provider`、选 `xiaoai` 与 `doubao` 时写成
+字符串、豆包四值按需写进 `tts.doubao`、渲染结果里没有 `access_key`、`stream` 与 `tts_speed` 的默认值
+也出现在稀疏文件里，并且用真 Python 加载渲染结果确认 `APP_CONFIG["dsh"]["tts_provider"]` 与
+`APP_CONFIG["dsh"]["tts_speed"]` 真是渲染的值。
+`scripts/check-client.mjs` —— 段控件数量 3 → 4、开关 7 → 8、可折叠分区 7 → 8，`xiaoai-ttsProvider`
+的选项值/标签是 `["=跟随音色", "xiaoai=小爱原生", "doubao=豆包"]` 且未播种时 `value` 是空串，
+`xiaoai-doubaoAudioFormat` 是 `["=沿用配置", "auto=自动", "pcm=PCM", "mp3=MP3", "ogg_opus=OGG Opus"]`，
 没有 `optionLabels` 的枚举仍然用原始值当标签。
+`bridge/tests/test_tts_router.py` —— 三个新用例：环境变量优先于配置值、配置值是手工单跑时的兜底、
+缺凭据时在任何一次合成之前就抛错。
 
 
 ### 12.26 状态卡：看得见连接、鉴权与最近错误（4.5）
@@ -2877,6 +2895,40 @@ function isArchived(sessionId) {
 - **中文锁定**：`sherpa.py` 里 `_BACKENDS["sense_voice"]["extra_kwargs"]` 由 `{"language": "auto", "use_itn": True}` 改成 `{"language": "zh", "use_itn": True}`，并就地写明理由。**不新增 `asr.language` 配置键、也不加设置项**：本项目只服务中文用户，而 `auto` 在极短音频上会把中文判成日文（实机日志里的 `はみ。` / `八に。` / `あ嘛？` 就是它），把开关暴露出去只会换来一类新的「选错了没反应」。`use_itn` 保留（数字与标点做逆文本规整）；`paraformer` / `fire_red_asr` 的 `extra_kwargs` 本来就是空 dict，不受影响。
 - **提示音的真相**：提示音是既有资产——`core/external_conversation.py` 的 `_NOTIFY_SOUND_PATH` / `_NOTIFY_PCM` 与 `_play_notify()`（`speaker.play(buffer=…)` 之后按 24kHz int16 时长 `asyncio.sleep()`）。改动前 `_conversation_loop()` 的顺序是 `_stop_recording()` → `_play_notify()` → `_start_recording()`，也就是**关着麦放提示音**：提示音结束后还要等一次 `_start_recording()` 的设备往返（该文件注释写明这是设备侧远端 arecord），`_wait_for_speech()` 才 `vad.resume("speech")`，而 `resume()` 又会 `stream.clear_input()` 丢掉这段时间攒下的音频。所以「提示音开始即收音」当时并不成立，紧跟提示音开口的头几个字会被截掉（`Sa.` / `谁？`）。改成 `_stop_recording()` → `_start_recording()` → `_play_notify()`：提示音结束时麦克风已经在跑，`vad.resume("speech")` 在几毫秒内就开始收音。提示音自身不会进用户语句——`speaker.play(buffer=…)` 内部 `PlaybackGate.hold_for(len(buffer)/2/24000)` 在放音期间关闸，VAD 的 `_process_frames()` 见到 `PlaybackGate.closed` 直接整帧丢弃，闸门再打开时 `_leave_playback_mute()` 会 `_reset_state()` + `clear_input()`。同样的次序也落在连续对话（`_run_one_turn_with_local_asr()` 第 5 步）与小爱原生 ASR（`_run_one_turn_with_xiaoai_asr()`）两处；那两处 TTS 回复仍在**开麦之前**放完，所以回复本身不会被录进去。
 - **检查**：`bridge/tests/test_dsh_single_turn.py` 的 `_LoopProbe` 开始记调用次序，`test_single_shot_leaves_after_one_turn` 断言前三个动作是 `["stop", "start", "notify"]`（麦克风必须在提示音之前回来）；`bridge/tests/test_sherpa_asr_load.py` 的 `test_loads_the_requested_backend` 断言 `bench.factory.calls[0][1]["language"] == "zh"`。桥接器侧这两处改动都要**重启桥接器进程**才生效，实机上要听一次「唤醒 → 提示音 → 立刻说话」有没有被截，以及有没有因设备上报播放状态滞后而自问自答。
+
+### 12.45 砍掉 MiMo 预留、补全豆包语音合成（4.24，设置项）
+
+#### 12.45.1 MiMo 为什么删而不是接
+
+设置页曾经能选「MiMo（预留）」，并配四个只存不写的占位字段（`mimoBaseUrl` / `mimoApiKeyCredential` / `mimoModel` / `mimoVoice`）。桥接器没有 MiMo 客户端，`RENDERED_TTS_PROVIDERS` 里也没有它，所以这个选择的全部效果只是「记住选择」：既不出声也不报错，属于一个永远不生效的选项。这一轮把它连同四个字段一起删掉，两张表（`lib/config.js` 的 `TTS_PROVIDER_VALUES` 与 `lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`）只留真接上的 provider，占位名字不再允许出现。
+
+#### 12.45.2 豆包链路在桥接器侧长什么样
+
+`core/services/tts/router.py` 的 `_play_doubao` 是播放路径：读 `tts.doubao` 的 `app_id` / `access_key` / `default_speaker` / `audio_format` / `stream` 与 `dsh.tts_speed`，缺 `app_id` 或 `access_key` 就抛 `Doubao TTS credentials are not configured`；`tts_speaker` 等于 `xiaoai` 时用 `default_speaker`，其他值当音色 ID 用。合成客户端 `core/services/tts/doubao.py` 自己判定 `resource_id`（按音色名前缀）并在 `audio_format == "auto"` 时按字数在 pcm / mp3 之间选。这些参数桥接器早就支持，缺的是「在设置页上配出来」这条路。
+
+#### 12.45.3 插件侧六项与渲染规则
+
+新增设置项：`doubaoAppId`、`doubaoAccessKeyCredential`、`doubaoSpeaker`、`doubaoAudioFormat`（枚举 `''` / `auto` / `pcm` / `mp3` / `ogg_opus`）、`doubaoStream`、`ttsSpeed`（0.5–2.0）。渲染规则三条：
+
+- `tts_provider` 只在设置页真选中时才写（`''` 表示跟随音色，保留桥接器按 `tts_speaker` 判断的旧规则）；`RENDERED_TTS_PROVIDERS` 现在有 `xiaoai` 与 `doubao`。
+- `tts.doubao` 按需写：空的 App ID / 音色 / 音频格式不写，免得把模板里的默认值钉死。
+- `tts.doubao.stream` 与 `dsh.tts_speed` 是页面独占项，**取默认值也照写**（`true` / `1.0`）：它们的默认来源在页面，不在 `bridge/config.py` 的模板。
+
+#### 12.45.4 凭据：只存名字，真值走环境变量
+
+`doubaoAccessKeyCredential` 存的是 DSH 凭据库里的凭据名（默认 `DOUBAO_ACCESS_KEY`），所以 `buildOverrides()` 里没有 `access_key`，`scripts/check-config.mjs` 有一条断言渲染结果字符串里不含 `access_key`。插件按凭据名取出真值后写进桥接器子进程的环境变量 `DOUBAO_ACCESS_KEY`；`_play_doubao` 先读环境变量，取不到才回退 `tts.doubao.access_key`，与 `core/dsh.py` 对 `XIAOAI_API_TOKEN` 同一规则。两个细节：解析不到时既不注入也**不删除**继承来的同名变量（手工 `DOUBAO_ACCESS_KEY=...` 单跑桥接器仍然可用）；环境变量在进程启动时快照，换了凭据名要重启桥接器才带上新值。设置页「运行状态」多一行「豆包访问令牌」的配置状态。
+
+#### 12.45.5 页面结构变化
+
+`ttsProvider` 三选一（跟随音色 / 小爱原生 / 豆包）；新增「豆包语音合成」分区（可折叠分区 7 → 8），六个字段都归它；开关 7 → 8（多一个 `doubaoStream`），段控件 3 → 4（多一个音频格式）。`ttsSpeaker` 原本挂在 `ttsProvider != 'mimo'` 的门上，MiMo 一走这道门就没有消费者，字段恢复常显，`GATE_DEFAULTS` 里那一项也随之删掉。`ttsSpeed` 是小数，`parseField` 的 number 分支本来就接受小数，只新增了一条范围文案 `invalid.rangeFloat`（原来那条 `invalid.range` 的措辞写死了「整数」）。
+
+#### 12.45.6 检查
+
+`scripts/check-config.mjs`：空选择与 `xiaoai` / `doubao` 三种 `tts_provider` 写法、豆包四值按需写入、渲染结果不含 `access_key`、`stream` 与 `tts_speed` 的默认值也出现在稀疏文件里、子进程环境里没有 `DOUBAO_ACCESS_KEY`（由调用方加）、真 Python 加载后 `dsh_tts_provider` 与 `dsh_tts_speed` 是渲染的值；「未触碰分区不写进生成文件」那条的样本从 `tts.doubao` 换成 `tts.openai`（豆包段现在总有值可写）。`scripts/check-client.mjs`：标签清单与分区标题、折叠 8、开关 8、段 4 两处选项文案的逐字断言。`bridge/tests/test_tts_router.py` 新增 `DoubaoCredentialSourceTest` 三个用例（环境变量优先、配置值兜底、缺凭据先抛错）。`npm run check` 九条绿；`bridge` 的 `pytest -q` 由 127 升到 `130 passed, 19 subtests`（新增三个用例）。
+
+#### 12.45.7 生效方式
+
+豆包参数写在插件渲染出的 `config.py` 里，桥接器秒级热重载，所以改 App ID / 音色 / 音频格式 / 流式 / 语速不用重启。`DOUBAO_ACCESS_KEY` 是子进程环境变量，换了凭据名要重启桥接器进程（插件重拉子进程，或重启 DSH）。实机上这次要听的是「设置页选豆包 → 说一句话 → 用豆包音色播报」。
 
 
 

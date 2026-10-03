@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 import types
 import unittest
@@ -96,6 +97,51 @@ class BackendTTSRoutingTest(unittest.IsolatedAsyncioTestCase):
                 manager._session_tts_speakers,
                 manager._initialized,
             ) = previous
+
+
+class DoubaoCredentialSourceTest(unittest.IsolatedAsyncioTestCase):
+    """The Doubao Access Token follows the API token's rule: environment first."""
+
+    def setUp(self):
+        self.previous = os.environ.pop("DOUBAO_ACCESS_KEY", None)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self.previous is None:
+            os.environ.pop("DOUBAO_ACCESS_KEY", None)
+        else:
+            os.environ["DOUBAO_ACCESS_KEY"] = self.previous
+
+    async def _play(self, config):
+        config_manager = types.SimpleNamespace(get_app_config=lambda *_args: config)
+        client = types.SimpleNamespace(
+            resource_id="seed-tts-1.0",
+            resolve_audio_format=lambda text: "mp3",
+        )
+        with patch.object(
+            router_module.ConfigManager, "instance", return_value=config_manager
+        ), patch.object(
+            router_module, "DoubaoTTS", return_value=client
+        ) as client_class, patch.object(
+            router_module.dsh_xiaoai_server, "tts_play", new=AsyncMock(), create=True
+        ):
+            await TTSRouter._play_doubao(
+                "你好", tts_speaker="xiaoai", tts_speed=1.0, playback_token=None
+            )
+        return client_class.call_args.kwargs
+
+    async def test_env_token_wins_over_the_config_value(self):
+        os.environ["DOUBAO_ACCESS_KEY"] = "from-env"
+        kwargs = await self._play({"app_id": "app", "access_key": "from-config"})
+        self.assertEqual("from-env", kwargs["access_key"])
+
+    async def test_config_value_is_the_fallback_for_a_manual_run(self):
+        kwargs = await self._play({"app_id": "app", "access_key": "from-config"})
+        self.assertEqual("from-config", kwargs["access_key"])
+
+    async def test_missing_credentials_raise_before_any_synthesis(self):
+        with self.assertRaises(ValueError):
+            await self._play({"app_id": "app"})
 
 
 if __name__ == "__main__":
