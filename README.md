@@ -178,11 +178,11 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 7. 对着音箱说唤醒词，然后说话；回复会从音箱里念出来。
 
-> **提示：**刷机教程见 [open-xiaoai 的 flash.md](https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md)，客户端补丁见 [client-rust 的 README](https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md)。设备侧还要确认音箱上 `/data/open-xiaoai/server.txt` 指向 `ws://<这台电脑的局域网 IP>:4399`——那是设备自己的拨号地址，不在本仓库里；指错了的表现是音箱完全没反应，本地日志里什么错都不会有。
+> **提示**：刷机教程见 [open-xiaoai 的 flash.md](https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md)，客户端补丁见 [client-rust 的 README](https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md)。设备侧还要确认音箱上 `/data/open-xiaoai/server.txt` 指向 `ws://<这台电脑的局域网 IP>:4399`——那是设备自己的拨号地址，不在本仓库里；指错了的表现是音箱完全没反应，本地日志里什么错都不会有。
 
-> **提示：**「小爱模式」预设就写在插件的 `cordis.patch.yml` 里，随插件一起装好，不用单独安装。设置页的「音箱会话的 Agent 预设」默认就是 `xiaoai`；宿主读不到它不会报错，只会回落宿主默认并留一条 `agent-preset-missing` 诊断。
+> **提示**：「小爱模式」预设就写在插件的 `cordis.patch.yml` 里，随插件一起装好，不用单独安装。设置页的「音箱会话的 Agent 预设」默认就是 `xiaoai`；宿主读不到它不会报错，只会回落宿主默认并留一条 `agent-preset-missing` 诊断。
 
-> **注意：**装完必须重启 DSH。保存设置只会重新渲染桥接器的配置文件（桥接器 1 秒内热重载），但写在子进程环境变量里的那几项——日志级别、静默启动、本地 API 服务的开关与监听地址、两枚凭据名——要重启桥接器才生效，见[配置怎么生效](#配置怎么生效)。
+> **注意**：装完必须重启 DSH。保存设置只会重新渲染桥接器的配置文件（桥接器 1 秒内热重载），但写在子进程环境变量里的那几项——日志级别、静默启动、本地 API 服务的开关与监听地址、两枚凭据名——要重启桥接器才生效，见[配置怎么生效](#配置怎么生效)。
 
 ## 模型工具
 
@@ -229,7 +229,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 选中的值一定会写进渲染出的 `config.py`，不存在「留空跟随模板」。以前的「朗读音色」（`ttsSpeaker`）已经删掉：它和这个开关本来是同一件事的两套入口——桥接器的旧规则就是看那个音色值是不是 `xiaoai` 来决定走哪条路。豆包音色现在只在选「豆包」时由「豆包音色」给，插件不再写 `dsh.tts_speaker`，桥接器模板里那个默认值原样留着。
 
-> **注意：**写一个桥接器不认识的值不会报错：它只记一条 `Unknown tts_provider=...`，然后按音色回退。「没报错」不等于「接上了」。
+> **注意**：写一个桥接器不认识的值不会报错：它只记一条 `Unknown tts_provider=...`，然后按音色回退。「没报错」不等于「接上了」。
 
 ### 基本
 
@@ -267,7 +267,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 | **边合成边播放** `doubaoStream` | 布尔 | 开 | 开：边合成边播，首音更快；关：整段合成完再播。这一项即使关掉也会照写进配置。 |
 | **豆包语速** `ttsSpeed` | 数字 0.5-2 | `1` | 豆包朗读速度。只对豆包生效，小爱原生不看它。 |
 
-> **注意：**`App ID` 或缺访问令牌时，桥接器会明确报 `Doubao TTS credentials are not configured`，**不会**静默换回小爱原生。
+> **注意**：`App ID` 或缺访问令牌时，桥接器会明确报 `Doubao TTS credentials are not configured`，**不会**静默换回小爱原生。
 
 ### 应答与兜底
 
