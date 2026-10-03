@@ -41,10 +41,14 @@ from core.utils.logger import logger
 DEFAULT_BACKEND = "sense_voice"
 
 _BACKENDS = {
+    # `language` 钉死中文：多语种自动检测会把一两秒的短音频判成日文（实机日志里
+    # 出现过 `はみ。` / `八に。` / `あ嘛？`），而本项目只服务中文用户，暴露一个
+    # `asr.language` 只会换来「选错了没反应」。`use_itn` 保留（数字、标点做逆
+    # 文本规整）。
     "sense_voice": {
         "dir_keyword": "sense-voice",
         "factory": "from_sense_voice",
-        "extra_kwargs": {"language": "auto", "use_itn": True},
+        "extra_kwargs": {"language": "zh", "use_itn": True},
         "model_files": {"model": {True: "model.int8.onnx", False: "model.onnx"}},
     },
     "paraformer": {

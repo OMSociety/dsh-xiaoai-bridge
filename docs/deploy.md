@@ -322,6 +322,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       `asr.model_dir` 立刻在后台重建识别器；切到本机没装模型的后端时保留旧的、
       只警告一次，并把实况放进 `/api/health` 的 `data.asr` 与 `asr-model-unavailable`
       诊断；见 §12.44）
+- [x] 4.22 锁定中文 + 唤醒提示音对准收音起点（SenseVoice 的 `language` 由 `auto`
+      钉成 `zh`，不新增配置键；`external_conversation.py` 三处入口把开麦挪到提示音
+      之前，提示音一结束就开始识别；见 §12.44.6）
 
 ## 9. 第 1 期实现决策
 
@@ -2826,11 +2829,17 @@ function isArchived(sessionId) {
 
 `bridge/tests/test_sherpa_asr_load.py` 新增 12 条（假模型目录 + 假 `sherpa_onnx.OfflineRecognizer`，**不加载真模型**，所以毫秒级）：装载请求的后端；第二次调用不重建；切后端不用重启就重建并记一条热重载事件；`int8` 与 `model_dir` 属于签名；watcher 回调能触发后台热切换；缺模型时保留旧识别器、`status()["error"]` 说清原因、只警告一次且后续不再重试；未知名字回落（有旧用旧的、首启用默认）；一个都装不上仍然抛；`_reload()` 只记日志不抛；`available_backends()` 只列装了的；`asr()` 用「它自己检查过的那个」识别器解码并套用 `asr.replacements`。`npm run check` 九条绿，桥接器全量 `pytest -q` 由 115 变 **127 passed, 19 subtests**。
 
-#### 12.44.5 生效方式与仍未做的两件事
+#### 12.44.5 生效方式
 
 桥接器代码改动**要重启桥接器进程**才生效（这次改的就是加载逻辑本身）：重启后日志里会出现 `模型=paraformer`，或者一条 `[ASR] 切到 paraformer 失败（…），继续使用 sense_voice`。此后再在设置页切后端就是即时的（不用重启），失败也只警告不哑。
 
-两件**不在本轮范围**、但确实是「听不见我说了啥」另一半原因的事：① SenseVoice 的 `language` 硬编码成 `"auto"`（`sherpa.py` 的 `_BACKENDS`），极短音频会被判成日文（日志里的 `はみ。` / `八に。` / `あ嘛？`），要钉成 `zh` 得新增 `asr.language` 配置键 + `buildOverrides()` + 文档；② 唤醒词之后约 1.3 秒的盲窗：`before_wakeup` 握手 1.23 s（17:28:46.196 → 17:28:47.426）、之后还有 0.37 s 的「音箱正在播报」静音窗，`vad.resume("speech")` 要等这些走完才开始收音，所以唤醒后立刻开口的音频会被截断成碎片（`Sa.` / `谁？`）。
+#### 12.44.6 锁定中文与「提示音即收音起点」（同日追加）
+
+用户口径：**「不考虑中文以外的用户呀，锁定中文吧」**、**「唤醒词之后不是有提示音吗，我觉得提示音如果是准的，确实是提示音开始的时候就是收音，那就正常」**，随后补充 **「提示音是现在已经有的东西，我也不知道哪个加的，但是不用你另外加」**——所以这一轮只调时序，**不新增任何声音**。
+
+- **中文锁定**：`sherpa.py` 里 `_BACKENDS["sense_voice"]["extra_kwargs"]` 由 `{"language": "auto", "use_itn": True}` 改成 `{"language": "zh", "use_itn": True}`，并就地写明理由。**不新增 `asr.language` 配置键、也不加设置项**：本项目只服务中文用户，而 `auto` 在极短音频上会把中文判成日文（实机日志里的 `はみ。` / `八に。` / `あ嘛？` 就是它），把开关暴露出去只会换来一类新的「选错了没反应」。`use_itn` 保留（数字与标点做逆文本规整）；`paraformer` / `fire_red_asr` 的 `extra_kwargs` 本来就是空 dict，不受影响。
+- **提示音的真相**：提示音是既有资产——`core/external_conversation.py` 的 `_NOTIFY_SOUND_PATH` / `_NOTIFY_PCM` 与 `_play_notify()`（`speaker.play(buffer=…)` 之后按 24kHz int16 时长 `asyncio.sleep()`）。改动前 `_conversation_loop()` 的顺序是 `_stop_recording()` → `_play_notify()` → `_start_recording()`，也就是**关着麦放提示音**：提示音结束后还要等一次 `_start_recording()` 的设备往返（该文件注释写明这是设备侧远端 arecord），`_wait_for_speech()` 才 `vad.resume("speech")`，而 `resume()` 又会 `stream.clear_input()` 丢掉这段时间攒下的音频。所以「提示音开始即收音」当时并不成立，紧跟提示音开口的头几个字会被截掉（`Sa.` / `谁？`）。改成 `_stop_recording()` → `_start_recording()` → `_play_notify()`：提示音结束时麦克风已经在跑，`vad.resume("speech")` 在几毫秒内就开始收音。提示音自身不会进用户语句——`speaker.play(buffer=…)` 内部 `PlaybackGate.hold_for(len(buffer)/2/24000)` 在放音期间关闸，VAD 的 `_process_frames()` 见到 `PlaybackGate.closed` 直接整帧丢弃，闸门再打开时 `_leave_playback_mute()` 会 `_reset_state()` + `clear_input()`。同样的次序也落在连续对话（`_run_one_turn_with_local_asr()` 第 5 步）与小爱原生 ASR（`_run_one_turn_with_xiaoai_asr()`）两处；那两处 TTS 回复仍在**开麦之前**放完，所以回复本身不会被录进去。
+- **检查**：`bridge/tests/test_dsh_single_turn.py` 的 `_LoopProbe` 开始记调用次序，`test_single_shot_leaves_after_one_turn` 断言前三个动作是 `["stop", "start", "notify"]`（麦克风必须在提示音之前回来）；`bridge/tests/test_sherpa_asr_load.py` 的 `test_loads_the_requested_backend` 断言 `bench.factory.calls[0][1]["language"] == "zh"`。桥接器侧这两处改动都要**重启桥接器进程**才生效，实机上要听一次「唤醒 → 提示音 → 立刻说话」有没有被截，以及有没有因设备上报播放状态滞后而自问自答。
 
 
 

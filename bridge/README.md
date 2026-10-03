@@ -671,7 +671,7 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
 
     | 模型 | 说明 | 特点 |
     |------|------|------|
-    | `sense_voice` | [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice) | 多任务语音理解模型，支持中/英/日/韩/粤五语种自动识别，附带语言检测、ITN 和情感识别，推理极快 |
+    | `sense_voice` | [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice) | 多任务语音理解模型，附带语言检测、ITN 和情感识别，推理极快；**本项目把语言钉成中文**（`language="zh"`），关掉多语种自动检测——它在极短音频上会把中文判成日文 |
     | `paraformer` | [Paraformer-Trilingual](https://github.com/modelscope/FunASR) | 专注语音转写的工业级非自回归模型，支持中文/英文/粤语，中文识别精度高 |
     | `fire_red_asr` | [FireRedASR](https://github.com/FireRedTeam/FireRedASR) | FireRedASR 是一系列开源的工业级自动语音识别 (ASR) 模型，支持普通话、汉语方言和英语，在公开的普通话 ASR 基准测试中达到了新的最先进水平 (SOTA)，同时还提供了出色的歌词识别能力。 |
     | `doubao` | [火山引擎豆包语音识别](https://www.volcengine.com/docs/6561/1354868?lang=zh) | 云端录音文件识别，支持标准版和极速版，需要配置火山引擎 App Key / Access Key |
@@ -681,6 +681,8 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
     切换 `model` / `int8` / `model_dir` 后**不用重启**：桥接器每秒轮询 `config.py`，重载后会在后台重建识别器（与唤醒词热重载同一机制），日志里会多一条 `语音识别服务热重载: sense_voice → paraformer`。
 
     选了一个**本机没装模型**的后端也不会把音箱弄哑：桥接器继续用已经装好的那个模型，只记一条警告，也不会每句话都再重试一次失败的加载（失败过的后端会被记住，直到配置再变），原因同时进健康检查——`GET /api/health` 的 `data.asr` 是 `{requested, known, active, available, error}`，设置页的状态卡会把它显示成一条 `asr-model-unavailable`。`error` 与日志都会说明缺哪个文件；一个本地模型都没装好时会退回默认的 `sense_voice`，两个都不行才真的报错。
+
+    唤醒后的提示音是**准**的：桥接器先把设备麦克风打开（`_start_recording()`），再放提示音，提示音一结束 `vad.resume("speech")` 就在几毫秒内开始收音。提示音本身的音频由 `PlaybackGate`（`speaker.play(buffer=…)` 内部按 buffer 时长关闸）整帧丢掉，不会进用户语句。改动前开麦排在提示音**之后**，提示音说完还要等一次设备往返（设备侧远端 arecord）才真的开始识别，紧跟提示音开口的头几个字会被截掉。
 
     使用豆包 ASR 时，将 `model` 改为 `"doubao"`，并填写 `asr.doubao`：
 

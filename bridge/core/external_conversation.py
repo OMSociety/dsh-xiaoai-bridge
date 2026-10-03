@@ -185,15 +185,19 @@ class ExternalConversationController:
     async def _conversation_loop(self):
         """Run VAD -> ASR -> backend -> TTS turns until exit."""
 
-        # Mute mic → play notify → unmute.
-        # _play_notify() blocks for ~740ms (the beep duration), during which
-        # the mic is off and before_wakeup TTS echo naturally fades.
-        # VAD.resume() resets all state (speech_frames, input_bytes),
-        # so speech detection starts clean when listening begins.
+        # Mute mic → back up → notify. The mic comes back *before* the beep,
+        # so the beep really means "listening starts now": when it ends,
+        # `_wait_for_speech()`'s `vad.resume("speech")` runs within
+        # milliseconds instead of waiting for another remote-arecord round
+        # trip (that gap used to clip the first words spoken after the cue).
+        # The beep itself never reaches the utterance: `speaker.play(buffer=…)`
+        # holds `PlaybackGate` for the buffer's duration, so VAD drops those
+        # frames, and `vad.resume()` resets all state (speech_frames,
+        # input_bytes) before detection starts.
         await self._stop_recording()
         logger.debug("Recording stopped", module=self.LOG_MODULE)
-        await self._play_notify()
         await self._start_recording()
+        await self._play_notify()
         logger.debug("Ready to listen", module=self.LOG_MODULE)
 
         while self.active:
@@ -280,16 +284,16 @@ class ExternalConversationController:
                 await speaker.play(text="抱歉，我没有收到回复")
             return "continue"
 
-        # 5. Stop recording → TTS → Notify → Start recording → Wait for silence
-        #    Mic is off during TTS and notify, so no echo is captured.
-        #    _play_notify() blocks for ~740ms (the beep duration),
-        #    enough for TTS echo to fade. After starting recording, we wait
-        #    for silence to ensure any residual echo or buffered audio clears.
+        # 5. Stop recording → TTS → Start recording → Notify → Wait for silence
+        #    Mic is off during TTS, so the reply is never captured. It is back
+        #    up before the notify beep, so the beep is what says "listening
+        #    starts now" (the gate drops the beep itself). Then we wait for
+        #    silence to let residual echo and buffered audio clear.
         #    VAD.resume() resets all state, so speech detection starts clean.
         await self._stop_recording()
         await self._play_tts(str(response))
-        await self._play_notify()
         await self._start_recording()
+        await self._play_notify()
         logger.debug("Recording started, waiting for silence...", module=self.LOG_MODULE)
         await self._wait_for_silence(vad)
         logger.debug("Ready to listen", module=self.LOG_MODULE)
@@ -321,8 +325,9 @@ class ExternalConversationController:
 
         await self._stop_recording()
         await self._play_tts(str(response))
-        await self._play_notify()
+        # 开麦排在提示音之前：提示音一结束就能收下一句（闸门会丢掉提示音本身）。
         await self._start_recording()
+        await self._play_notify()
         logger.debug("Ready for next XiaoAI native ASR round", module=self.LOG_MODULE)
         return "continue"
 

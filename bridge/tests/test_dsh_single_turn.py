@@ -41,15 +41,17 @@ class _LoopProbe:
         self.turns = 0
         self.after_wakeup = 0
         self.stopped_recording = 0
+        self.order = []
 
     async def _stop_recording(self):
         self.stopped_recording += 1
+        self.order.append("stop")
 
     async def _start_recording(self):
-        pass
+        self.order.append("start")
 
     async def _play_notify(self):
-        pass
+        self.order.append("notify")
 
     async def _call_after_wakeup(self):
         self.after_wakeup += 1
@@ -132,6 +134,12 @@ class ConversationLoopTest(unittest.TestCase):
         self.assertEqual(1, controller.turns)
         self.assertEqual(0, controller.after_wakeup, "no goodbye after a single sentence")
         self.assertEqual(1, probe.stopped_recording)
+        self.assertEqual(
+            ["stop", "start", "notify"],
+            probe.order[:3],
+            "the mic must be back up before the cue: the beep is what tells "
+            "the user that listening has started",
+        )
 
     def test_continuous_mode_keeps_talking(self):
         controller = self.dsh_module.DshConversationController.__new__(

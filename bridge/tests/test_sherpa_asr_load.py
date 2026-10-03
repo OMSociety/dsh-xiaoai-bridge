@@ -175,6 +175,8 @@ def test_loads_the_requested_backend(bench):
     asr._ensure_loaded()
 
     assert bench.built() == ["from_sense_voice"]
+    # 中文锁定：`language="auto"` 会把短音频判成日文。
+    assert bench.factory.calls[0][1]["language"] == "zh"
     assert asr.status()["requested"] == "sense_voice"
     assert asr.status()["active"] == "sense_voice"
     assert asr.status()["error"] is None
