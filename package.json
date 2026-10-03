@@ -4,6 +4,16 @@
   "description": "XiaoAI speaker bridge for DeepSeek Harness: wake word, speech capture, DSH conversation and speaker playback, with the Python bridge hosted as a local process by the plugin.",
   "type": "module",
   "license": "MIT",
+  "private": true,
+  "author": "OMSociety",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OMSociety/dsh-xiaoai-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OMSociety/dsh-xiaoai-bridge/issues"
+  },
+  "homepage": "https://github.com/OMSociety/dsh-xiaoai-bridge#readme",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -23,8 +33,8 @@
     "skills/",
     "locale/",
     "cordis.patch.yml",
-    "docs/",
     "bridge/",
+    "scripts/",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
@@ -48,7 +58,8 @@
     "manifestVersion": 1
   },
   "scripts": {
-    "check": "node scripts/check-client.mjs"
+    "check": "node scripts/check-all.mjs",
+    "check:client": "node scripts/check-client.mjs"
   },
   "keywords": [
     "deepseek-harness",

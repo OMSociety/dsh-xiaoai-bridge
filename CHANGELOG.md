@@ -8,9 +8,9 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-本文件记录仓库根目录的 DSH 插件（`dsh-xiaoai-bridge`，版本取 `package.json` 的 `version`，从 `0.1.0` 起）。`bridge/` 下的 Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)，保留它自己的上游历史、tag（`v1.0.0` … `v1.0.7`）与 [bridge/CHANGELOG.md](bridge/CHANGELOG.md)；上游文件除本文件列出的改动外均原样保留。插件版本以清单里的 `version` 为准发布，因此 `0.1.0` 从第一个带上插件骨架的提交算起；插件自己的版本**没有打 tag**——本仓库所有 tag（`v1.0.0` … `v1.0.7`、`baseline`、`vad-kws-asr-models`）都属于上游桥接器。
+本文件记录仓库根目录的 DSH 插件（`dsh-xiaoai-bridge`，版本取 `package.json` 的 `version`，从 `0.1.0` 起）。`bridge/` 下的 Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)，保留它自己的上游历史、tag（`v1.0.0` … `v1.0.7`）与 [bridge/CHANGELOG.md](bridge/CHANGELOG.md)；上游那半**不是原样搬运**——`bridge/AGENTS.md`、`bridge/README.md`、`bridge/CHANGELOG.md` 在 `09ef117`（`refactor(bridge): drop legacy connectors and wire the DSH backend`）那次改写里被动过（品牌字样原位替换、删掉本 fork 不适用的章节），逐条改动见本文件与 [bridge/CHANGELOG.md](bridge/CHANGELOG.md)。插件版本以清单里的 `version` 为准发布，因此 `0.1.0` 从第一个带上插件骨架的提交算起；插件自己的版本**没有打 tag**——本仓库所有 tag（`v1.0.0` … `v1.0.7`、`baseline`、`vad-kws-asr-models`）都属于上游桥接器。
 
-This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, versioned by `version` in `package.json`, starting at `0.1.0`). The Python bridge under `bridge/` is forked from [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge) and keeps its own upstream history, tags (`v1.0.0` … `v1.0.7`) and [bridge/CHANGELOG.md](bridge/CHANGELOG.md); upstream files are kept as-is apart from the changes listed here. The plugin version is published from `version` in the manifest, so `0.1.0` starts at the first commit that carried the plugin skeleton; the plugin's own releases are **not tagged** — every tag in this repository (`v1.0.0` … `v1.0.7`, `baseline`, `vad-kws-asr-models`) belongs to the upstream bridge.
+This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, versioned by `version` in `package.json`, starting at `0.1.0`). The Python bridge under `bridge/` is forked from [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge) and keeps its own upstream history, tags (`v1.0.0` … `v1.0.7`) and [bridge/CHANGELOG.md](bridge/CHANGELOG.md); the upstream half is **not** carried verbatim — `bridge/AGENTS.md`, `bridge/README.md` and `bridge/CHANGELOG.md` were rewritten in `09ef117` (`refactor(bridge): drop legacy connectors and wire the DSH backend`), with branding swapped in place and sections that do not apply to this fork removed; the per-file changes are listed here and in [bridge/CHANGELOG.md](bridge/CHANGELOG.md). The plugin version is published from `version` in the manifest, so `0.1.0` starts at the first commit that carried the plugin skeleton; the plugin's own releases are **not tagged** — every tag in this repository (`v1.0.0` … `v1.0.7`, `baseline`, `vad-kws-asr-models`) belongs to the upstream bridge.
 
 ## [Unreleased]
 
@@ -19,6 +19,8 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - `README.md`：安装、快速上手、模型工具、设置项、数据位置、排错、卸载与仓库结构。
 - `CONTRIBUTING.md`：环境要求、提交前要跑的自检、目录结构与文档约定。
 - 设置项 `silentStart`（静默启动，默认关）：开启后桥接器连上音箱时不再播报「已连接」。桥接器侧由 `SILENT_START_ENABLE` 环境变量判断（`bridge/native/src/server.rs`）。
+- 根级 `AGENTS.md`：给编码 agent 的硬规则（命令、模块边界、禁区、验收），并纳入 `package.json` 的 `files` 白名单。
+- 第九个离线检查 `scripts/check-http.mjs`：把真路由挂进临时 `http.Server` 用真请求驱动，覆盖缺令牌 fail-closed 503、错误/缺失 bearer 401、正确 bearer 只投递一次、非 JSON 400、裸 socket 上超限体收到 400 而不是 `ECONNRESET`、跨源 403 且不带 CORS 头、未知路由 404、`/data/wipe` 缺 confirm 拒绝，以及 bridge 客户端拒绝恶意 host:port。
 
 ### 变更
 
@@ -28,12 +30,32 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - 新增 `.npmignore`：发布打包时排除虚拟环境、缓存与模型目录。
 - `bridge/native/src/server.rs`：「已连接」播报改为可关闭（改动 Rust 后需重新 `uv sync` 编译原生扩展）。
 - `lib/process.js`：子进程环境改由导出的纯函数 `bridgeChildEnv()` 生成；`scripts/check-config.mjs` 增加对应断言（设置项与环境变量的映射现在离线可测）。
+- `README.md`：标题改为 `DSH XiaoAI Bridge`；安装命令由 `#v0.2.8` 改指分支 `#main`（`v0.2.8` 这个 ref 并不存在）；`sessionCwd` 行的默认值说明改为「第一个工作区」，`ttsProvider` 行的取值说明去掉「强制」。
+- 八个离线检查有了聚合入口：新增 `scripts/check-all.mjs`（按序跑完八个、任一非 0 即整体非 0），`package.json` 的 `check` 改指它并新增 `check:client`；`files` 白名单纳入 `scripts/`，摘下 `docs/`（它含本机绝对路径与子代理会话 ID，不该随包发布），指向 `docs/deploy.md` 的链接一律改用绝对 GitHub URL。
+- `package.json`：补上 `repository`、`bugs`、`homepage`、`author`，以及 `"private": true`（只挡 `npm publish`，不影响 `dsh plugin add github:…` 的安装方式）。
+- `bridge/docker-compose.yml`：顶部加注说明它拉的是**不含本 fork bearer 鉴权**的上游镜像、不建议用于本插件，正式部署走 `uv sync` 本地运行；`bridge/README.md` 的 Docker Compose 与 Docker FAQ 两段同步提示。
+- 更正 `bridge/AGENTS.md`、`bridge/README.md`、`bridge/CHANGELOG.md` 的对外说法：它们是**基于上游原文的 fork 增补版**（改写发生在 `09ef117`），不是「上游原文、未改」；`bridge/README.md` 里指向不存在文件的 `LICENSE`、`DISCLAIMER.md` 相对链接改指仓库根，上游作者的绝对路径死链改成仓库内相对链接。
+- `.gitignore`：显式忽略 `.pytest_cache/`；给「有意入库」的 `bridge/Cargo.lock` 补否定规则与注释，消掉「忽略了却仍被跟踪」的倒挂读法。
+- 看门狗的重启预算改成**滑动崩溃窗口**：`lib/process.js` 的 `stableMs`（活够 60 s 就清零）换成 `crashWindowMs`（默认 60 分钟），窗口内崩溃次数达到 `restartDelaysMs.length` 才放弃，日志写成 `the watchdog stopped after N restarts in M minutes`。周期性慢崩不再被当成「健康了一轮」而无休止重试；接管遗留进程也改成只认 pid 文件里的 pid + 命令行身份（不再是裸 pid）。
+- 修复死键：日志级别设置此前被拼成 `LOG_LEVEL`，而桥接器读的是 `LOGLEVEL`（`bridge/core/utils/logger.py`），那个开关一直没生效；`lib/process.js` 的 `bridgeChildEnv()` 改用正确的键名，`scripts/check-config.mjs` 加断言。
+- 文档与代码对齐：README 排错表的**八个**诊断码顺序改为与 `lib/diagnostics.js` 的 `DIAGNOSTIC_CODES` 一致（当时是八个；后来加了 `token-not-applied` 变成九个，顺序仍以数组为准）；「日志有三处」改为「日志与状态四处」并补上 `GET /plugin/xiaoai/bridge/logs`；补上 `autoStart` 关掉时 `ensureStarted()` 直接拒绝（`bridge is not running (autostart is off)`）的限制；`CONTRIBUTING.md` 的锁文件约定、`docs/deploy.md` 的取证口径与「同序」说法一并改成事实。
+- 新增诊断码 `token-not-applied`（`warn`）：桥接器先于 API 令牌启动、只能停在 loopback 模式时，`collectFacts()` 记一次并提示重启桥接器（detail 固定为 `the bridge started before the API token existed; restart the bridge to apply it`）。
+- `spoken.jsonl` 有了上限：超过 5 MiB 就整份轮转到**单槽** `spoken.jsonl.1`，所以历史只保留上一代；轮转失败只 warn 一次 `spoken log rotation failed` 并继续追加，不丢记录；`collectFacts()` 增加 `spokenLogBytes`。
+- 配置校验分成两条路：载入路径 `configNow()` 走 `sanitizeConfig()` 逐键回退默认值、只告警一次 `unusable config repaired with defaults: …`，设置写入则在 revision 围栏之前用 `validateConfig()` 严格校验、不合法当场回 400；`wakeupTimeout` 必须是 `1`–`600` 的整数。
+- teardown 收紧：只有 `stop()` 成功且 4399 与 `apiServerPort` 都释放才删 generated，否则保留 `bridge.pid` 并告警 `the next start adopts the leftover process`（`removeGenerated({ keep: [...] })` 是新签名，保留项同时出现在 `kept` 里）；端口探测地址也跟着 `apiServerHost` 走（`0.0.0.0`、`::` 或空串归一到 `127.0.0.1`）。
+- `lib/render-config.js` 的原子替换加上有界重试：`RENAME_ATTEMPTS = 40` / `RENAME_RETRY_MS = 5`，只对 Windows 上会撞进热重载读窗口的 `EPERM`/`EACCES`/`EBUSY` 重试，其它错误立即抛出，失败时清掉半成品 `.tmp` 再 rethrow；`scripts/check-config.mjs` 补三条负路径断言。
+- 文档补两条口径：仓库外的 `plugin-smoke.mjs` 是有用的端到端冒烟，但不在版本库内、不算既有 CI；并显式承认信任域是「本机所有本地用户会话」（Windows 上 loopback 整机可达，同机其它用户会话也能打插件路由）。
+- `AGENTS.md` 的 pytest 基线从 90 抬到 **115 passed, 19 subtests**，并说明 `bridge/tests/conftest.py` 用 `collect_ignore` 把三个手动 TTS 脚本排除在收集之外（它们要真设备与模型，单独 `python tests/test_tts.py` 跑）。
+- 文档写明语音会话的模型限制（R6-6）：会话路由在创建时钉死、本进程内不刷新，所以切换模型只对回复器即时生效，语音会话要等 DSH 重启；这是有意保留的取舍，理由与改法在 `docs/deploy.md` §12.31.7，README 的 `replyerProvider` / `replyerModel` 行同步标注。
+- 文档写明语音指令的威胁模型（R3-5）：能触达 `POST /asr` 就等于拿到了 agent 输入通道，机械保障只有 bearer 门禁与宿主既有审批流，没有语音专用工具集、也没有逐句审批策略；收紧危险动作的旋钮在宿主侧的 approval policy，这是架构限制而非缺陷。README 增加「安全边界（限制）」段，展开见 `docs/deploy.md` §12.31.8。
 
 ### Added
 
 - `README.md`: installation, quick start, model tool, settings, data locations, troubleshooting, uninstall and repository layout.
 - `CONTRIBUTING.md`: environment requirements, the self-checks to run before committing, repository layout and documentation conventions.
 - A `silentStart` setting (start silently, off by default): with it on, the bridge no longer speaks "已连接" when it connects to the speaker. The bridge reads it from the `SILENT_START_ENABLE` environment variable (`bridge/native/src/server.rs`).
+- A root `AGENTS.md`: hard rules for coding agents (commands, module boundaries, forbidden operations, acceptance criteria), added to the `files` allowlist in `package.json`.
+- A ninth offline check, `scripts/check-http.mjs`: it mounts the real routes into a throwaway `http.Server` and drives them with real requests, covering fail-closed 503 without a token, 401 for a wrong or missing bearer, exactly-once delivery with the right bearer, 400 for a non-JSON body, 400 (not `ECONNRESET`) for an over-limit body over a raw socket, 403 without CORS headers for a foreign origin, 404 for an unknown route, a refused `/data/wipe` without `confirm`, and the bridge client rejecting a hostile host:port.
 
 ### Changed
 
@@ -43,6 +65,24 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - Added `.npmignore`, so a published tarball leaves out the virtualenv, the caches and the model package.
 - `bridge/native/src/server.rs`: the "已连接" prompt can now be turned off (changing Rust means re-running `uv sync` to rebuild the native extension).
 - `lib/process.js`: the child environment now comes from an exported pure function, `bridgeChildEnv()`; `scripts/check-config.mjs` asserts the mapping, so settings-to-environment stays testable offline.
+- `README.md`: the heading is now `DSH XiaoAI Bridge`; the install command points at the `#main` branch instead of `#v0.2.8` (that ref never existed); the `sessionCwd` row now documents "the first workspace" and the `ttsProvider` row drops "force".
+- The eight offline checks now have an aggregate entry point: `scripts/check-all.mjs` runs them in order and fails as a whole if any of them fails, `package.json`'s `check` points at it and `check:client` is new; `files` now ships `scripts/` and no longer ships `docs/` (it contains local absolute paths and subagent session ids), and every link to `docs/deploy.md` uses an absolute GitHub URL.
+- `package.json`: added `repository`, `bugs`, `homepage`, `author`, and `"private": true` (which only blocks `npm publish`, not installation through `dsh plugin add github:…`).
+- `bridge/docker-compose.yml`: a header note now states that it pulls the upstream image, which lacks this fork's bearer auth, and should not be used with this plugin; deploy from source with `uv sync` instead. The Docker Compose and Docker FAQ sections of `bridge/README.md` carry the same warning.
+- Corrected how `bridge/AGENTS.md`, `bridge/README.md` and `bridge/CHANGELOG.md` are described: they are a **fork extension of the upstream text** (rewritten in `09ef117`), not untouched upstream files. The `LICENSE` and `DISCLAIMER.md` links in `bridge/README.md` that pointed at files that do not exist now point at the repository root, and the upstream author's absolute-path link became a relative in-repo link.
+- `.gitignore`: `.pytest_cache/` is now ignored explicitly, and `bridge/Cargo.lock` (deliberately tracked) got a negation rule with a comment, so it no longer reads as ignored-yet-tracked.
+- The watchdog restart budget is now a **rolling crash window**: `stableMs` in `lib/process.js` (reset the count after 60 s of health) became `crashWindowMs` (60 minutes by default), and the watchdog gives up once the crashes inside the window reach `restartDelaysMs.length`, logging `the watchdog stopped after N restarts in M minutes`. A bridge that dies slowly is no longer treated as healthy, so it cannot retry forever; adopting a leftover bridge now also requires the pid plus the command-line identity recorded in the pid file, not a bare pid.
+- Fixed a dead knob: the log level setting was passed as `LOG_LEVEL`, while the bridge reads `LOGLEVEL` (`bridge/core/utils/logger.py`), so the switch never did anything; `bridgeChildEnv()` in `lib/process.js` now uses the correct name and `scripts/check-config.mjs` asserts it.
+- Docs now match the code: the README troubleshooting table follows the order of `DIAGNOSTIC_CODES` in `lib/diagnostics.js` (**eight** codes at the time; a later code, `token-not-applied`, made it nine, and the array stays the source of order); "logs live in three places" became four log-and-status endpoints, including `GET /plugin/xiaoai/bridge/logs`; the README records that `ensureStarted()` refuses outright when `autoStart` is off (`bridge is not running (autostart is off)`); and the lockfile convention in `CONTRIBUTING.md` plus the evidence wording and the "same order" claim in `docs/deploy.md` were corrected.
+- New diagnostic code `token-not-applied` (`warn`): when the bridge started before the API token existed and is stuck on loopback only, `collectFacts()` records it once and tells you to restart the bridge (the detail is fixed as `the bridge started before the API token existed; restart the bridge to apply it`).
+- `spoken.jsonl` now has a cap: past 5 MiB the whole file rotates into the **single** slot `spoken.jsonl.1`, so only the previous generation is kept; a failed rotation warns once (`spoken log rotation failed`) and appends anyway, so nothing is lost; `collectFacts()` gained `spokenLogBytes`.
+- Config validation now has two paths: the load path (`configNow()`) repairs bad keys through `sanitizeConfig()`, falling back to defaults with a single `unusable config repaired with defaults: …` warning, while settings writes are checked strictly by `validateConfig()` *before* the revision fence and answered with 400 when unusable; `wakeupTimeout` must be a whole number in `1`–`600`.
+- Teardown is stricter: generated files are removed only when `stop()` succeeded and both 4399 and `apiServerPort` were released; otherwise `bridge.pid` is kept and the log warns `the next start adopts the leftover process` (`removeGenerated({ keep: [...] })` is the new signature, and kept entries also show up in `kept`). The held-port probe address follows `apiServerHost` too (`0.0.0.0`, `::` or an empty string all resolve to `127.0.0.1`).
+- The atomic replace in `lib/render-config.js` gained a bounded retry: `RENAME_ATTEMPTS = 40` / `RENAME_RETRY_MS = 5`, retrying only the `EPERM`/`EACCES`/`EBUSY` refusals Windows raises when a rename lands inside the bridge's hot-reload read window, rethrowing anything else and clearing the half-written `.tmp` before rethrowing when the retries run out; `scripts/check-config.mjs` gained three negative-path assertions.
+- Two wording fixes in the docs: `plugin-smoke.mjs` outside the repository is a useful end-to-end smoke test, but it is not in the repository and not existing CI; and the trust domain is now stated explicitly as "every local user session on this machine" (on Windows a loopback listener is reachable machine-wide, so other local sessions can call the plugin routes too).
+- The pytest baseline in `AGENTS.md` moved from 90 to **115 passed, 19 subtests**, and now explains that `bridge/tests/conftest.py` uses `collect_ignore` to keep the three manual TTS scripts out of collection (they need real hardware and models; run them one by one with `python tests/test_tts.py`).
+- Documented the voice-session model limitation (R6-6): the session route is pinned when the session is created and never refreshed inside this process, so a model switch only reaches the replyer immediately while the speaker's session waits for a DSH restart. That is a deliberate trade-off; the reasoning and the way to change it are in `docs/deploy.md` §12.31.7, and the `replyerProvider` / `replyerModel` rows in the README carry the same note.
+- Documented the threat model for voice commands (R3-5): reaching `POST /asr` amounts to holding the agent's input channel, the only mechanical guarantees being the bearer gate and the host's existing approval flow (there is no voice-only tool set and no per-utterance approval policy); tightening the constraints on dangerous actions is a host-side approval-policy matter, an architectural limit rather than a defect. The README gained a "security boundary (limits)" paragraph and `docs/deploy.md` §12.31.8 carries the details.
 
 ## [0.2.8] - 2026-10-03
 
@@ -232,7 +272,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 
 - 插件骨架：`apply` / `inject`、设置卡片、`GET /plugin/xiaoai/health` 与 `xiaoai-speak` 技能。
 - Python 桥接器作为被托管的子进程（启动、停止、重启、日志、pid 文件、收养遗留进程），上面接 `xiaoai_speak` 工具。
-- 桥接器的 `POST /api/play/text` 可通过插件自己的 `/plugin/xiaoai` 路由访问，这些路由只允许同源。
+- 桥接器的 `POST /api/play/text` 由宿主侧直连桥接器 API 调用（`lib/bridge.js` 的 `playText()`），**没有**走插件自己的 `/plugin/xiaoai` 路由：那些路由只服务状态、配置、语音提交、设备与擦除，且一律只允许同源。
 
 ### 变更
 
@@ -248,7 +288,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 
 - Plugin skeleton: `apply` / `inject`, the settings card, `GET /plugin/xiaoai/health` and the `xiaoai-speak` skill.
 - The Python bridge as a supervised child process (start, stop, restart, logs, pid file, adopting leftovers), with the `xiaoai_speak` tool on top.
-- The bridge's `POST /api/play/text` is reachable through the plugin's own `/plugin/xiaoai` routes, which are same-origin only.
+- The bridge's `POST /api/play/text` is called host-side, straight against the bridge API (`playText()` in `lib/bridge.js`); it is **not** proxied through the plugin's own `/plugin/xiaoai` routes, which only serve status, config, speech submission, devices and wipe, and are same-origin only.
 
 ### Changed
 

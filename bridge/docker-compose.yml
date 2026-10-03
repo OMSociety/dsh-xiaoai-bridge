@@ -1,3 +1,12 @@
+# 注意：本文件来自上游仓库（coderzc/open-xiaoai-bridge），拉取的是上游镜像，
+# 不含本 fork 的改动（bearer 鉴权门禁、DSH 后端接线、去掉的历史连接器）。
+# 照它部署得到的是"没有 bearer 门禁"的桥接器，与本插件"默认带鉴权"的承诺
+# 不一致，因此不建议用于本插件的正式部署。
+#
+# 正式部署请用本地源码运行（见 bridge/README.md 的"本地编译"一节）：
+#   cd bridge && uv sync && uv run main.py
+# 或者把下面这行换成上游没有的本地构建，并自行确认构建产物带鉴权：
+#   build: .
 services:
   open-xiaoai-bridge:
     image: ghcr.io/coderzc/open-xiaoai-bridge:latest

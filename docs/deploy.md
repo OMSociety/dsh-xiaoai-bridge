@@ -857,6 +857,14 @@ DSH 侧另有 `_rule_prompt_for_skill`（「主人看不到你回复的文字」
 以及 locale 文件的存在性、语言 id 合法性、`meta.title|description` 非空、
 `exports`/`files` 是否放行。
 
+**设置写入的校验（R1-1，4.13）**：`POST /plugin/xiaoai/config` 在落盘前用
+`lib/config.js` 的 `validateConfig()` 严格校验草稿（草稿 = `DEFAULTS` → 当前 section →
+本次的 `patch` 或按序应用的 `set` ops），不合法就回 400、错误信息里带字段名，
+且**不碰**设置 seam；`unset` 不入校验，因为它只是删键、露出来的是继承的默认值。
+校验跑在 revision 围栏之前，所以「既过期又不合法」回 400 而不是 409。
+载入路径是另一套：`lib/index.js` 的 `configNow()` 走 `sanitizeConfig()` 逐键回退、
+只告警一次。两半的分工见 §12.32.3。
+
 ### 12.11 第 3 期：生成的 `config.py` 是**覆盖层**，不是副本
 
 设置页不再只写 DSH 的 settings，它同时把配置渲染成桥接器能读的 `config.py`
@@ -1089,6 +1097,16 @@ profile 级的 `ctx.systemPrompt.section()` 会漏进**所有**桌面会话 —�
 `dataDir` = `<DSH_HOME>/xiaoai-bridge`（没有 `DSH_HOME` 时 `~/.dsh/xiaoai-bridge`），
 和 `devices.json`、`bridge.pid`、`config.py` 同一个目录。
 
+**上限与轮转（R6-1，4.13）**：文件超过 `SPOKEN_LOG_MAX_BYTES = 5 * 1024 * 1024`（5 MiB）
+时，整份轮转到**单槽** `spoken.jsonl.1`——Windows 的 `rename` 覆盖不了已存在的目标，
+所以轮转是「先删旧槽再改名」，也就是**只保留上一代**，下一次轮转会把上一代顶掉，
+真正的长期留痕得用户自己另存。轮转失败（文件被占用、权限等）只 warn 一次
+`dsh-xiaoai-bridge: spoken log rotation failed: …`，然后**继续往原文件追加**，不丢记录。
+`createSpokenLog(...).size()` 返回当前可见文件的字节数，是 `collectFacts()` 里
+`spokenLogBytes` 的来源（轮转前的写入按 `size() + 本次长度` 判断是否该轮）。
+`spoken.jsonl.1` 已在 `lib/cleanup.js` 的 `HISTORY_FILES` 里，卸载时与 `spoken.jsonl`
+同等对待；只有显式的 `POST /data/wipe` 会连它一起删。
+
 ### 12.20 会话分组：为什么音箱会话显示「未分组」
 
 **症状（m04179）**：`sessionCwd` 指的是工作区里的子目录（`D:\WorkSpace\XiaoAI`），
@@ -1152,6 +1170,11 @@ profile 级的 `ctx.systemPrompt.section()` 会漏进**所有**桌面会话 —�
 没变。真正的威胁面是「监听地址被改成 `0.0.0.0`」，那条路已经被堵住了。插件自己走
 loopback 且**本来就带 token**（`lib/bridge.js` 从第 2 期起就带），所以常态是已鉴权。
 
+**但 loopback 不等于「只有我」**：Windows 上 `127.0.0.1` 是**整机可达**的，同一台机器的
+其他本地用户会话也能连上来，插件路由（`POST /plugin/xiaoai/config`、`POST /plugin/xiaoai/data/wipe`、
+`/bridge/start|stop`）都在这个信任域里。这是**显式承认**的边界，不是没注意到——
+展开与收紧方案见 §12.32.7。
+
 **token 从哪来**（**每次请求现读**，改配置不必重启）：环境变量 `XIAOAI_API_TOKEN`
 优先，其次渲染后的 `config.py` 的 `dsh.token` —— 与 `core/dsh.py` 的既有惯例一致
 （env 优先、config 兜底）。插件托管时 `lib/process.js` 会把 `ensureToken()` 供给的
@@ -1186,14 +1209,20 @@ token 塞进子进程 env，所以正常安装就是「已配置 token」。
 **一、watchdog：退避重启，然后放弃**（`lib/process.js`）
 
 - 退出处理器（`child.on('exit')`）在 `!stopping` 时调 `scheduleRestart('exited unexpectedly (code=…)')`。
-- 延迟表 `DEFAULT_RESTART_DELAYS_MS = [2000, 5000, 15000, 30000]`，**表长同时就是重试预算**：
-  `restarts >= restartDelaysMs.length` 时置 `gaveUp = true`，`lastError` 写成
-  `bridge exited unexpectedly (code=…); the watchdog stopped after N restarts`。
+- 延迟表 `DEFAULT_RESTART_DELAYS_MS = [2000, 5000, 15000, 30000]`，**表长同时就是崩溃预算**：
+  窗口内崩溃次数达到 `restartDelaysMs.length` 时置 `gaveUp = true`，`lastError` 写成
+  `bridge exited unexpectedly (code=…); the watchdog stopped after N restarts in M minutes`。
   固定间隔重试会把「音箱没插电」变成每 2 秒一次的密集重启，退避不会。
-- **预算重置规则**：进程活过 `stableMs`（默认 60 s）才算「健康了一轮」，此时退出把
-  `restarts` 归零——否则「一天崩一次」会在几天后耗尽预算而永久闭嘴。
-  watchdog 自己的重启**不**重置（否则崩循环里 `restarts` 永远是 0，等于无限重启）；
-  用户显式 `start()` 才重置（`start({ fromWatchdog = false })` 里 `restarts = 0; gaveUp = false`）。
+- **预算是滑动崩溃窗口，不是「连续崩了几次」**：`scheduleRestart()` 先
+  `crashTimes = crashTimes.filter((at) => now - at < windowMs)`（`crashWindowMs`，默认
+  `DEFAULT_CRASH_WINDOW_MS = 60 * 60 * 1000`），只有窗口内的崩溃才算数；本次尝试的延迟取
+  `restartDelaysMs[crashTimes.length]`，再把 `Date.now()` push 进 `crashTimes`。因此
+  「一天崩一次」在窗口里永远只有 1 次、不会耗尽预算，而「一分钟崩一次」和「一秒崩一次」
+  一样会把四次额度用完。
+- 旧口径的 `stableMs`（「活够 60 s 就算健康一轮、把计数清零」）**已删除**：它让周期性慢崩
+  永远重试下去。现在没有「活够久就重置」，只有用户显式 `start()` 才清空
+  （`start({ fromWatchdog = false })` 里的 `crashTimes = []; gaveUp = false`）；
+  watchdog 自己发起的重启**不**清（否则崩循环里计数永远是 0，等于无限重启）。
 - `stop()` 在最早的 `if (!running()) return` **之前**调 `clearRestartTimer()`：桥接器已经
   宕机时点的「停止」如果不清计时器，一秒后到期的重启会把它又拉起来。
 - 只在插件自己管进程时才重试（`watchdogActive()`：`cfg.enabled !== false &&
@@ -1220,17 +1249,21 @@ token 塞进子进程 env，所以正常安装就是「已配置 token」。
 **不做第二次尝试**（对着同一个死端口重试没有意义）。`ensureBridge` 是可选注入项：
 `check-speak.mjs` 里没有它的用例仍然只播一次。
 
-**四、`state()` 的新字段**（给 4.5 状态卡用）：`restarts`（本轮崩循环已用掉的重启次数）、
+**四、`state()` 的新字段**（给 4.5 状态卡用）：`restarts`（崩溃窗口内已计数的崩溃次数，
+= `crashTimes.length`）、
 `watchdogGaveUp`（watchdog 是否已放弃）、`nextRestartAt`（下一次自动重启的 ISO 时间，或
 `null`）。加上 §12.21 的 `auth`，状态卡要的三类信息（在跑没在跑 / 为什么不在跑 / 鉴权
 形态）就齐了。
 
-**测试**：`scripts/check-supervisor.mjs` 新增 case C（自然退出→重启成新 pid、日志有
-`restart #1 in 120 ms`）、case D（已排队的重启被 `stop()` 取消，等过一个延迟也不再起）、
-case E（`restartDelaysMs: [10, 20]` 的崩循环 → `watchdogGaveUp === true` 且日志写
+**测试**：`scripts/check-supervisor.mjs` 的 4.1 部分新增 case C（自然退出→重启成新 pid、
+日志有 `restart #1 in 120 ms`）、case D（已排队的重启被 `stop()` 取消，等过一个延迟也不再
+起）、case E（`restartDelaysMs: [10, 20]` 的崩循环 → `watchdogGaveUp === true` 且日志写
 `the watchdog stopped after 2 restarts`；随后显式 `start()` 清掉标记并真的跑起来）；
 `scripts/check-speak.mjs` 新增「proactive speech」5 条（按需拉起后重试成功、拉起失败时
 报原因、HTTP 错误不重启、超时到 `reviveWaitMs` 就收手、没有 `ensureBridge` 时行为不变）。
+该 checker 后来长到九个 case（A 身份匹配的遗留进程被接管、A2 旧版裸数字 pid 文件仍能接管、
+B 遗留进程跑的是被替换过的代码则重启、C、D、E、F 身份不匹配被拒绝、G 解释器 spawn 不出来
+不算成功、H 并发 `start()` 只 spawn 一次），列表以脚本里的 `console.log('case …')` 为准。
 
 ### 12.23 连续对话开关：默认一句话一次唤醒（4.2）
 
@@ -1463,7 +1496,7 @@ hook。插件被移除、DSH 正常退出、插件被重载，跑的都是同一
 | 条目 | 类别 | 谁写的 | teardown 处理 |
 | --- | --- | --- | --- |
 | `config.py` | generated | `supervisor.renderConfig()`，每次启动重渲染 | 删 |
-| `bridge.pid` | generated | 启动时写、退出时清 | 删 |
+| `bridge.pid` | generated | 启动时写、退出时清；teardown 发现进程没停干净就**保留**它 | 删（没收干净时留） |
 | `render.py.tmp` | generated | `lib/render-config.js:197-205` 的临时文件（异常退出的残片） | 删 |
 | `__pycache__/` | generated | Python 自己生成 | 删 |
 | `bridge.log` | history | 桥接器 stdout/stderr，`lib/process.js:134` | 留 |
@@ -1472,7 +1505,11 @@ hook。插件被移除、DSH 正常退出、插件被重载，跑的都是同一
 | 其他任何文件 | other | 我们不知道是谁的 | 留，并写进 `kept` |
 
 `lib/cleanup.js` 就是这张表：`classify(name)` 返回 `generated` / `history` /
-`other`，`removeGenerated()` 只删第一类并返回 `{removed, kept, failed}`，
+`other`，`removeGenerated()` 只删第一类并返回 `{removed, kept, failed}`（4.13 起还接受
+`{ keep: [...] }`，把指定条目排除在删除目标之外，保留项同时出现在 `kept` 里；teardown 只在
+「`stop()` 成功且 4399 与 `apiServerPort` 都释放」时才不带 keep，否则保留 `bridge.pid` 并告警
+`dsh-xiaoai-bridge: keeping generated files in <dataDir> (…); the next start adopts the leftover process`
+——下一次启动靠 pid 文件里的 pid + 命令行身份把遗留进程接管回来，见 §12.22 与 §12.32.4），
 `list()` 给目录不存在返回 `[]`，两种清理都**永不抛**（失败逐条 `logger.warn`）。
 删目录用 `rmSync(path, { recursive: true })`，删其他条目用
 `rmSync(path, { force: true })`：**不带 `recursive` 的 `rm` 只移除链接本身**，
@@ -1488,7 +1525,10 @@ hook。插件被移除、DSH 正常退出、插件被重载，跑的都是同一
 先清掉看门狗的重启计时器、对被收养的进程轮询存活、超时后强杀。
 
 teardown 之后新增 `reportHeldPorts(stopped)`：探测 `[4399, apiServerPort]`，
-若刚停过一个进程（`stopped.stopped === true`）则等 200 ms 再探一次，然后
+**探测地址跟着配置走**（4.13，R2-7）：取 `apiServerHost`，`0.0.0.0`、`::` 或空串都归一到
+`127.0.0.1`（`0.0.0.0` 不是一个能连的地址），其余原样用；实现是 `lib/index.js` 的
+`reportHeldPorts()`（约 `:540`），不是 `lib/ports.js`。若刚停过一个进程
+（`stopped.stopped === true`）则等 200 ms 再探一次，然后
 - 仍在应答 → `diagnostics.note({ code: 'port-held', detail: 'port N still accepts connections after the bridge was stopped (…)' })`，卡片上显示「端口在停止后仍被占用」；
 - 插件这一轮**什么都没停** → 只写 `debug: port N is served by a process outside this plugin`，不记诊断（别人家的监听不是我们的错误）。
 
@@ -1511,9 +1551,11 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:<webServer 端口>/plugin/x
 
 ### 12.27.5 测试
 
-`scripts/check-cleanup.mjs`（36 条）：分类表与不重叠、`removeGenerated()` 恰好删
+`scripts/check-cleanup.mjs`（40 条断言）：分类表与不重叠、`removeGenerated()` 恰好删
 `['__pycache__','bridge.pid','config.py','render.py.tmp']` 且历史与陌生文件都在、
-二次调用无事可做、`wipe()` 清空整目录、目录不存在时两种清理都是 no-op、
+`result.kept` 里报告了留下的那些、**keep 语义**（`removeGenerated({ keep: ['bridge.pid'] })`
+后 `bridge.pid` 还在磁盘上、既不在 `removed` 里又在 `kept` 里，下一次不带 keep 的调用
+仍然会删掉它）、二次调用无事可做、`wipe()` 清空整目录、目录不存在时两种清理都是 no-op、
 junction 守卫（链接消失、被指向的 `precious.txt` 还在；无权限则打印 skip）、
 端口探测（0 / 70000 非法；真起一个 `net.createServer().listen(0)` 断言绑定端口为
 `true`、`server.close()` 后为 `false`；`heldPorts` 去重并过滤非法值）。
@@ -1616,8 +1658,11 @@ deepseek-ai/dsh），「许可证与作者」点明三行版权各自的归属�
 
 ### 12.28.7 验证
 
-文档类改动不动代码，回归仍以八个 checker、`bridge` 的 pytest 与
-`plugin-smoke.mjs` 为准，结果记在提交信息里。README 的锚点按 §3.1 的
+文档类改动不动代码，回归仍以离线检查与 `bridge` 的 pytest 为准，结果记在提交信息里。
+（当时是八个 checker；4.13 第二批加到九个，见 §12.32.6。）仓库外的
+`D:\WorkSpace\_oxb-wheels\plugin-smoke.mjs` 覆盖 `/asr` 鉴权、`/config` 冲突与
+`POST /data/wipe`，可以顺手当回归用，但**它不在版本库内、不算既有 CI**，也别在文档里
+当既成事实引用——口径与根 `AGENTS.md` 的「验收标准」末段一致。README 的锚点按 §3.1 的
 `id="user-content-([^"]+)"` 逐个核对（中文标题的锚点就是标题本身，如 `#排错`）。
 另有两个一次性脚本做过机器校验（放在仓库外的 `D:\WorkSpace\_oxb-wheels\`）：
 `doc-check.mjs`（emoji、独立 `---`、表格列数、README 锚点与标题对照）与
@@ -1629,8 +1674,11 @@ deepseek-ai/dsh），「许可证与作者」点明三行版权各自的归属�
 README / CHANGELOG / CONTRIBUTING 三份文档交给一个只做事实核对、不改文件的子代理，
 按十类逐条对代码与 git 历史：配置键与默认值（对 `lib/config.js:98-177` 的 `DEFAULTS`
 与 `lib/config.js:189+` 的 schema）、四组 HTTP 路由（`lib/http.js:184` / `:196` /
-`:211` / `:374` / `:334-360`）、八个诊断编码（`lib/diagnostics.js:24-41` 与 README
-同序）、八个 checker（`package.json` 的 `scripts.check` 只跑 client，文档逐条列是对的）、
+`:211` / `:374` / `:334-360`）、诊断编码（`lib/diagnostics.js:24-41`，当时八个；**当时的
+README 排错表顺序与代码数组相反**，这一条复核没看出来，4.13 批次才改正，见 §12.31.2，
+同一批的第二段又加了 `token-not-applied` 变成九个，见 §12.32.1）、
+checker（当时八个，`package.json` 的 `scripts.check` 只跑 client，文档逐条列是对的；
+4.13 批次加了聚合入口，第二批加到九个，见 §12.31.4 与 §12.32.6）、
 模型工具（`lib/tools.js:12` 的 `SPEAK_TOOL_NAME` 只声明 `text`）、端口与数据位置
 （`lib/ports.js:17` `SPEAKER_PORT = 4399` 与 `bridge/native/src/server.rs:89` 的
 `"0.0.0.0:4399"`、`lib/cleanup.js` 的 GENERATED/HISTORY 切分）、零 emoji 与无 `---`、
@@ -1668,8 +1716,14 @@ README / CHANGELOG / CONTRIBUTING 三份文档交给一个只做事实核对、�
 
 #### 12.29.1 为什么加
 
-仓库此前没有根级 `AGENTS.md`，只有 `bridge/AGENTS.md`（上游原文，375 行，管 Python/Rust
-侧）。根目录这一半（Node 插件）的命令、模块边界与禁区没有任何机器可读的入口——README
+仓库此前没有根级 `AGENTS.md`，只有 `bridge/AGENTS.md`（**基于上游原文的 fork 增补版**，375 行，
+管 Python/Rust 侧），但它不是「上游原文」——经 `git diff` 核对：`git cat-file -p
+upstream/main:AGENTS.md` 是 388 行、`git diff --stat upstream/main:AGENTS.md
+HEAD:bridge/AGENTS.md` 是 72 insertions / 85 deletions（同一次核对里 `bridge/CHANGELOG.md`
+12/12 品牌字样原位替换、`bridge/README.md` 108 insertions / 528 deletions）。改写发生在
+`09ef117 refactor(bridge): drop legacy connectors and wire the DSH backend`，**不是** fork 的
+初始提交（`00089e1` 是原样搬移，`git diff b2d8384:AGENTS.md 00089e1:bridge/AGENTS.md` 为空），
+所以「未改」的说法不成立，文档一律按上面这组数字写。根目录这一半（Node 插件）的命令、模块边界与禁区没有任何机器可读的入口——README
 讲的是「怎么用」，CHANGELOG 讲的是「改过什么」，都不是「你该怎么做改」。当前会话里由
 用户点名要这份文件。
 
@@ -1691,7 +1745,8 @@ python C:\Users\Administrator\.dsh\skills\agent-md-creator\scripts\check_agents_
 第一版报 1 条 warn：把 `Get-ChildItem scripts\check-*.mjs | ForEach-Object { … }` 那行当
 命令解析，`Get-ChildItem` 既不在仓库配置里也不在 PATH 上（PowerShell 内建命令本来就不是
 可执行文件）。改成八条逐行 `node scripts\check-*.mjs` 后 **error 0 / warn 0**；唯一的
-info 是上游 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——那是上游文件，本 fork 不动。
+info 是 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——它是基于上游原文的 fork 增补版
+（见 §12.29.1），本批次不动它的既有内容。
 成文 128 行（4.13 时又补了「改 Rust」链与两条排错，见 §12.30.3）。
 
 #### 12.29.4 盲测与它抓出来的四处缺口
@@ -1731,9 +1786,11 @@ info 是上游 `bridge/AGENTS.md` 375 行超过 200 行的建议预算——那�
 
 #### 12.30.1 需求与取证
 
-用户重启 DSH 实机试用后反馈：桥接器连上音箱时会播一句「已连接」，希望做成可配置项。全仓搜这四个字，只有一处会出声：`bridge/native/src/server.rs:34` 的 `SpeakerManager::play_text("已连接").await?;`——它在 `async fn test()` 里，由 `:134-137` 的 `tokio::spawn` 延迟 1 秒调起（`TaskManager::instance().add("test", test)`），错误用 `let _ =` 吞掉，所以**这句提示音不写任何日志**：A/B 实测两轮日志一模一样，出不出声只能靠耳朵。`server.rs:113` 的 `pylog!("[AppServer] ✅ 已连接: {:?}", addr)` 只是设备接入日志，与提示音无关。
+用户重启 DSH 实机试用后反馈：桥接器连上音箱时会播一句「已连接」，希望做成可配置项。全仓搜这四个字，只有一处会出声：`bridge/native/src/server.rs` 里 `async fn test()` 的 `SpeakerManager::play_text("已连接").await?;`——由同一个文件里 `tokio::spawn` 延迟 1 秒调起的那段（`TaskManager::instance().add("test", test)`），错误用 `let _ =` 吞掉，所以**这句提示音不写任何日志**：A/B 实测两轮日志一模一样，出不出声只能靠耳朵。同文件的 `pylog!("[AppServer] ✅ 已连接: {:?}", addr)` 只是设备接入日志，与提示音无关。
 
-链路位置：插件侧 `lib/process.js:482` 以 `python main.py`（cwd = `bridge/`）拉起桥接器，子进程环境在那里拼；「设置项 → 环境变量」这条链此前没有集中点。
+**行号取证口径**：本小节的行号是**改动前**（HEAD `7aa3595~1`）的值——上面的播报在那时是 `server.rs:34`、`tokio::spawn` 那段是 `:134-137`、`pylog!` 是 `:113`、拉起子进程是 `lib/process.js:482`；在 HEAD 上同一处已经漂移（分别约 `:49`、约 `:137-140`、约 `:129`、约 `:500`，最后一个还正被进程托管批次改着）。引用时以符号为准（`play_text`、`pylog!`、`spawn`），别照抄裸行号。
+
+链路位置：插件侧 `lib/process.js` 里以 `python main.py`（cwd = `bridge/`）拉起桥接器的那次 `spawn(...)`（取证时 `:482`，HEAD 约 `:500`）拼子进程环境；「设置项 → 环境变量」这条链此前没有集中点。
 
 #### 12.30.2 怎么关
 
@@ -1754,13 +1811,254 @@ error: failed to remove file D:\WorkSpace\Github\dsh-xiaoai-bridge\bridge\.venv\
 #### 12.30.4 验证
 
 - 装上了没有：`bridge\.venv\Lib\site-packages\open_xiaoai_server\open_xiaoai_server.pyd` 的 LastWriteTime = 2026/10/3 02:55:47、7,668,224 字节，二进制里能搜到 ASCII 串 `SILENT_START_ENABLE`（同处还有 `AUDIO_INPUT_ENABLE`）。
-- A/B 实测：同一份配置各跑 11 秒（`Start-Process … python -u main.py`，env `DSH_ENABLE=1`/`API_SERVER_ENABLE=1`/`AUDIO_INPUT_ENABLE=1`/`LOG_LEVEL=INFO`/`CONFIG_PATH=<数据目录>\config.py`，跑完 `taskkill /T /F`）：第一轮不设 `SILENT_START_ENABLE`，第二轮设 `SILENT_START_ENABLE=1`。两轮都在建服后 0.3–0.7 秒接入设备（`[AppServer] ✅ 已连接: 192.168.1.191:56304` / `:56312`），而 `test()` 在 +1 秒才执行——**日志证明不了是否出声**，听觉结论以用户为准。
+- A/B 实测：同一份配置各跑 11 秒（`Start-Process … python -u main.py`，env `DSH_ENABLE=1`/`API_SERVER_ENABLE=1`/`AUDIO_INPUT_ENABLE=1`/`LOG_LEVEL=INFO`/`CONFIG_PATH=<数据目录>\config.py`，跑完 `taskkill /T /F`；**这一行照抄当时真实跑过的命令，不改写历史**：其中的 `LOG_LEVEL` 是死键，桥接器读的是 `LOGLEVEL`，见 §12.31.1）：第一轮不设 `SILENT_START_ENABLE`，第二轮设 `SILENT_START_ENABLE=1`。两轮都在建服后 0.3–0.7 秒接入设备（`[AppServer] ✅ 已连接: 192.168.1.191:56304` / `:56312`），而 `test()` 在 +1 秒才执行——**日志证明不了是否出声**，听觉结论以用户为准。
 - 离线断言：`scripts/check-config.mjs` 现在同时覆盖 `lib/process.js`，断言默认 `SILENT_START_ENABLE === '0'`、`silentStart: true` 时 `'1'`、`CONFIG_PATH` 原样透传、`API_SERVER_PORT` 仍是字符串、且环境里**不含** `XIAOAI_API_TOKEN`（凭据只走 `childEnv()` 的后追加）。
 - 回归：八个 checker 全绿（`check-client` 的 Switch 计数须从 5 改成 6 才过——新增布尔控件会让它失败，这是提醒不是 bug）；`uv sync` 清掉了 pytest，重装后 `90 passed, 19 subtests passed`；未入库的冒烟脚本 exit 0。
 
 #### 12.30.5 版本与生效条件
 
 版本仍是 `0.2.8`，没有 bump（仓库纪律：改版本号先报备）。宿主半的 `lib/*.js` 改动要**重启 DSH** 才生效——本次作业结束时桥接器已恢复运行（pid 45628），但 DSH 仍是改代码之前启动的，所以设置页暂时看不到「静默启动」，且旧代码不传 `SILENT_START_ENABLE`，启动仍会播提示音；重启后可在设置页开「静默启动」。
+
+### 12.31 文档与打包收口（4.13，计划外增补）
+
+#### 12.31.1 死键 `LOG_LEVEL` → `LOGLEVEL`（R7-2-1）
+
+设置页的「日志级别」此前被拼成 `LOG_LEVEL`，而桥接器读的是 `bridge/core/utils/logger.py` 里的
+`os.environ.get("LOGLEVEL", "INFO").upper()`——那个开关看起来生效、实际什么都没做（§12.30.4 的
+A/B 记录里那条 `LOG_LEVEL=INFO` 就是死键的现场证据）。修法：`lib/process.js` 的
+`bridgeChildEnv()` 改成 `LOGLEVEL: String(cfg.logLevel ?? 'INFO')`（注释里写明旧键是死的），
+`scripts/check-config.mjs` 加断言。历史命令**不改写**，只在 §12.30.4 那一行加括注指到这里。
+
+#### 12.31.2 行号漂移：文档改认符号
+
+外部复核指出两处裸行号已经漂了：根 `AGENTS.md` 说导出服务依赖在 `lib/client.js:1254`，实际
+`var inject = ["slots","locale"]` 在 `:1259`（`:1254` 是状态卡 JSX）；说 `"0.0.0.0:4399"` 在
+`bridge/native/src/server.rs:89`，实际在 `:105`（`:89` 是 `.status(401)`）。同类裸行号在根
+`AGENTS.md` 里还有七处。**改法**：契约定成「符号 + 近似行号」，逐条换成 `inject` /
+`ctx.inject` / `BUNDLE_SLOT` / `DATA_DIR_NAME` / `SPEAKER_PORT` / `DIAGNOSTIC_CODES` 这类全仓唯一的
+符号——`lib/client.js` 是手写产物、随时会被别的批次改动，行号只能当锚点。诊断码顺序以
+`lib/diagnostics.js` 的 `DIAGNOSTIC_CODES` 数组为准（README 排错表原来把 `bridge-timeout` 和
+`bridge-error` 写反了，已按代码顺序重排）。
+
+#### 12.31.3 Windows 上 `config.py` 的原子替换会撞热重载读窗口（R1-2）
+
+- **现象**：设置页保存后，`lib/render-config.js` 用「临时文件 + `renameSync`」原子替换
+  `<DSH_HOME>/xiaoai-bridge/config.py`，而桥接器每秒轮询该文件的 mtime 做热重载。Windows 上
+  如果 rename 正好落进那次读的窗口，`renameSync` 抛 `EPERM`；旧实现不重试，于是宿主回 200 而
+  `body.config.ok === false`，页面当时只看 `body.ok`，结果显示「已保存」但磁盘上还是旧配置。
+- **修法**：`lib/render-config.js:33` 新增 `export const RENAME_ATTEMPTS = 40;`、`:36`
+  `export const RENAME_RETRY_MS = 5;`，`:55` 的内部函数 `installAtomically(from, to)` 只对
+  `EPERM` / `EACCES` / `EBUSY` 三个瞬时码做有界重试，其它错误立即抛出；睡眠用同步
+  `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)`（调用方本身就同步），失败时
+  先清掉半成品 `.tmp` 再 rethrow，清理失败不掩盖原错误。**计时口径**：Windows 的定时器粒度让
+  整整 40 轮实际约 **0.6 s**，不是 40×5 ms = 200 ms——本机实测 **614 ms**。
+- **取证（本机 Windows，2026-10-03，只记方法与结果）**：用一个**不共享 DELETE** 的外来句柄打开
+  目标文件（`[System.IO.File]::Open($target,'Open','Read','None')`，等价于「不共享 DELETE 的
+  读者」），在锁被持有期间——无锁对照写入 `ok in 2 ms`；旧路径裸 `renameSync(tmp, target)`
+  **抛 `EPERM`**；新路径 `installAtomically`（锁在写入过程中约 110 ms 时释放）**`ok in 165 ms`**；
+  事后 `tmp left behind: false`，目标文件内容已是新值。取证脚本是仓库外一次性的，不属版本库。
+- **离线兜底**：`scripts/check-config.mjs:185-205` 补三条断言——把目的地做成**目录**（原子替换
+  永远无法成功）时 `writeConfig` **必须抛错**（`an uninstallable destination fails loudly (…)`）、
+  **必须清掉自己的 `.tmp`**（`a failed install cleans up its own temp file`）、**必须不动既有路径**
+  （`a failed install leaves the existing path alone`）；该负路径跑满 40 轮才抛，本机实测约
+  **614 ms**。跨进程的文件锁无法在单进程 checker 里复现，所以 checker 守负路径、正路径靠上面
+  这份取证（checker 的注释里也写明指向本节）。
+
+#### 12.31.4 聚合入口与发布面
+
+- `package.json` 的 `scripts.check` 此前只跑 `check-client.mjs`，且 `files` 白名单不含
+  `scripts/`——装包副本里 `npm run check` 直接 ENOENT。新增 `scripts/check-all.mjs`
+  （`spawnSync(process.execPath, …)` 按序跑八个、`stdio: 'inherit'`、任一非 0 即整体非 0），
+  `check` 改指它并保留 `check:client`，`files` 纳入 `scripts/`。
+- `docs/deploy.md` 从 `files` 里摘掉（它含本机绝对路径与子代理会话 ID），README / AGENTS.md /
+  CONTRIBUTING.md 中指向它的链接改成绝对 GitHub URL——仓库内与装包副本里都能点。
+- `package.json` 补 `repository` / `bugs` / `homepage` / `author` 与 `"private": true`。
+  `private` 只挡 `npm publish`，不影响 `dsh plugin add github:…`（那条路径是 pnpm 的 git 依赖，
+  不经过 registry 发布）。
+- `bridge/docker-compose.yml` 随包发布，但拉的是上游镜像
+  （`ghcr.io/coderzc/open-xiaoai-bridge:latest`，没有 `build:`）——照它部署拿到的是**没有 bearer
+  门禁**的上游桥接器，与本插件「默认带鉴权」的承诺脱节。文件顶部加 YAML 注释写明这点并指向
+  `uv sync` 本地运行，`bridge/README.md` 的 Docker Compose 与 Docker FAQ 两段同步提示。没改成
+  `build: .` 是因为本轮无法验证 fork 的 Dockerfile 能构建出带鉴权与 DSH 接线的镜像。
+
+#### 12.31.5 口径更正：`bridge/` 那三个文件不是「上游原文」
+
+根 `AGENTS.md` 与 §12.29.1 曾把 `bridge/AGENTS.md` / `bridge/README.md` / `bridge/CHANGELOG.md`
+说成「上游原文、未改」，并据此写了禁改令。经 `git diff` 核对这是假的（数字见 §12.29.1），
+三份文件一律改写成「基于上游原文的 fork 增补版」，禁改的理由改成**避免二次改写**（上游同步时
+容易冲突、署名容易再次失真），不是「它还是原文」。同时修掉 `bridge/README.md` 里指向不存在的
+`bridge/LICENSE`、`bridge/DISCLAIMER.md` 的相对链接（改指仓库根）与上游作者的绝对路径死链。
+
+#### 12.31.6 验证
+
+`node scripts/check-all.mjs`（当时是八个 checker 的聚合入口；同一批的第二段加到九个，
+见 §12.32.6）、`node scripts/check-config.mjs`
+（`LOGLEVEL` 断言）、`bridge/` 里的 pytest；仓库外的 `doc-check.mjs`（零 emoji、无独立 `---`、
+表格列数、README 锚点对标题）与 `changelog-check.mjs`（版本节与日期、中英条目 1:1）各跑一遍
+都必须过。文档类改动不动代码，回归口径见 §12.28.7。
+
+#### 12.31.7 语音会话的模型在创建时钉死（R6-6，有意保留的取舍）
+
+- **事实**：语音会话的 agent 路由在**会话创建时**捕获一次——`lib/session.js:430` 的
+  `setup: modelSelectionSetup(await resolveModelInstaller(), selection)`，而 `modelSelectionSetup()`
+  （`:164`）把 `selection` 放进 `const mutable = { current: selection, assembled: undefined }`，
+  此后**本插件没有任何地方写它**（宿主 installer 每次拼 prompt 读 `current`，`:158-159` 的注释
+  写明这一点）；`deliver()` 的复用路径 `:441-444` 命中 live agent 就直接 `return live`，不会重新
+  解析模型。
+- **对照**：回复器半边每次调用都重新解析——`lib/replyer.js` 的 `resolveReplyerRoute(cfg, fallback)`
+  （`:159-171`）先读设置里的 `replyerProvider` / `replyerModel`，为空才回落到会话路由。
+- **因此**：改默认模型（或会话的模型选择）**立刻**对回复器生效，但语音会话要**重启 DSH** 之后
+  才用上新模型。README 的 `replyerProvider` / `replyerModel` 行也写了这条限制。
+- **为什么保留**：这与 DSH 自己的会话语义一致（一场会话的模型在它开始时就定了），把路由做成本
+  进程内可变会和 DSH 的会话模型打架；而且「换模型」的正确姿势本来就是开一场新会话。将来真要
+  改，动的是 `lib/session.js`：让复用路径也重新解析并写 `mutable.current`（并在 `mutable` 上
+  暴露 setter）——那是一次行为变更，不是补一个小功能。
+
+#### 12.31.8 语音指令的威胁模型：能到 `/asr` 就等于拿到了 agent 输入通道（R3-5）
+
+- **事实**：`/asr` 的正文是识别出来的语音，也就是**不可信输入**，它会被当成 DSH 会话里的一条
+  user message。`lib/http.js` 的 `/asr` 路由上有一段 `THREAT MODEL (R3-5)` 注释（`:506-518`）
+  写明：谁能到这个路由，谁就能用「用户自己的声音」要求 agent 做事。
+- **机械保障只有两条**（`:509-513`）：(1) bearer 门禁；(2) 宿主既有的审批流——审批门槛上的
+  工具运行时，音箱只会念一句固定的「需要你到电脑上确认一下」（`approvalText`，默认值在
+  `lib/config.js`，播报逻辑在 `lib/auto-speak.js:311-325`），**审批请求正文从不念出来**，真正
+  决定工具调用的是宿主。
+- **缺的是什么**（`:514-518`）：没有语音专用工具集，也没有逐句审批策略，这是**架构性的**——
+  一句话拿到的权限就是它落进的那场会话的权限。`agents.create` 在这里也**没有**设 approval
+  policy 或受限工具集（`lib/session.js:465` 的 `agents.create({ sessionId, meta, ...factory })`，
+  该文件里搜 `approval` / `permission` 零命中）。所以危险动作的约束基本上只靠提示词 + 宿主既有
+  审批流。
+- **因此这是架构限制、不是缺陷**：本插件不在语义层拦指令；能收紧的旋钮在宿主侧——对本插件
+  agent 生效的 approval policy，以及「哪些工具允许免审批」。
+- 顺带：`/asr` 故意不看 `req.socket.remoteAddress`（`:526-529`）——本机进程本来就在插件的信任
+  边界里（`POST /config`、`/bridge/start`、`/data/wipe` 都按设计不鉴权），加 loopback 判断不增加
+  安全性反而会破坏桥接器调用；信任域的显式说明见 §12.32.7。README 里有面向使用者的同一段
+  「安全边界（限制）」。
+
+### 12.32 实现与文档的第二轮收口（4.13 第二批）
+
+#### 12.32.1 新诊断码 `token-not-applied`（R3-6）
+
+`lib/diagnostics.js:24-43` 的 `DIAGNOSTIC_CODES` 从八个变成九个，新码排在 `port-held`（`:40`）
+之后（`:42`）。触发点是 `collectFacts()`（`lib/index.js` 约 `:322`）：先 `tokenReady = await
+tokenConfigured()` 与 `bridgeApi = await state.probeBridgeApi()`，若
+`bridgeApi.auth === 'loopback-only' && tokenReady`，说明**桥接器先于 API 令牌启动**，只能停在
+无令牌的 loopback 模式，于是记一条 detail 固定的诊断——
+`the bridge started before the API token existed; restart the bridge to apply it`，level 是
+`warn`（`lib/diagnostics.js:92`：`level === 'warn'` 走 `logger.warn`）。同一码用
+`diagnostics.recent().some(...)` 去重，不会每次轮询都刷一条。选 `warn` 而不是 `error`：
+桥接器功能正常，缺的只是一次重启。
+
+#### 12.32.2 `spoken.jsonl` 的上限与单槽轮转（R6-1）
+
+`lib/speech-log.js:34` `SPOKEN_LOG_MAX_BYTES = 5 * 1024 * 1024`（5 MiB）、`:31`
+`SPOKEN_LOG_ROTATED_FILE = 'spoken.jsonl.1'`（**单槽**）。写入前按 `bytes = await size() + length`
+判断，超限就把整份留痕轮转过去。Windows 的 `rename` 覆盖不了已存在的目标，所以实现是「先删旧槽
+再改名」——结果是**只保留上一代**：上一次的 `spoken.jsonl.1` 会被这一次覆盖。轮转失败只 warn
+一次（`:59` `let warnedRotation = false`，文案 `dsh-xiaoai-bridge: spoken log rotation failed: …`），
+然后继续追加，不丢记录。`collectFacts()` 新增的 `spokenLogBytes` 就是
+`createSpokenLog(...).size()`。`spoken.jsonl.1` 已列入 `lib/cleanup.js:39` 的 `HISTORY_FILES`
+（`['bridge.log', 'spoken.jsonl', 'spoken.jsonl.1', 'devices.json', 'device.json']`），和其余
+历史一样只在显式 `POST /data/wipe` 时删。README 的配置/数据表与 §12.19 都写明「历史只保留上一代，
+长期留痕要自己另存」。
+
+#### 12.32.3 配置的两条校验路径（R1-1 / R1-1b）
+
+`lib/config.js` 里 **`CONFIG_RULES` 是模块私有**（`:319`，没有 export），九条规则：
+`asrBackend`、`logLevel`、`ttsProvider`、`apiServerPort`（整数 1–65535）、
+`apiServerTokenCredential`（`/^[A-Za-z_][A-Za-z0-9_]*$/`）、`apiServerHost`（非空字符串）、
+`wakeupTimeout`（必须是整数且在 1–600，message
+`wakeupTimeout must be a whole number of seconds in [1, 600]`）、`replyerHistoryTurns`（整数 0–50）、
+`spokenMaxChars`（整数 40–2000）。对外三个新导出 + 一个保留旧签名的包装：`:384`
+`configProblems(value)`（只收集问题，不抛）、`:403` `validateConfig(value)`（严格，抛
+`new Error('dsh-xiaoai-bridge config: ' + first.message)`）、`:424` `sanitizeConfig(config)`
+（从 `{ ...DEFAULTS, ...(config ?? {}) }` 起手逐键回退，返回
+`{ value, repairs: [{ key, bad, message }] }`，**永不抛**）、`:440` `resolveLoadConfig(config)`
+（= sanitize 后的值）。两条路分工：**载入**走 `configNow()`（`lib/index.js` 约 `:165`）的自愈，
+有 repairs 时只用一次 `dsh-xiaoai-bridge: unusable config repaired with defaults: …` 告警；**在途
+写入**走 `lib/http.js:305-334` 的 `validateDraft()`，在 revision 围栏**之前**跑 `validateConfig`，
+不合法回 400 并在 error 里点名出错的字段。因此「既过期又不合法」是 400 而不是 409。为什么不能
+只留一条：盘上的坏值没有「谁」可以问，只能自愈；在途写入有明确的请求方，静默替换默认值会让页面
+和用户的要求不一致。`wakeupTimeout` 从「只查范围」变成必须 `Number.isInteger`——小数在写入路径
+被拒，在载入路径被回退成默认值（README 的配置表与 §12.10 都写了）。
+
+#### 12.32.4 teardown 收紧：没收干净就不删 generated（R2-5）
+
+`lib/cleanup.js:127` 的 `removeGenerated({ keep = [] } = {})`（JSDoc 在 `:124`）会把 `keep` 里的
+条目排除在删除目标外（`:129` 的 `spared` Set），并把它们放进返回值的 `kept`
+（`:132` `result.kept = names.filter((name) => !targets.includes(name))`）。teardown（`lib/index.js`
+约 `:602`）据此改成：`const unreleased = held.length > 0 || stopped?.ok === false;`——只有
+`supervisor.stop()` 成功**且** 4399 与 `apiServerPort` 都释放，才
+`cleanup.removeGenerated({ keep: [] })`；否则 `keep: ['bridge.pid']`，并告警
+`dsh-xiaoai-bridge: keeping generated files in ${dataDir} (${reason}); the next start adopts the
+leftover process`（reason 是 `port(s) … still answer` 或 `stop failed (…)`）。理由：pid 文件一删，
+下一次启动就认不出还在跑的遗留进程、会再 spawn 一个；留着它加上命令行身份核对（§12.22）才能
+接管。`scripts/check-cleanup.mjs` 现有 **40 条**断言，其中 keep 语义一整组：`keep: ['bridge.pid']`
+之后文件仍在磁盘、既不在 `removed` 又在 `kept`、下一次不带 keep 仍会删。
+
+#### 12.32.5 端口探测跟着 `apiServerHost`（R2-7）
+
+实现是 `lib/index.js` 的 `reportHeldPorts()`（约 `:540`），**不是** `lib/ports.js`。探测地址取
+`apiServerHost`：`0.0.0.0`、`::` 或空串都归一到 `127.0.0.1`，其余原样使用；探测的端口是
+`[SPEAKER_PORT(4399), cfg.apiServerPort]`。若第一次探到占用且 `stopped?.stopped === true`，
+等 200 ms 再探一次，避开刚退出还没松手的抖动。以前写死 `127.0.0.1`：把桥接器配成监听别的本机
+地址时探测会永远报「已释放」，teardown 就会误删 pid 文件。
+
+#### 12.32.6 第九个离线检查 `scripts/check-http.mjs`
+
+`scripts/check-all.mjs` 现在是九个，顺序：client / config / keywords / session / supervisor /
+speak / diagnostics / **http** / cleanup。新 checker 存在的理由写在文件头：此前八个 checker
+从不 import `lib/http.js`（在 `scripts/` 里 grep `http.js` 零命中），路由、请求体解析、同源检查与
+`/asr` 鉴权**没有任何离线信号**；它盯住两个真实发生过的回归——`/asr` 曾经 **fail OPEN**（没有
+令牌也把话投递进会话，而且从不看 peer 地址），现在 fail **CLOSED**（503）；`readBody` 曾在超限时
+立刻 `req.destroy()` 再回 400，真实客户端看到的是 ECONNRESET，所以超限用例走**裸 socket**（`fetch`
+会掩盖差异）。它不启动桥接器、不碰 9092、不碰 `<DSH_HOME>`、不请求运行中的插件，而是把真路由挂进
+一个临时 `http.Server`（loopback 随机端口）用真请求驱动，收尾全关掉。断言按 `section(...)` 分组：
+mount（前缀只注册一次、注册发生在 `webCtx.effect` 里、handler 可调用）、origin（同源 200；外部
+`Origin` 403 且**不带** `Access-Control-Allow-Origin`；外部 preflight 403 而不是 204；同源
+preflight 204 且仍不带 CORS 头）、routes（未知路由 404 且 error 以 `no such route` 开头、
+`GET /asr` 方法不对也是 404）、asr 无令牌（503，`deliver`/`utterance` 都没被调用，body 说明
+no API token 与 fail closed；连没接 `resolveToken` 钩子的构建也 503）、asr bearer（无
+`Authorization` 401、错误 bearer 401、正确 bearer 200 且 `deliver` 恰好一次、`utterance` 拿到
+session id、响应回 `session_id` 与 `reply`；投递失败是 503 不是 200；`resolveToken` 抛异常是 500
+且**不回显**凭据库消息、只进日志）、body（非 JSON 400 且 error 以 `invalid JSON body` 开头、空
+utterance 400，都不触达 handler；超限体在裸 socket 上收到 HTTP 400 状态行而不是裸 reset；正常体
+不受影响）、data/wipe（无 body 400、confirm 写错 400、写对 200 且 wipe 恰好一次）、config（越界
+`apiServerPort` 400 且 `settings.update` 未调用、响应里没有 result/config 字段、error 点名字段；
+小数 `wakeupTimeout` 400；`ops` 把 `apiServerHost` 设成空串 400 且 `settings.mutate` 未调用；
+合法 ops 200 且 `mutate` 一次——`unset` 不需要校验；合法 patch 200 且 `update` 一次）、errors
+（宿主异常 500、body 固定 `internal error`、不回显 host 错误码/路径/用户名、完整异常进日志；
+stale revision 仍是 409）、bridge client（bearer 只跟随**经校验的** host:port：合法 loopback 目标
+带 `Bearer secret-token-abc123`；凭据为空或空串时**不发** `Authorization`；恶意 host 被拒、凭据
+一次都不读、拒绝报 `bridge-unreachable`、被拒目标永不到达 recorder；`[::1]` 的 `baseUrl()` 保留
+配置拼写；大小写混合的主机名不被当敌意）。**仍然拦不住的**：真机 socket 的 OS 级行为、桥接器
+真实 9092 的行为、设备侧——那些只能靠端到端冒烟（仓库外的 `plugin-smoke.mjs`，口径见 §12.28.7）。
+风格与 `check-config.mjs` 一致：一行一条 `ok`/`FAIL`，收尾 `http check OK`，有失败就非 0 退出。
+
+#### 12.32.7 信任域是「本机所有本地用户会话」（NOTE-6）
+
+插件路由挂在 DSH 的 webServer 上，监听 `127.0.0.1:19387`。§12.21 的论证（「能连 loopback 的
+本机进程本来就能读到凭据库」）隐含了「只有当前用户会话能连」，而这条假设在 Windows 上**不成立**：
+TCP loopback 是**整机可达**的，同一台机器的其它本地用户会话照样能打进来（这里没有 per-user 的
+socket 隔离）。因此信任域应当明确写成「**本机所有本地用户会话**」。落在这个域里的路由：
+`POST /plugin/xiaoai/config`（改设置，包括指向 `apiServerTokenCredential` 的**凭据名**）、
+`POST /plugin/xiaoai/data/wipe`（删日志与留痕）、`POST /plugin/xiaoai/bridge/start|stop|restart`
+（起停桥接器），以及各个 `GET`（状态、配置、设备、`/bridge/logs`）。`/asr` 有令牌闸门：没有令牌时
+fail-closed 503（`lib/http.js:512`）、令牌不对 401（`:522`）；其余路由靠同源校验（`Origin`
+白名单，不匹配 403，`lib/http.js:376`）与 loopback 假设。同源校验**挡不住非浏览器客户端**——
+不带 `Origin` 的 `curl` 是直接放行的（§12.27.4 已记）。为什么当前接受：单用户工作站；DSH 自己的
+webServer 已经处在同一个信任域里，插件路由不比它更宽；而且除 `/asr` 外这些路由不返回凭据**明文**
+（设置页读的是凭据**名**，真正的令牌在 DSH 凭据库里，插件不落盘），所以最坏影响是「同机另一个
+本地用户能改设置、删留痕、起停桥接器」，不是「读走秘密」。要收紧的话（本批次只文档化，不动
+`lib/http.js`）：给插件路由加一层 per-user 或令牌闸门（属代码改动）；把 DSH 装进独立的 Windows
+用户账户或容器，让「本机其它用户」根本不成立；或改用带 ACL 的命名管道替代 TCP loopback
+（架构级）。注意 Windows 防火墙默认不过滤 loopback，「加一条防火墙规则」不是可选项。
+
+#### 12.32.8 验证
+
+`node scripts/check-all.mjs`（九个；`check-client` 若还红，是客户端文案批次在途）、仓库外的
+`doc-check.mjs`（零 emoji、无独立 `---`、表格列数、README 锚点）与 `changelog-check.mjs`
+（版本节与日期、中英条目 1:1）都必须过；口径见 §12.28.7。
 
 
 

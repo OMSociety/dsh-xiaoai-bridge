@@ -13,10 +13,15 @@
 .mypy_cache
 __pycache__
 *.egg-info
+.pytest_cache/
 
 # Rust
 target
 Cargo.lock
+# 例外：bridge/Cargo.lock 是有意入库的——它是本 fork 的 Rust 扩展
+# （bridge/native/，由 maturin 编译）的锁文件，入库才能保证别人复现出同一套依赖。
+# 上面那行 Cargo.lock 只针对随手建的样例工程与临时目录。
+!bridge/Cargo.lock
 
 # IDE
 .idea/

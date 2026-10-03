@@ -22,14 +22,14 @@
 
 它不只是个播报器——会话是完整的 DSH 会话（模型、工具、工作区都由你选），音箱只是它的耳朵和嘴。人在电脑上改代码，音箱在书房里答话，是同一场对话。
 
-Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT），上游又受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发。本仓库在它上面加了 DSH 对话后端（`core/dsh.py`、`core/dsh_conversation.py`）、播报纪律、鉴权与生命周期管理，并删掉了用不上的连接器；上游文件除 [CHANGELOG.md](CHANGELOG.md) 列出的改动外原样保留，署名与许可链条见 [LICENSE](LICENSE) 与 [DISCLAIMER.md](DISCLAIMER.md)。
+Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT），上游又受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发。本仓库在它上面加了 DSH 对话后端（`core/dsh.py`、`core/dsh_conversation.py`）、播报纪律、鉴权与生命周期管理，并删掉了用不上的连接器。上游那半是**基于原文的 fork 增补版**、不是原样搬运：`bridge/AGENTS.md`、`bridge/README.md`、`bridge/CHANGELOG.md` 都在 `09ef117` 那次改写里动过（品牌字样、删掉不适用章节），改动逐条记在 [CHANGELOG.md](CHANGELOG.md) 与 [bridge/CHANGELOG.md](bridge/CHANGELOG.md) 里；署名与许可链条见 [LICENSE](LICENSE) 与 [DISCLAIMER.md](DISCLAIMER.md)。
 
 ## 核心特性
 
 | 特性 | 说明 |
 | --- | --- |
 | **唤醒即对话** | 说出唤醒词即可说话，桥接器识别后提交给一个真正的 DSH 会话，答案再从音箱念出来 |
-| **主动说话** | 任何会话（含桌面会话）都能调用 `xiaoai_speak`；桥接器没在跑就顺手拉起来 |
+| **主动说话** | 任何会话（含桌面会话）都能调用 `xiaoai_speak`；桥接器没在跑就顺手拉起来（`autoStart` 关掉时不会：`ensureStarted()` 直接拒绝，返回 `bridge is not running (autostart is off)`） |
 | **半双工防自问自答** | 播放期间闸门关闭麦克风，插件不会听到自己刚念出去的话 |
 | **播报留痕** | 每一句念出来的话都带来源写进 `spoken.jsonl`，跨重启保留 |
 | **进程托管与看门狗** | 插件渲染 `config.py`、拉起解释器，按 2 / 5 / 15 / 30 秒递增退避重启，预算用尽后放弃并说明原因 |
@@ -130,6 +130,8 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 设置页里改；下面是常用项与默认值。
 
+保存走 `POST /plugin/xiaoai/config`，写入前会用 `validateConfig()` 严格校验：不合法的值**当场回 400**（错误信息里带着是哪一项，例如 `wakeupTimeout must be a whole number of seconds in [1, 600]`），不会先存进去再说。校验在 revision 围栏之前跑，所以「既过期又不合法」的请求回的是 400 而不是 409。已经躺在设置里的坏值（手改过配置文件、或旧版本写进去的）走另一条路：载入时由 `sanitizeConfig()` 逐键回退成默认值，并只告警一次 `unusable config repaired with defaults: …`。
+
 ### 基本
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -139,7 +141,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `deviceHost` | 文本 | `192.168.1.191` | 刷机后音箱的局域网地址 |
 | `bridgeDir` | 文本 | 空 | 桥接器源码目录；空则用 `<插件>/bridge` |
 | `pythonPath` | 文本 | 空 | 跑桥接器的解释器；空则用 `<bridgeDir>/.venv/Scripts/python.exe` |
-| `autoStart` | 布尔 | 开 | 跟随插件启动桥接器 |
+| `autoStart` | 布尔 | 开 | 跟随插件启动桥接器；关掉后需要桥接器的调用（如 `xiaoai_speak`）会直接失败并报 `bridge is not running (autostart is off)`，不会替你拉起进程 |
 | `silentStart` | 布尔 | 关 | 开：连上音箱时不再播报「已连接」，启动不出声 |
 
 ### 语音
@@ -150,7 +152,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `exitKeywords` | 文本 | `退出`、`停止`、`再见` | 退出词，一行一个 |
 | `wakeupReplyText` | 文本 | `小爱来了` | 唤醒词命中时念的一句 |
 | `exitReplyText` | 文本 | `小爱，再见` | 对话结束时念的一句 |
-| `wakeupTimeout` | 数字 | `20` | 静默多少秒后结束对话 |
+| `wakeupTimeout` | 数字 | `20` | 静默多少秒后结束对话；必须是 `1`–`600` 的整数，非整数或越界会被回退成默认值并在日志里告警一次 |
 | `continuousConversation` | 布尔 | 关 | 开：一次唤醒可接着说；关：一句一次唤醒 |
 | `ttsProvider` | 枚举 | 跟随音色 | 跟随音色 / 小爱原生 / MiMo（预留，暂不生效） |
 | `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 为小爱原生音色，填豆包音色 ID 则走豆包 TTS |
@@ -175,7 +177,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `replyStyle` | 文本 | 空 | 回复器的说话风格 |
 | `behaviorStyle` | 文本 | 空 | 只注入音箱发起的会话 |
 | `outputLimits` | 文本 | 内置 | 回复器必须避开的东西（emoji、markdown、括号动作、URL 等） |
-| `replyerProvider`、`replyerModel` | 文本 | 空 | 回复器路由；空则跟随会话模型 |
+| `replyerProvider`、`replyerModel` | 文本 | 空 | 回复器路由；空则跟随会话模型。注意**切换模型只对回复器即时生效**：语音会话的 agent 路由在会话创建时就钉死了，要等 DSH 重启后才用上新模型（有意保留的取舍，见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.31.7） |
 | `replyerHistoryTurns` | 数字 | `6` | 交给回复器的近期往返数 |
 | `replyerFailureText` | 文本 | `回复器调用失败` | 回复器两次都失败时念 |
 | `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具在屏幕上等待确认时念；审批正文永不出口 |
@@ -190,6 +192,8 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `apiServerHost` | 文本 | `127.0.0.1` | API Server 监听地址；保持 loopback 最安全 |
 | `apiServerPort` | 数字 | `9092` | API Server 端口 |
 | `apiServerTokenCredential` | 文本 | `XIAOAI_API_TOKEN` | 依凭据的**名字**，不是令牌本身 |
+
+**安全边界（限制）：** 能触达 `POST /asr` 的调用方，等于拿到了这个 agent 的输入通道——识别出来的话会被当成真实用户意图送进 DSH 语音会话，插件在这一层**不做语义拦截**，也没有语音专用工具集。机械保障只有两条：bearer 门禁，以及宿主既有的审批流（工具卡在审批上时，音箱只念一句固定的提示语，审批请求正文从不念出来）。危险动作的约束基本只靠提示词和宿主审批；想收紧就在宿主侧配 approval policy（对本插件的 agent 生效）与「哪些工具允许免审批」，这不是本插件的开关。这是架构限制、不是缺陷；代码侧注释在 `lib/http.js` 的 `/asr` 路由，展开见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.31.8。
 
 快速配置模板（对应设置页里常改的几项，等价于 `POST /plugin/xiaoai/config` 的 `patch`）：
 
@@ -214,7 +218,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `<DSH_HOME>/xiaoai-bridge/` | 桥接器的运行数据目录 | Windows 默认 `%USERPROFILE%\.dsh\xiaoai-bridge`；`DSH_HOME` 设了就跟着走 |
 | `…/xiaoai-bridge/config.py` | 按设置渲染出的桥接器配置 | 每次启动与每次写入设置后重新渲染，删掉会自动重建 |
 | `…/xiaoai-bridge/bridge.log` | 桥接器日志 | 也可用 `GET /plugin/xiaoai/bridge/logs` 取；跨重启保留 |
-| `…/xiaoai-bridge/spoken.jsonl` | 播报留痕 | 每行一句念出去的话，带来源、模型与设备；跨重启保留 |
+| `…/xiaoai-bridge/spoken.jsonl` | 播报留痕 | 每行一句念出去的话，带来源、模型与设备；跨重启保留；超过 5 MiB 时轮转到单槽 `spoken.jsonl.1`，所以历史只保留上一代 |
 | `…/xiaoai-bridge/devices.json`、`device.json` | 见到的设备与上次用的设备 | 删掉只是重新认一遍；已被 `.gitignore` 挡住，不会入库 |
 | `…/xiaoai-bridge/__pycache__/`、`bridge.pid`、`*.tmp` | 可重建的中间物 | 插件收尾时自动删除 |
 | `<bridgeDir>/core/models/` | 模型包（VAD / KWS / ASR） | 约 470 MB，不随仓库走，按[快速开始](#快速开始)下载一次 |
@@ -229,13 +233,14 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `bridge-unreachable` | API 端口没人应答：桥接器停了或还在启动 |
 | `bridge-rejected` | 桥接器回了 401 / 403：插件发的令牌与桥接器启动时用的不是同一个 |
 | `plugin-rejected` | 桥接器用错误的 bearer 令牌调了 `/asr`，通常是桥接器比令牌更早启动 |
-| `bridge-timeout` | 桥接器收下了请求，但没在超时前回答 |
 | `bridge-error` | 桥接器回了别的 HTTP 错误，响应体在 detail 里 |
+| `bridge-timeout` | 桥接器收下了请求，但没在超时前回答 |
 | `start-failed` | 插件拉不起进程：检查 `pythonPath`、`bridgeDir`、模型包 |
 | `watchdog-gave-up` | 桥接器反复退出，看门狗不再重试；原因就是最近错误 |
 | `port-held` | 桥接器停止后端口仍在应答 |
+| `token-not-applied` | 桥接器先于 API 令牌启动，只在 loopback 上应答；重启桥接器即可套用令牌（`warn`，不是错误） |
 
-日志有三处：数据目录里的 `bridge.log`、桥接器 API `http://127.0.0.1:9092/api/health`、插件自己的 `GET /plugin/xiaoai/health`。更细的内容——pnpm 供应链坑、模型目录、鉴权中间件、每一期的决策——都在 [docs/deploy.md](docs/deploy.md)。
+日志与状态分四处，别混着看：数据目录里的 `bridge.log`（真正的日志）、插件自己的 `GET /plugin/xiaoai/bridge/logs`（读同一份日志，可带 `limit`）、桥接器 API `http://127.0.0.1:9092/api/health`（状态端点，回 `{status, speaker_ready, auth}`）、插件自己的 `GET /plugin/xiaoai/health`（状态端点，回 facts）。播报留痕 `spoken.jsonl` 不是日志而是历史：它有 5 MiB 上限，超了就整体轮转到单槽 `spoken.jsonl.1`，**旧的一代会被下一次轮转覆盖**，所以长期留痕只能靠自己另存。更细的内容——pnpm 供应链坑、模型目录、鉴权中间件、每一期的决策——都在 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)（这份文件不随包发布，所以用绝对地址）。
 
 卸载：
 
@@ -261,6 +266,7 @@ node scripts\check-session.mjs     # 会话与设备路由、工作区分组
 node scripts\check-supervisor.mjs  # 进程托管：接管、替换、看门狗退避与放弃
 node scripts\check-speak.mjs       # 播报：工具、回复器、审批、按需拉起
 node scripts\check-diagnostics.mjs # 错误库与失败分类
+node scripts\check-http.mjs        # HTTP 层：鉴权、体积上限、同源、路由
 node scripts\check-cleanup.mjs     # 数据目录切分与端口探测
 
 Set-Location bridge
@@ -279,8 +285,8 @@ lib/diagnostics.js  错误库（稳定 code + 原始 detail）
 lib/client.js       设置页与运行状态卡（客户端 bundle）
 skills/xiaoai-speak/  教模型什么时候开口的技能
 bridge/             Python 桥接器（fork 上游；DSH 后端在 core/dsh*.py）
-scripts/            八个自检脚本，改动前后都该跑
-docs/deploy.md      实施与验证记录：每一期的决策、坑与取证
+scripts/            九个自检脚本 + check-all.mjs 聚合入口（`npm run check`），改动前后都该跑
+docs/deploy.md      实施与验证记录：每一期的决策、坑与取证（不随包发布）
 ```
 
 ## 更新日志

@@ -2,7 +2,7 @@
 
 # Open-XiaoAI Bridge
 
-[![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![Rust](https://img.shields.io/badge/Rust-native_module-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![GitHub Stars](https://img.shields.io/github/stars/coderzc/open-xiaoai-bridge?style=flat&logo=github)](https://github.com/coderzc/open-xiaoai-bridge/stargazers) [![Docker Image](https://img.shields.io/badge/ghcr.io-open--xiaoai--bridge-2496ed?logo=docker&logoColor=white)](https://ghcr.io/coderzc/open-xiaoai-bridge)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![Rust](https://img.shields.io/badge/Rust-native_module-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![License](https://img.shields.io/badge/License-MIT-green)](../LICENSE) [![GitHub Stars](https://img.shields.io/github/stars/coderzc/open-xiaoai-bridge?style=flat&logo=github)](https://github.com/coderzc/open-xiaoai-bridge/stargazers) [![Docker Image](https://img.shields.io/badge/ghcr.io-open--xiaoai--bridge-2496ed?logo=docker&logoColor=white)](https://ghcr.io/coderzc/open-xiaoai-bridge)
 
 [![New](https://img.shields.io/badge/🎉_新功能-DSH_支持_自定义唤醒词_|_连续对话_|_多_Agent_路由_|_克隆音色_|_流式播放-f97316)](https://github.com/coderzc/open-xiaoai-bridge/releases)
 
@@ -15,6 +15,11 @@
 [📖 快速开始](#-快速开始) · [🔊 TTS 配置](#-tts-配置) · [🔌 OpenAI 兼容服务](#-openai-兼容服务) · [DSH 集成](#dsh-集成) · [🔧 API 文档](#-api-server) · [🐛 常见问题](#-常见问题)
 
 > 本项目受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发，并参考其 `examples/` 示例演进而来，现已作为独立项目持续维护。
+
+> **关于本文件**：这是上游 `coderzc/open-xiaoai-bridge` README 的搬运版，本 fork
+> 只改写了品牌字样、删掉了不适用的章节，正文结构仍是上游的。因此文中个别徽章、
+> 演示视频与 Docker 镜像链接仍指向上游仓库与上游镜像（它们不是本 fork 的产物）；
+> 需要点击时以仓库根目录的 [README.md](../README.md) 为准。
 
 </div>
 
@@ -55,6 +60,11 @@
 2. 解压模型文件（路径见下方具体部署方式）
 
 ### 🐳 Docker Compose（推荐）
+
+> **注意（本 fork）**：本节的 compose 与镜像都来自**上游**，拉到的桥接器**不含本 fork 的
+> bearer 鉴权门禁与 DSH 后端接线**。仓库里的 `bridge/docker-compose.yml` 已在文件顶部
+> 写明这一点。要让本插件的"默认带鉴权"承诺成立，请改用下面的[本地编译](#-本地编译)运行；
+> 只有在明确要跑上游桥接器时才用 Docker 路线。
 
 模型文件解压到 `./models` 目录，然后下载配置并启动：
 
@@ -601,6 +611,10 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
 
 ### 🐳 Docker
 
+> **注意（本 fork）**：下面的问答都假定你跑的是**上游镜像**
+> `ghcr.io/coderzc/open-xiaoai-bridge:latest`。该镜像不含本 fork 的 bearer 鉴权门禁，
+> 照它部署出来的桥接器与本插件的鉴权承诺不一致；正式部署请走[本地编译](#-本地编译)。
+
 1. **在容器里如何通过 `127.0.0.1` 直连宿主机上的 DSH 插件？**
 
     桥接模式下，容器里的 `127.0.0.1` / `localhost` 指向的是**容器自己**，不是宿主机。
@@ -760,7 +774,7 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
    4. **重要**：确保复刻音色与 `tts.doubao.app_id` 属于**同一个火山引擎项目**，否则无法使用。
 3. **如何将指定文本转成特定音色的音频文件？**
 
-   可以使用脚本 [scripts/generate\_tts.py](/Users/zc/projects/open-xiaoai-bridge/scripts/generate_tts.py)：
+   可以使用脚本 [scripts/generate_tts.py](scripts/generate_tts.py)：
    ```bash
    python3 scripts/generate_tts.py \
      --speaker-id zh_male_lengkugege_emo_v2_mars_bigtts \
@@ -804,7 +818,7 @@ DSH 侧可以调用桥接器的 [xiaoai-tts skill](./skills/xiaoai-tts) 通过 H
 
 使用者应自行确认其使用行为符合适用法律法规、平台规则、设备厂商政策及相关服务协议，并自行承担由下载、安装、配置、修改、传播或使用本项目所产生的全部风险与责任。
 
-详细免责声明请见 [DISCLAIMER.md](./DISCLAIMER.md)。项目授权与分发条件以仓库中的 [LICENSE](./LICENSE) 文件为准。
+详细免责声明请见 [DISCLAIMER.md](../DISCLAIMER.md)。项目授权与分发条件以仓库中的 [LICENSE](../LICENSE) 文件为准。
 
 ***
 
