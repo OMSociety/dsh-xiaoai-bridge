@@ -286,6 +286,25 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       希望做成可配置项」；`silentStart` 设置项 → 桥接器读 `SILENT_START_ENABLE`，
       Rust 侧 `bridge/native/src/server.rs` 改写 + `lib/process.js` 抽出
       `bridgeChildEnv()`；见 §12.30）
+- [x] 4.13-1 文档与打包收口（计划外增补：`check-all.mjs` 聚合入口、死键
+      `LOG_LEVEL` → `LOGLEVEL`、文档改认符号名、Windows 上 `config.py` 原子替换
+      撞热重载读窗口；见 §12.31）
+- [x] 4.13-2 实现与文档的第二轮收口（新诊断码 `token-not-applied`、`spoken.jsonl`
+      单槽轮转、配置的两条校验路径、teardown 收紧、端口探测跟 `apiServerHost`、
+      第九个检查 `check-http.mjs`；见 §12.32）
+- [x] 4.13-3 令牌单源（`lib/index.js` 的 `currentToken()` 成为唯一取令牌入口，
+      子进程环境与 `/asr` 门禁必然同源；见 §12.33）
+- [x] 4.13-4 播报的作用域门禁（`xiaoai_speak` 默认只在音箱会话里可用，
+      逃生门 `speakFromAnySession`；见 §12.34）
+- [x] 4.13-5 工具按作用域注册（宿主没有 scoped seam 时**不注册也不退回全局**，
+      记一条 `scope-registration-unavailable`；见 §12.35）
+- [x] 4.13-6 「小爱模式」Agent 预设（`preset/xiaoai/` bundle + 插件侧挂载与软降级；
+      见 §12.36）
+- [x] 4.14 两份 AGENTS.md 重写 + 桥接器去品牌化改名（口径改为「不追上游」；
+      `OPEN_XIAOAI_TOKEN` → `DSH_XIAOAI_TOKEN`、`open_xiaoai_server` →
+      `dsh_xiaoai_server`；见 §12.37）
+- [x] 4.15 发布前清单与小尾巴（新增仓库内 `TODO.md`；本清单回填 4.13 各批与 4.14；
+      §12.33 补父标题；见 §12.38）
 
 ## 9. 第 1 期实现决策
 
@@ -2062,6 +2081,10 @@ webServer 已经处在同一个信任域里，插件路由不比它更宽；而�
 `doc-check.mjs`（零 emoji、无独立 `---`、表格列数、README 锚点）与 `changelog-check.mjs`
 （版本节与日期、中英条目 1:1）都必须过；口径见 §12.28.7。
 
+### 12.33 令牌单源（4.13 第三批）
+
+子进程与 `/asr` 门禁必须拿到**同一个**秘密，否则现象是「音箱没反应」而本地不报错。这一批把取令牌收敛到一个入口。
+
 #### 12.33.1 子进程与 `/asr` 门禁共用一个令牌（令牌单源）
 
 事出两条线：`/asr` 的门禁在 `lib/http.js:536` 取 `deps.resolveToken()`，取不到就 503 fail-closed
@@ -2472,6 +2495,31 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 - 仓库外的 `agent-md-creator` 校验器（`check_agents_md.py`）对两份文件报 error 0 / warn 0。
 - `bridge/AGENTS.md` 的行数预算（建议 ≤200 行）已从 375 行降到 131 行（根文件 140 行）。
 - 事实核查回改之后又跑了一轮：九条检查绿、`doc-check.mjs` 报 `anchors in README: 10, headings: 17`、`changelog-check.mjs` 报 `versions: 11`、校验器 0 / 0 / 0、pytest 仍 `115 passed, 19 subtests`。
+
+### 12.38 发布前清单与本清单自身的收口（4.15，计划外增补）
+
+#### 12.38.1 用户要的是什么
+
+用户原文：「建一个仓库内的TODO.md提醒我，作为发布前需做。mimotts也包括在里面」以及「低优先小尾巴做了」。于是这一批做两件事：新增仓库内 `TODO.md`（发布前待办，MiMo TTS 接线是其中第一条）；把 §8「进度」回填到当前（它从 4.13 静默启动之后就停了，后面 §12.31 至 §12.37 各批都没进清单），并修掉 §12.33.1 缺父标题这个编号瑕疵。
+
+#### 12.38.2 `TODO.md` 的定位
+
+- 放在仓库根，是**给维护者的发布前清单**，不是功能文档：功能看 `README.md`，纪律看 `AGENTS.md`，决策看本文件的 §12.x。
+- **不进 `package.json` 的 `files` 白名单**：清单是仓库内的维护物件，装包副本里不需要它（与 `docs/` 同样的理由，但 `TODO.md` 里没有本机路径，所以它留了个绝对 GitHub URL 只为本文件的一致性）。
+- 条目分三类：**必须在发布前做完**（MiMo TTS 接线、版本与 CHANGELOG 收口、发布前全绿、push 归用户）、**可选**（`bridge/pyproject.toml` 分发名 / docker-compose 服务名与镜像名 / 豆包 uid 这三处外观项；上游搬来的旧内容去留）、**需要用户动手**（重启 DSH、实机验收 3.13 / 3.15、第二台音箱验 3.10）。
+- MiMo TTS 那条写成了可执行的四步：桥接器加 OpenAI 兼容客户端并进 `SUPPORTED_PROVIDERS`；密钥只存凭据名、真令牌走 credentials seam；`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS` 与 `buildOverrides()` 才允许写 `dsh.tts_provider = "mimo"`；检查与文档（`scripts/check-config.mjs` 的「预留 provider 不写进渲染配置」断言、`scripts/check-client.mjs` 的逐字文案断言、README 配置表、§12.25）同步改。
+
+#### 12.38.3 §8 回填
+
+§8 原有条目停在 4.13 静默启动（§12.30），此后 §12.31 至 §12.37 的记录都没回填，清单不再是完整断点。这次补 4.13-1 到 4.13-6（文档与打包收口、第二轮收口、令牌单源、播报作用域门禁、按作用域注册、「小爱模式」预设）、4.14（两份 AGENTS.md 重写 + 去品牌化改名）与 4.15（本批）。保留 3.10 与 3.15 两条未勾选项（它们的阻塞条件是**实机**，不是代码）。
+
+#### 12.38.4 编号修正：§12.33 的父标题
+
+`#### 12.33.1`（令牌单源）此前直接跟在 §12.32.8 后面，没有 §12.33 这个父标题。这次补上 `### 12.33 令牌单源（4.13 第三批）` 与一句导语，保留 `#### 12.33.1` 这个子标题编号 —— `CHANGELOG.md` 里两处「展开见 §12.33.1」的指针因此继续有效，不用改。
+
+#### 12.38.5 这一轮的检查
+
+`npm run check`（九条）绿、`doc-check.mjs` 与 `changelog-check.mjs` 绿、`check_agents_md.py` 0 / 0 / 0；`TODO.md` 的加入没有触碰任何断言（它不在 `files` 白名单里，也不参与 README 锚点）。
 
 
 

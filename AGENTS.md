@@ -12,6 +12,7 @@
   - 环境要求、提交前要跑什么、写作约定：[CONTRIBUTING.md](./CONTRIBUTING.md)
   - 决策与实测记录（按 §12.x 编号，含取证命令原文）：[docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)——这份**不随包发布**（`package.json` 的 `files` 白名单没有它，因为它含本机绝对路径与子代理会话 ID），装包副本里根本不存在；checkout 里它就在 `docs/deploy.md`，但正文引用它时一律用上面那种绝对 URL（因为别人手里的副本没有这个文件）。
   - 变更历史（中英双语）：[CHANGELOG.md](./CHANGELOG.md)
+  - 发布前待办（MiMo TTS 接线等，维护者清单，同样不随包发布）：[仓库根待办清单](./TODO.md)
   - 许可与免责：[DISCLAIMER.md](./DISCLAIMER.md)
 
 ## 常用命令

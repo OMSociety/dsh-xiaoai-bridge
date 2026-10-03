@@ -298,6 +298,7 @@ skills/xiaoai-speak/  教模型什么时候开口的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            九个自检脚本 + check-all.mjs 聚合入口（`npm run check`），改动前后都该跑
 docs/deploy.md      实施与验证记录：每一期的决策、坑与取证（不随包发布）
+TODO.md             发布前待办：MiMo TTS 接线、版本收口、实机验收（不随包发布）
 ```
 
 ## 更新日志

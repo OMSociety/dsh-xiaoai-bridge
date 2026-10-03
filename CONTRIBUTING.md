@@ -50,6 +50,7 @@ skills/xiaoai-speak/  模型用的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            自检脚本（九个 check-*.mjs + 聚合入口 check-all.mjs）
 docs/deploy.md      实施与验证记录（不随包发布）
+TODO.md             发布前待办（不随包发布）
 ```
 
 ## 约定
