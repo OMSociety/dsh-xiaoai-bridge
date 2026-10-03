@@ -528,7 +528,7 @@ if "让小黑" in text:
     "response_timeout": 120,
     "input_mode": "local_asr",        # 或 "xiaoai_asr"
     "exit_keywords": ["退出", "停止", "再见"],
-    "wakeup_keywords": ["小爱小爱"],   # 命中即路由到 DSH 连续对话
+    "wakeup_keywords": ["你好肥鱼"],   # 命中即路由到 DSH 连续对话
     "tts_provider": None,             # xiaoai / doubao / openai / mlx_audio
     "tts_speaker": "xiaoai",
     "session_tts_speakers": {},
@@ -538,7 +538,7 @@ if "让小黑" in text:
 
 ### 交互方式
 
-默认唤醒词为「小爱小爱」（`wakeup.keywords` 与 `dsh.wakeup_keywords` 都要包含），触发后进入 DSH 连续对话：
+默认唤醒词为「你好肥鱼」（`wakeup.keywords` 与 `dsh.wakeup_keywords` 都要包含），触发后进入 DSH 连续对话：
 
 - `local_asr`：本地 VAD 检测语音 → SherpaASR 离线识别 → 发送给 DSH → TTS 播放
 - `xiaoai_asr`：静默唤醒小爱 → 接管小爱原生 ASR 结果 → 发送给 DSH → TTS 播放
@@ -552,10 +552,10 @@ if "让小黑" in text:
 
 ```python
 "wakeup": {
-    "keywords": ["你好小黑", "小黑你好", "小爱小爱", "你好小爱"],
+    "keywords": ["你好肥鱼", "你好小爱"],
 },
 "dsh": {
-    "wakeup_keywords": ["小爱小爱", "你好小爱"],
+    "wakeup_keywords": ["你好肥鱼", "你好小爱"],
 },
 ```
 

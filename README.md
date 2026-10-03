@@ -244,7 +244,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| **唤醒词** `wakeKeywords` | 多行文本 | `小爱小爱` | 每行一个；逗号、顿号也算分隔符。命中即进入 DSH 对话。它同时写进桥接器的 `wakeup.keywords`（喂给唤醒词模型）与 `dsh.wakeup_keywords`（路由到 DSH 后端）。改完 1 秒内热生效。别把全角逗号写进词里：它会被当分隔符切掉，那个词就永远唤不醒。 |
+| **唤醒词** `wakeKeywords` | 多行文本 | `你好肥鱼` | 每行一个；逗号、顿号也算分隔符。命中即进入 DSH 对话。它同时写进桥接器的 `wakeup.keywords`（喂给唤醒词模型）与 `dsh.wakeup_keywords`（路由到 DSH 后端）。改完 1 秒内热生效。别把全角逗号写进词里：它会被当分隔符切掉，那个词就永远唤不醒。 |
 | **对话保持时长（秒）** `wakeupTimeout` | 整数 1-600 | `20` | 一次唤醒之后，这次对话保持多久。 |
 | **连续对话** `continuousConversation` | 布尔 | 关 | 关：一句话一次唤醒。开：一次唤醒可以接着说下一句，直到静默超时或说出退出词。这一项即使关掉也会照写进配置，免得桥接器模板里的默认值反过来压过设置页。 |
 | **语音识别后端** `asrBackend` | 枚举 | `sense_voice` | 另两个选项是 `paraformer` 与 `fire_red_asr`。选完后按「后端 + 量化 + 模型目录」重建识别器；选了本机没装模型的后端不会把音箱弄哑：继续用已装好的识别器，只警告一次，并记一条 `asr-model-unavailable`。识别语言固定为中文（`auto` 会把短音频判成日文，插件不暴露这个开关）。 |
@@ -272,8 +272,8 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| **唤醒应答** `wakeupReplyText` | 文本 | `小爱来了` | 唤醒词命中时先念的一句。留空表示不写，用桥接器模板默认（同样是「小爱来了」）。 |
-| **退出应答** `exitReplyText` | 文本 | `小爱，再见` | 连续对话结束时念的一句。 |
+| **唤醒应答** `wakeupReplyText` | 文本 | `肥鱼来了` | 唤醒词命中时先念的一句。留空表示不写，用桥接器模板默认（同样是「肥鱼来了」）。 |
+| **退出应答** `exitReplyText` | 文本 | `肥鱼走了` | 连续对话结束时念的一句。 |
 | **退出词** `exitKeywords` | 多行文本 | 退出、停止、再见 | 每行一个，说出任意一个就结束这次对话。只在「连续对话」打开时出现在页面上，值仍然保留。 |
 | **兜底播报文本** `fallbackText` | 文本 | `连不上电脑，请稍后再试` | 桥接器还在跑、但联系不上插件时念的话：DSH 没在运行，或者插件路由不可达。 |
 
@@ -338,7 +338,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
   "enabled": true,
   "deviceName": "小爱音箱",
   "deviceHost": "192.168.1.191",
-  "wakeKeywords": "小爱小爱",
+  "wakeKeywords": "你好肥鱼",
   "wakeupTimeout": 20,
   "continuousConversation": false,
   "agentPreset": "xiaoai",

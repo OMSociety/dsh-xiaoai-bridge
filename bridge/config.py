@@ -53,13 +53,13 @@ async def before_wakeup(speaker, text, source, app):
         #         return "dsh"
 
         # --- 示例二：每次唤醒生成独立 Session ---
-        # if "小爱小爱" in text:
+        # if "你好肥鱼" in text:
         #     app.set_dsh_session_key(new_session_key())
         #     await speaker.play(text="来了")
         #     return "dsh"
 
         # --- 示例三：进入 DSH 前播放服务端本地开场白 ---
-        # if "小爱小爱" in text:
+        # if "你好肥鱼" in text:
         #     await speaker.play(server_file="/path/to/dsh_intro.wav")
         #     return "dsh"
 
@@ -71,7 +71,7 @@ async def before_wakeup(speaker, text, source, app):
         dsh_config = APP_CONFIG.get("dsh", {})
         for keyword in dsh_config.get("wakeup_keywords", []):
             if keyword and keyword in text:
-                await speaker.play(text=dsh_config.get("wakeup_reply") or "小爱来了")
+                await speaker.play(text=dsh_config.get("wakeup_reply") or "肥鱼来了")
                 return "dsh"
 
         return None
@@ -124,7 +124,7 @@ async def after_wakeup(speaker, source=None, session_key=None):
         # else:
         #     await speaker.play(text="小爱，再见")
         await speaker.play(
-            text=APP_CONFIG.get("dsh", {}).get("exit_reply") or "小爱，再见"
+            text=APP_CONFIG.get("dsh", {}).get("exit_reply") or "肥鱼走了"
         )
 
 
@@ -132,9 +132,7 @@ APP_CONFIG = {
     "wakeup": {
         # 自定义唤醒词列表（英文字母要全小写）
         "keywords": [
-            "你好小黑",
-            "小黑你好",
-            "小爱小爱",
+            "你好肥鱼",
         ],
         # 静音多久后自动退出唤醒（秒）
         "timeout": 20,
@@ -235,9 +233,9 @@ APP_CONFIG = {
         "continuous_conversation": False,
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
         "rule_prompt_for_skill": "注意：这条消息是用户通过小爱音箱发来的语音。你的回复正文会被自动念出来（念之前会先做一次口语化润色），所以直接把要说的话写成回复正文就好：不要包含 markdown、代码、emoji、颜文字、括号里的动作或心理描写、URL；一般 50 字以内、一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字。只有当你要逐字念出、不要润色的内容时，才调用 xiaoai_speak 工具",  # 追加在每条语音输入后面；插件设置页可覆盖
-        "wakeup_keywords": ["小爱小爱"],  # 命中即路由到 DSH 连续对话
-        "wakeup_reply": "小爱来了",  # 唤醒成功后的播报语；留空用默认值
-        "exit_reply": "小爱，再见",  # 退出连续对话时的播报语；留空用默认值
+        "wakeup_keywords": ["你好肥鱼"],  # 命中即路由到 DSH 连续对话
+        "wakeup_reply": "肥鱼来了",  # 唤醒成功后的播报语；留空用默认值
+        "exit_reply": "肥鱼走了",  # 退出连续对话时的播报语；留空用默认值
         "fallback_text": "连不上电脑，请稍后再试",  # 桥接器在跑、但 DSH 插件联系不上时的播报语；留空用默认值
     },
     # OpenAI-compatible Service Configuration
