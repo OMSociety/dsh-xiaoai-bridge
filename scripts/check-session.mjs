@@ -31,12 +31,13 @@ const logger = {
 };
 
 /** Build a host-shaped ctx whose single device is a live agent. */
-function harness({ withDefaultModel = true, workspacePath } = {}) {
+function harness({ withDefaultModel = true, workspacePath, presetRegistry, resumable = false } = {}) {
   const created = [];
   const inbox = [];
   const renames = [];
   const agentCtxHandlers = [];
   const attached = [];
+  const resumed = [];
   let live = null;
   let resumeCalls = 0;
 
@@ -47,7 +48,14 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
   const agents = {
     // The host's registry.get(id) returns the Agent, not the create handle.
     get: (id) => (live && live.agent.session.id === id ? live.agent : null),
-    resume: async () => { resumeCalls += 1; throw new Error('no persisted session'); },
+    resume: async (options) => {
+      resumeCalls += 1;
+      if (!resumable) throw new Error('no persisted session');
+      resumed.push(options);
+      agent.session.id = options.resumeSessionId;
+      live = { agent, dispose: async () => {} };
+      return live;
+    },
     create: async (options) => {
       created.push(options);
       agent.session.id = options.sessionId;
@@ -58,6 +66,7 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
   const ctx = {
     get(name) {
       if (name === 'agents') return agents;
+      if (name === 'agentPresets') return presetRegistry;
       if (name === 'agentDefaultModel') {
         return withDefaultModel ? { currentSelection: () => ({ provider: 'stub-provider', model: 'stub-model' }) } : undefined;
       }
@@ -79,7 +88,7 @@ function harness({ withDefaultModel = true, workspacePath } = {}) {
     on: () => () => {},
   };
   return {
-    ctx, created, inbox, renames, agentCtx, agentCtxHandlers, attached,
+    ctx, created, inbox, renames, agent, agentCtx, agentCtxHandlers, attached, resumed,
     get live() { return live; },
     get resumeCalls() { return resumeCalls; },
   };
@@ -345,7 +354,9 @@ check('a freshly created agent is announced to the scope hook', () => {
 });
 const setup9 = [];
 const joinCtx = { on: (event, handler) => { setup9.push([event, handler]); return () => {}; } };
-h9.created[0].setup(joinCtx);
+// `setup` is async because a preset mount is awaited in it (lib/session.js), so
+// the hook is awaited here the way the host awaits it.
+await h9.created[0].setup(joinCtx);
 check('setup hands the agent context to the scope hook', () => {
   assert.equal(scoped9.length, 2);
   assert.equal(scoped9[1].agentCtx, joinCtx);
@@ -379,8 +390,10 @@ await bridge9b.deliver({ host: '192.168.1.197', text: '你好' });
 check('the setup hook survives the missing model selection', () => {
   assert.equal(typeof h9b.created[0].setup, 'function');
   assert.equal('agentOptions' in h9b.created[0], false);
-  const probe = { on: () => () => {} };
-  h9b.created[0].setup(probe);
+});
+const probe = { on: () => () => {} };
+await h9b.created[0].setup(probe);
+check('the scope hook ran for the model-less host', () => {
   assert.ok(scoped9b.includes(probe), 'the scope hook was not called');
 });
 
@@ -504,6 +517,181 @@ check('only an explicit true opens the escape hatch', () => {
   assert.equal(e6.exposure.state().mode, 'scoped');
 });
 
+// --- case 11: the Agent preset ----------------------------------------------
+// The speaker conversation can be composed from a host preset (preset/xiaoai in
+// this repository). Two halves have to hold: the session is really created and
+// bound inside the preset, and a preset that is not there degrades to the host
+// default instead of costing the utterance.
+console.log('case 11: agent preset');
+const presetDir = mkdtempSync(join(tmpdir(), 'xiaoai-preset-check-'));
+
+/** A preset registry shaped like the host's; records what it is asked to do. */
+function presetRegistry({ behavior = 'ok' } = {}) {
+  const mounts = [];
+  const leases = [];
+  return {
+    mounts,
+    leases,
+    registry: {
+      resolve: async (id) => {
+        if (behavior === 'missing') throw new Error(`unknown agent preset "${id}"`);
+        if (behavior === 'broken') return { id, broken: { message: 'row 3 has no bundle' } };
+        return { id };
+      },
+      acquireScope: async (id) => ({ id, [Symbol.asyncDispose]: async () => { leases.push(id); } }),
+      mount: async (agentCtx, id) => { mounts.push({ agentCtx, id }); },
+    },
+  };
+}
+
+// 11a: a working preset — header, mount, lease, and what /health reports.
+const notes11 = [];
+const r11 = presetRegistry();
+const h11 = harness({ presetRegistry: r11.registry });
+const bridge11 = createSessionBridge({
+  ctx: h11.ctx,
+  getConfig: () => ({ agentPreset: 'xiaoai' }),
+  dataDir: presetDir,
+  logger,
+  diagnostics: { note: (entry) => { notes11.push(entry); } },
+});
+await bridge11.deliver({ host: '192.168.1.198', text: '你好' });
+check('the conversation is created inside the configured preset', () => {
+  assert.equal(h11.created.length, 1);
+  assert.equal(h11.created[0].meta.agentPreset, 'xiaoai');
+  assert.ok(typeof h11.created[0].meta.cwd === 'string' && h11.created[0].meta.cwd.length > 0);
+});
+await h11.created[0].setup(h11.agentCtx, h11.agent);
+check('the preset is mounted onto the agent scope', () => {
+  assert.deepEqual(r11.mounts, [{ agentCtx: h11.agentCtx, id: 'xiaoai' }]);
+});
+check('the revision lease is released once the agent exists', () => {
+  assert.deepEqual(r11.leases, ['xiaoai']);
+});
+check('health reports what the preset resolved to', () => {
+  assert.deepEqual(bridge11.presetState(), { configured: 'xiaoai', resolved: 'xiaoai', reason: null });
+});
+check('a preset that works reports no diagnostic', () => {
+  assert.deepEqual(notes11, []);
+});
+await h11.created[0].setup(h11.agentCtx, h11.agent);
+check('the same agent is never mounted twice', () => {
+  assert.equal(r11.mounts.length, 1);
+});
+
+// 11b: not installed — the session is still created, on the host default.
+const notes11b = [];
+const r11b = presetRegistry({ behavior: 'missing' });
+const h11b = harness({ presetRegistry: r11b.registry });
+const bridge11b = createSessionBridge({
+  ctx: h11b.ctx,
+  getConfig: () => ({ agentPreset: 'xiaoai' }),
+  dataDir: presetDir,
+  logger,
+  diagnostics: { note: (entry) => { notes11b.push(entry); } },
+});
+await bridge11b.deliver({ host: '192.168.1.199', text: '你好' });
+check('a missing preset still creates a session, without a preset header', () => {
+  assert.equal(h11b.created.length, 1);
+  assert.equal('agentPreset' in h11b.created[0].meta, false);
+  assert.deepEqual(h11b.created[0].agentOptions, { provider: 'stub-provider', model: 'stub-model' });
+});
+check('a missing preset is reported once, as a warning', () => {
+  assert.equal(notes11b.length, 1);
+  assert.equal(notes11b[0].code, 'agent-preset-missing');
+  assert.equal(notes11b[0].level, 'warn');
+  assert.match(notes11b[0].detail, /"xiaoai" is not installed/);
+});
+check('health says why the preset did not apply', () => {
+  assert.deepEqual(bridge11b.presetState(), { configured: 'xiaoai', resolved: null, reason: 'missing' });
+});
+
+// 11c: declared but broken — the same soft landing, its own code.
+const notes11c = [];
+const r11c = presetRegistry({ behavior: 'broken' });
+const h11c = harness({ presetRegistry: r11c.registry });
+const bridge11c = createSessionBridge({
+  ctx: h11c.ctx,
+  getConfig: () => ({ agentPreset: 'xiaoai' }),
+  dataDir: presetDir,
+  logger,
+  diagnostics: { note: (entry) => { notes11c.push(entry); } },
+});
+await bridge11c.deliver({ host: '192.168.1.201', text: '你好' });
+check('a broken preset falls back with its own diagnostic', () => {
+  assert.equal('agentPreset' in h11c.created[0].meta, false);
+  assert.deepEqual(notes11c.map((entry) => entry.code), ['agent-preset-broken']);
+  assert.match(notes11c[0].detail, /row 3 has no bundle/);
+  assert.deepEqual(bridge11c.presetState(), { configured: 'xiaoai', resolved: null, reason: 'broken' });
+});
+
+// 11d: a host that keeps no preset registry at all.
+const notes11d = [];
+const h11d = harness();
+const bridge11d = createSessionBridge({
+  ctx: h11d.ctx,
+  getConfig: () => ({ agentPreset: 'xiaoai' }),
+  dataDir: presetDir,
+  logger,
+  diagnostics: { note: (entry) => { notes11d.push(entry); } },
+});
+await bridge11d.deliver({ host: '192.168.1.202', text: '你好' });
+check('a host without a preset registry is reported, not diagnosed', () => {
+  assert.deepEqual(notes11d, []);
+  assert.deepEqual(bridge11d.presetState(), { configured: 'xiaoai', resolved: null, reason: 'no-registry' });
+});
+
+// 11e: an empty setting never touches the registry.
+const r11e = presetRegistry();
+const h11e = harness({ presetRegistry: r11e.registry });
+const bridge11e = createSessionBridge({
+  ctx: h11e.ctx,
+  getConfig: () => ({ agentPreset: '   ' }),
+  dataDir: presetDir,
+  logger,
+});
+await bridge11e.deliver({ host: '192.168.1.203', text: '你好' });
+check('an empty preset name keeps the host default and says nothing', () => {
+  assert.equal('agentPreset' in h11e.created[0].meta, false);
+  assert.equal(bridge11e.presetState(), null);
+});
+
+// 11f: resume attaches the preset too. `ResumeAgentOptions` carries no `meta`,
+// so `setup` is the only place a resumed conversation can get its composition.
+const resumeHost = '192.168.1.204';
+writeFileSync(join(presetDir, 'devices.json'), JSON.stringify({
+  version: 2,
+  devices: [{
+    key: resumeHost,
+    host: resumeHost,
+    sessionId: 'session-preset-resume',
+    name: '小爱音箱',
+    utterances: 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }],
+}));
+const r11f = presetRegistry();
+const h11f = harness({ presetRegistry: r11f.registry, resumable: true });
+const bridge11f = createSessionBridge({
+  ctx: h11f.ctx,
+  getConfig: () => ({ agentPreset: 'xiaoai' }),
+  dataDir: presetDir,
+  logger,
+});
+await bridge11f.deliver({ host: resumeHost, text: '你好' });
+check('a resumed conversation carries the preset through setup', () => {
+  assert.equal(h11f.created.length, 0);
+  assert.equal(h11f.resumed.length, 1);
+  assert.equal(h11f.resumed[0].resumeSessionId, 'session-preset-resume');
+  assert.equal('meta' in h11f.resumed[0], false);
+  assert.equal(typeof h11f.resumed[0].setup, 'function');
+});
+await h11f.resumed[0].setup(h11f.agentCtx, h11f.agent);
+check('the resumed agent gets the mount too', () => {
+  assert.deepEqual(r11f.mounts, [{ agentCtx: h11f.agentCtx, id: 'xiaoai' }]);
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();
@@ -513,10 +701,17 @@ await bridge6.dispose();
 await bridge7.dispose();
 await bridge9.dispose();
 await bridge9b.dispose();
+await bridge11.dispose();
+await bridge11b.dispose();
+await bridge11c.dispose();
+await bridge11d.dispose();
+await bridge11e.dispose();
+await bridge11f.dispose();
 rmSync(dataDir, { recursive: true, force: true });
 rmSync(legacyDir, { recursive: true, force: true });
 rmSync(workspaceDir, { recursive: true, force: true });
 rmSync(configuredDir, { recursive: true, force: true });
+rmSync(presetDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? '\nsession check OK' : `\nsession check FAILED (${failures})`);
 process.exitCode = failures === 0 ? 0 : 1;

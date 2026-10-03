@@ -1,0 +1,64 @@
+# 小爱模式：音箱那一路的 Agent 预设。
+#
+# 这一份 bundle 只做一件事：向 profile 的 Loader 组合里插入一行
+# `@deepseek-ai/dsh-agent-preset` 声明（id: preset-xiaoai），于是设置页的
+# 「Agent 预设」里就多出一个可选的「小爱模式」。
+#
+# 组合清单是「标准模式减掉重家伙」：保留人格、说明文件、文件读写与检索、
+# 技能、联网查资料、上下文压缩；去掉终端（bash/pwsh）、后台任务、子代理与
+# 工作流、计划模式、问询卡片与待办卡片 —— 音箱会话是「说出来」的，用不上
+# 这些，而且 ask_user_question 那种等界面点选的工具会让语音这一轮卡住。
+#
+# 用法：在 DSH 里用 plugin_manager 的 install_bundle、target 指向本目录。
+# 细节见仓库 README 的「小爱模式」一节与 docs/deploy.md。
+- insert:
+    - id: preset-xiaoai
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: xiaoai
+        name: 小爱模式
+        description: 音箱会话专用：会说话、能读写文件与查资料，没有终端、子代理与计划模式。
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |-
+                You are the assistant behind a Xiaomi Xiaoai smart speaker. The speaker reads everything you write aloud, so answer in short spoken sentences. Never use tables, fenced code blocks, or long lists, and never use emoji. Lead with the headline, then offer to say more. Speak Chinese unless the person speaks another language.
+              suffix: Your working directory is {{cwd}}.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024

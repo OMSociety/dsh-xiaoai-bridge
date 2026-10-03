@@ -2289,6 +2289,122 @@ node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `pro
 
 这批改动同样要**重启 DSH** 才载入（新模块 + 设置页 bundle 都在启动时读取）。
 
+### 12.36 「小爱模式」：给音箱那个会话一个 Agent 预设
+
+#### 12.36.1 用户要的是什么
+
+用户（m09163）问「小爱模式你打算如何做预设」。要的不是再收紧权限——工具可见性已经在 §12.35 解决——
+而是让**音箱那个会话**换一副「人格与能力」：会说话、能查资料、能读写文件，但没有终端、没有子代理、
+不会弹出要点选的界面。语音这条链路读的是念出来的文字，一旦 agent 手里有 shell 或子代理，它很容易
+去做一件几十秒才回来、中间还要审批的事，而音箱那头只会沉默。
+
+预设正是宿主为这件事准备的机制：`plugins` 决定一个会话由哪些插件组建，且「Plugin registrations inherit
+the preset scope, and the Agent scope's parent link controls visibility」——我们注册进音箱 agent 作用域的
+`xiaoai_speak` 落在预设层的子层，普通会话依旧看不到（§12.35 的结论不受影响）。
+
+#### 12.36.2 宿主侧语义（读自 Inspect + asar，不是猜的）
+
+- **声明**：`@deepseek-ai/dsh-agent-preset` 的 Loader 行，`config` = `id`（必填，小写字母/数字/连字符）
+  + `plugins`（必填的 Cordis 行清单）+ 可选 `name` / `description` / `order`；Loader 行 id 习惯写
+  `preset-<id>`。注册表是 `@deepseek-ai/dsh-agent-preset-registry`（`default` / `selectedDefault`）。
+- **内置四个**（`standard`/`ptc`/`minimal`/`cordis`）来自 `@deepseek-ai/dsh-web-app` bundle 的
+  `presets/<id>.patch.yml`，装在最外层 `app.asar` 里：`resources/app.asar` 的头部 JSON 从 offset 16 开始
+  （`D:\WorkSpace\_oxb-wheels\asar-dump-presets.mjs` 按大括号配平扫出来，数据区起点 `ceil(end/4)*4`）。
+  四份已抽到 `_oxb-wheels\asar-presets\`，order 分别是 1/2/3/4，所以这份留 **order 5**。
+  用 host Inspect 的 `Config.listConfigs`（`name: '@deepseek-ai/dsh-agent-preset'`）只能拿到
+  `include:preset-*` 这些目录项、**拿不到 config 值**，清单只能从 asar 取。
+- **旧目录已废弃**：`$DSH_HOME/.agent-presets/<id>/{preset.yml, agent.cordis.yml}`——上游 SKILL.md 原话
+  「Nothing reads that directory any more」。别照那条老路写文件。
+- **挂会话**：`resolve(id)`（未知 id 抛 `agent-preset/not-found`）→ `acquireScope(id)` 拿 revision 租约 →
+  `agents.create({ sessionId, meta: { cwd, agentPreset }, agentOptions, setup })`，`setup` 里
+  `await agentPresets.mount(agentCtx, id)`。`ResumeAgentOptions` **没有 `meta`**，所以 resume 只能在
+  `setup` 里挂。`select()` 在第一轮之后会抛 `agent-preset/locked`。
+
+#### 12.36.3 这份 bundle（`preset/xiaoai/`）
+
+两个文件，随仓库发布，用户在插件市场里点一次安装：
+
+- `preset/xiaoai/package.json`：`@local/dsh-xiaoai-preset`，`private`，`dsh.bundle.patch` 指向
+  `./cordis.patch.yml`。
+- `preset/xiaoai/cordis.patch.yml`：`- insert: - id: preset-xiaoai / name: '@deepseek-ai/dsh-agent-preset' /
+  config: { id: xiaoai, name: 小爱模式, description: …, order: 5 }`。
+
+`plugins` 是 **standard 减掉一部分**（standard 的 146 行清单是从 asar 抽出来逐条读的）：
+
+| 保留 | 为什么 |
+| --- | --- |
+| `dsh-agent-instructions`(maxBytes 65536) | 没有它，`AGENTS.md` 一类的仓库约定就进不了提示词 |
+| `dsh-tool-fs`、`dsh-tool-fs-search` | 音箱会话要能读文件、查资料（`sampleOverCapGlobResults: false` 与 standard 一致） |
+| `dsh-skill-filesystem`、`dsh-tool-skill` | Skills 与音箱会话里那张 `xiaoai_speak` 技能卡 |
+| `dsh-tool-web`（`fetch: true`，`searchTimeoutMs: 60000`） | 「帮我查一下」是音箱最常见的正经请求 |
+| `dsh-persona`（换成语音人格） | prefix 明确写「你写的一切都会被念出来、用短句、不要 emoji」 |
+| compaction 组（`compaction-basic` / `command-compact` / `tool-result-pruner`） | 长对话要能自己压；`isolate` 与 standard 一致 |
+
+| 有意去掉 | 为什么 |
+| --- | --- |
+| `dsh-tool-bash` / `dsh-tool-pwsh`、`dsh-tool-jobs` | 语音会话里跑终端＝几十秒沉默 + 审批弹窗 |
+| delegation 组（`dsh-tool-subagent*` / `dsh-agent-*` 子代理、`dsh-tool-workflow`、workflow-ptc、ralph） | 同上，且子代理的输出没有人读 |
+| `dsh-plan-mode` 与 planning 组 | 计划模式要人看着点 |
+| `dsh-tool-ask-user` | 音箱那一头没有点选界面，选了就会卡住这一轮 |
+| `dsh-tool-todo`、`dsh-tool-present`、`dsh-tool-plugin-manager` | 对语音闭环没有正面作用（plugin-manager 在 standard 里本来也是 disabled） |
+
+persona prefix 有意用英文：「You are the assistant behind a Xiaomi Xiaoai smart speaker. The speaker reads
+everything you write aloud…short spoken sentences…never use emoji.」——这份文本会进系统提示词，英文模板
+在跨模型上更稳。suffix 与 standard 一样是 `Your working directory is {{cwd}}.`。
+
+#### 12.36.4 插件侧接线
+
+- `lib/config.js`：`agentPreset` 默认 **`xiaoai`**（注释写明「空值 = 宿主默认；没装则回落 + 一条诊断」）。
+- `lib/session.js`：
+  - `openPreset()`：读配置 → 空则完全不碰注册表；`ctx.get('agentPresets')` 不存在 →
+    `presetState.reason = 'no-registry'`；`resolve` 抛 → `'missing'` + `agent-preset-missing`；
+    `preset.broken` → `'broken'` + `agent-preset-broken`；成功则 `acquireScope` 拿租约。
+  - `closePreset()`：`finally` 里释放租约（一次解析对应一次创建/恢复）。
+  - `bindPreset()`：`mount(agentCtx, preset.id)`，按 `agent.session.id` 去重——`setup` 每次 create/resume
+    都会跑，而复用已在跑的 agent 那条路每句话都会跑，重复挂只会白白 churn generation；抛错 →
+    `agent-preset-mount-failed`。
+  - `factoryOptions()` 现在拼三条钩子：**preset → 模型选择 → 作用域注册**。三条互不依赖是故意的：
+    没有默认模型的宿主仍然能注册工具（§12.35），预设没装的宿主仍然能用上模型。
+  - create 时 `meta = { cwd, agentPreset }`（header 记录这次会话启动时的 revision，重启/恢复都靠它）。
+- `lib/index.js`：`/health` 的 facts 里多一个 `preset: sessions.presetState()`，设置页状态卡据此显示
+  「`xiaoai` → `xiaoai`」或「`xiaoai` → 宿主默认 · 没有安装」。
+
+#### 12.36.5 降级与诊断（有意的）
+
+| 情况 | 行为 | 诊断 |
+| --- | --- | --- |
+| 没装 | 回落宿主默认预设，**照常说话** | `agent-preset-missing`（`warn`，一条） |
+| 装了但激活失败 | 同上 | `agent-preset-broken`（`warn`） |
+| `mount` 抛错 | 同上 | `agent-preset-mount-failed`（`warn`） |
+| 宿主没有预设注册表 | 完全不用预设，**不报诊断** | 无（状态卡显示 `no-registry`） |
+| `agentPreset` 留空 | 完全不碰注册表 | 无 |
+
+「装不上就少说话」是比「装不上就不说话」更糟的取舍：音箱那头只会表现为沉默，而沉默没有错误信息。
+
+#### 12.36.6 用户怎么装
+
+1. 在 DSH 里把这个目录装成 bundle：`plugin_manager` 的 `install_bundle`，`target` = 仓库里的
+   `preset/xiaoai`（绝对路径），或在插件市场里安装本地 bundle 目录。
+2. 装完 `plugin_manager list_plugins` 里应看到 `preset-xiaoai` 行；`plugin_manager list_bundles` 里有
+   `@local/dsh-xiaoai-preset`。
+3. 设置页的 `agentPreset` 保持默认 `xiaoai` 即可。**已经存在的音箱会话保留它启动时的 revision**，
+   要看新预设得让它新建一个会话（删掉 `devices.json` 里那条记录，或换一台设备）——这是宿主语义，
+   不是插件能改的。
+
+#### 12.36.7 这一轮的离线检查
+
+- `scripts/check-session.mjs` case 11（a–f）：成功路径（header 里的 `agentPreset`、`setup` 里 mount、
+  租约释放、`/health` 的 `presetState`、无诊断、同一 agent 不重复挂）、没装（无 header、模型选项仍在、
+  一条 `agent-preset-missing`、状态含 `missing`）、声明坏了（`agent-preset-broken` + 原文进 detail）、
+  宿主没有注册表（`no-registry` 且**不报**诊断）、留空（`presetState()` 为 `null`）、
+  **resume 路径**（`resumeSessionId` 带上、`meta` 不出现、`setup` 里照样 mount）。
+- `scripts/check-diagnostics.mjs`：三个新码进 `used` 表。
+- `scripts/check-client.mjs`：`agentPreset` 控件按 `DEFAULTS` 键自动被要求存在；开关计数仍是 7
+  （这一项是文本框，不是 `Switch`）。
+- `AGENTS.md` 里的诊断码数量 11 → 14。
+
+**重启 DSH** 才载入：新模块、设置页 bundle、以及刚安装的那个预设 bundle，都是启动时读取的。
+
 
 
 

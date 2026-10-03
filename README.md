@@ -36,6 +36,7 @@ Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderz
 | **接口鉴权** | loopback 信任，远端必须带 bearer 令牌；没配置令牌时远端直接 `401` |
 | **状态卡** | 设置页显示连通状态、鉴权方式、令牌是否配置、看门狗（重启次数 / 是否已放弃 / 下次重试）与最近错误 |
 | **卸载不留残渣** | 停进程树、探测 4399 与 9092、只删可重建文件，历史与陌生文件保留并上报 |
+| **小爱模式（可选）** | 随仓库带一个 Agent 预设 `xiaoai`：会说话、能读写文件与查资料，没有终端、子代理与计划模式；装上之后音箱那个会话就按它组建，其他会话完全不受影响（没装则回落宿主默认，见 [preset/xiaoai/](preset/xiaoai/)） |
 
 ## 工作原理
 
@@ -108,9 +109,10 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
    | 目标位置 | `bridge/core/models/`（压缩包顶层是 `models/`，搬进去即可） |
 
 2. 打开设置页确认四项：**启用**、**音箱名称**、**音箱地址**（刷机后音箱的局域网地址）、**会话工作区**。
-3. 说唤醒词（默认 `小爱小爱`）：音箱答一句 `小爱来了`，接下来的话被识别并提交给你选的会话。
-4. 会话在**播报留痕**里留下每一句；想让它主动开口，在音箱那个会话里让它调 `xiaoai_speak`（工具默认只注册在那里；想让电脑或网页的普通对话也能调，打开设置里的 `speakFromAnySession`）。
-5. 出问题时先看设置页的**运行状态**卡，再看本文的 [排错](#排错)。
+3. （可选）想要「小爱模式」：把仓库里的 [preset/xiaoai/](preset/xiaoai/) 装成一个 bundle（DSH 里用插件市场安装这个本地目录），装完设置页的 `agentPreset` 保持默认 `xiaoai` 就行。没装也不影响使用：只会回落成宿主默认预设，并留一条 `agent-preset-missing` 说明。
+4. 说唤醒词（默认 `小爱小爱`）：音箱答一句 `小爱来了`，接下来的话被识别并提交给你选的会话。
+5. 会话在**播报留痕**里留下每一句；想让它主动开口，在音箱那个会话里让它调 `xiaoai_speak`（工具默认只注册在那里；想让电脑或网页的普通对话也能调，打开设置里的 `speakFromAnySession`）。
+6. 出问题时先看设置页的**运行状态**卡，再看本文的 [排错](#排错)。
 
 > **提示：**音箱刷机与客户端补丁属于上游项目，见 [Open-XiaoAI 刷机教程](https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md) 与 [Client 端补丁](https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md)。
 
@@ -167,6 +169,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；fork 默认值与上游文档不同（见 CHANGELOG） |
 | `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
 | `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`（工具注册回全局层）；关（默认）只有音箱发起的会话能调，工具也只出现在那个会话里（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34 与 §12.35） |
+| `agentPreset` | 文本 | `xiaoai` | 音箱那个会话按哪个 Agent 预设组建。本仓库带一个「小爱模式」（[preset/xiaoai/](preset/xiaoai/)，需要先在插件市场里安装它）；留空用宿主默认预设。填了但没安装**不是错误**：这次回落到宿主默认预设，并留下一条 `agent-preset-missing` 诊断（见 §12.36） |
 | `voiceRuleText` | 文本 | 内置 | 追加到每条语音消息后，告诉 agent 回复会被念出来 |
 | `fallbackText` | 文本 | `连不上电脑，请稍后再试` | 桥接器活着但插件连不上时念 |
 
@@ -242,6 +245,9 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `token-not-applied` | 桥接器先于 API 令牌启动，只在 loopback 上应答；重启桥接器即可套用令牌（`warn`，不是错误） |
 | `scope-registration-unavailable` | 这台 DSH 不支持按会话注册工具，`xiaoai_speak` 没有注册（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.35；`warn`） |
 | `scope-registration-failed` | 往音箱会话的作用域里注册 `xiaoai_speak` 时出错，detail 是宿主给的原文（`warn`） |
+| `agent-preset-missing` | 设置里的 `agentPreset` 没安装，这次用宿主默认预设（detail 里有宿主给的原文；`warn`，见 §12.36） |
+| `agent-preset-broken` | 设置里的 `agentPreset` 装了但激活失败（声明本身有问题），这次用宿主默认预设（`warn`） |
+| `agent-preset-mount-failed` | 把预设挂到音箱会话上抛了异常，这次用宿主默认预设（detail 是原文；`warn`） |
 
 日志与状态分四处，别混着看：数据目录里的 `bridge.log`（真正的日志）、插件自己的 `GET /plugin/xiaoai/bridge/logs`（读同一份日志，可带 `limit`）、桥接器 API `http://127.0.0.1:9092/api/health`（状态端点，回 `{status, speaker_ready, auth}`）、插件自己的 `GET /plugin/xiaoai/health`（状态端点，回 facts）。播报留痕 `spoken.jsonl` 不是日志而是历史：它有 5 MiB 上限，超了就整体轮转到单槽 `spoken.jsonl.1`，**旧的一代会被下一次轮转覆盖**，所以长期留痕只能靠自己另存。更细的内容——pnpm 供应链坑、模型目录、鉴权中间件、每一期的决策——都在 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)（这份文件不随包发布，所以用绝对地址）。
 
@@ -283,6 +289,7 @@ lib/index.js        插件入口：设置卡片、生命周期、session/event �
 lib/process.js      桥接器子进程：启动、停止、日志、看门狗、渲染配置
 lib/tools.js        xiaoai_speak 工具（含「没到桥接器就按需拉起」）
 lib/exposure.js     工具与技能注册到哪一层：音箱会话的作用域，或（开逃生门时）全局
+preset/xiaoai/      随仓库发布的「小爱模式」Agent 预设（插件市场里点一次安装）
 lib/auto-speak.js   播报纪律：什么时候出声、谁来措辞、念过什么
 lib/bridge.js       桥接器 HTTP 客户端与失败分类
 lib/diagnostics.js  错误库（稳定 code + 原始 detail）
