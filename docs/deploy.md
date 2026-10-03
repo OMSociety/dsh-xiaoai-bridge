@@ -335,6 +335,10 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.25 设置页收尾（三项）：Agent 预设并进插件 bundle（插件列表少一张卡）、豆包那一组不再折叠、
       删掉与「语音合成方式」重复的「朗读音色」（`ttsProvider` 从三档收成小爱原生 / 豆包两档）；
       「豆包语音合成」的分区名按用户要求改过一次，用户看过设置页后又要求改回，最终未变；见 §12.46
+- [x] 4.26 bridge 文档收口：删掉 `bridge/README.md`、`bridge/AGENTS.md`、`bridge/CHANGELOG.md` 三份文件，
+      把仍然有用且与代码相符的内容并进根 `AGENTS.md`（末尾新增「桥接器（bridge/）」一节，桥接器侧的规则
+      并进各小节）；删掉从未运行过的 `bridge/.github/workflows/`；四处免责句按用户要求只删不加；顺带修掉
+      `bridge/docs/openxiaoai-voice-api.md` 的四处默认值与 `play_file.py` 缺的 `Authorization`；见 §12.47
 
 ## 9. 第 1 期实现决策
 
@@ -3036,6 +3040,58 @@ Python）；`doc-check.mjs`、`changelog-check.mjs` 与 `check_agents_md.py` 绿
 算落地，插件列表里那张 `@local/dsh-xiaoai-preset` 卡片要等重启后才会消失。桥接器侧不需要重启：这一批
 没有动它读的任何键，`dsh.tts_speaker` 只是不再被写——渲染出的 `config.py` 少了那一行，秒级热重载后
 生效。
+
+### 12.47 bridge 文档收口：删掉三份文件、规则并进根 AGENTS.md（4.26，文档）
+
+#### 12.47.1 用户要的两件事
+
+用户先对一句免责声明不满（原文：「“bridge/ 里仍有一部分文档是从上游搬来的旧内容，示例与代码冲突时以代码为准。” 我对这个现状不满意。让子代理改成符合代码现状的，然后把这一句删了（不要画蛇添足乱加“bridge/ 已……”）」），随后改口要把两份文档并成一份（原文：「等等，bridge/README.md干脆删了和bridge/AGENTS.md干脆合并根agent.md」），最后又追问「bridge/CHANGELOG.md也不留，不知道有没有其他该删的」。
+
+我的三选一提问里用户选的是**合并**：把 `bridge/README.md` 里仍然有用且与代码相符的部分（模型文件安装、环境变量与配置键、API Server 端点表、TTS provider 用法、独立运行与 Docker）并进根 `AGENTS.md` 新增的桥接器一节，与 `bridge/AGENTS.md` 的内容合并去重，然后删掉两份文件；上游遗留的徽章、演示视频与上游镜像链接不搬。第二个提问（顺手还删什么）用户只勾了删 `bridge/.github/workflows/` 那两份 workflow；第三个提问（`bridge/skills/xiaoai-tts/scripts/play_file.py` 缺 `Authorization`）用户要求把脚本与 `SKILL.md` 的围栏一起修。
+
+#### 12.47.2 先审计「还有没有该删的」
+
+`git ls-files` 142 个受控文件。筛法用「basename 不出现在任何别的受控文件里」，再人工核过（Python 模块是动态导入的假阳性）。零命中的只有五份：`bridge/docs/doubao-tts-api.md`（61 KB）、`bridge/docs/doubao-clone-api.md`（27 KB）、`bridge/docs/openxiaoai-voice-api.md`（10 KB）、`bridge/.github/workflows/build-docker.yml`（3.5 KB）与 `release.yml`（3.2 KB）。结论：
+
+- 仓库根**没有** `.github/`，而 GitHub 只读仓库根的 `.github/workflows`，所以 `bridge/` 下那两份 workflow 从来没有运行过——删。`AGENTS.md` 的验收标准据此把「仓库没有 CI」写实。
+- 两份豆包文档是上游（火山引擎）接口的搬运记录，对内部路径、配置键、脚本与端口零引用；`bridge/docs/openxiaoai-voice-api.md` 其实是**本仓库自己的 API Server 文档**，还要继续用——三份都保留（用户也确认保留），只把 `openxiaoai-voice-api.md` 的指针接进 README 与 AGENTS。
+- 曾经怀疑但确认不能删的：`bridge/scripts/start.sh` 与 `bridge/Dockerfile` 被 `bridge/tests/test_wakeup_keywords.py:39-40` 真读（属载荷）；`bridge/config.py` 是渲染模板（禁止操作第一条）；`bridge/device.json` 被 `.gitignore:84` 的 `**/device.json` 挡住，本来就没入库；`bridge/uv.lock` / `Cargo.lock` 有意入库。
+- `bridge/CHANGELOG.md`（5310 字节 / 70 行）是纯上游历史（`## v1.0.7 - 2026-07-14` 起，条目指向 `github.com/coderzc/open-xiaoai-bridge/compare/...`），没有一条 fork 条目——用户决定不留，落点写进了根 `AGENTS.md` 的「维护」一节：上游历史在上游仓库里。
+- 豆包端点口径核过一遍：桥接器代码用的是 v3（`bridge/core/services/tts/doubao.py:13` 的 `DEFAULT_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"`、`bridge/native/src/tts/doubao.rs:9` 同值、`bridge/scripts/clone_voice.py:43` 的 `BASE_URL = ".../api/v3/tts"`、`bridge/core/services/audio/asr/doubao.py:20-23` 的三条 v3/auc 端点），两份厂商文档提到的 v3 tts 端点（bidirection / get / unidirectional / sse / upgrade / voice）与之一致，所以它们不是「旧内容」，只是外部参考。
+
+#### 12.47.3 并进根 AGENTS.md
+
+原两份文件的角色是「根文件管插件、`bridge/AGENTS.md` 管桥接器，冲突时以更接近改动点的那份为准」，九个章节完全平行（项目概览、常用命令、架构边界、修改契约、禁止操作、验收标准、已知风险区、出错怎么办、维护）。合并按「小节并集、逐条去重、按符号名而不是行号引用」处理，根 `AGENTS.md` 从 140 行涨到 271 行：
+
+- 文档索引里 `bridge/README.md` / `bridge/AGENTS.md` / `bridge/CHANGELOG.md` 三条换成 `bridge/docs/` 三份的指针；「改 `bridge/` 下任何文件先读 `bridge/AGENTS.md`」这句话随之消失（现在只有一份）。
+- 常用命令合成一张表并标注哪几行的工作目录是 `bridge/`；禁止操作取两份的并集（15 条）；验收标准 6 条（九检查、pytest 基线 130、桥接器 `.py` 起得来、Rust 重编译加 `import dsh_xiaoai_server`、重启 DSH 真机、文档同步）；已知风险区删掉「`bridge/README.md` 的示例」那一行。
+- 末尾新增 `## 桥接器（bridge/）`，含模型文件与资源、环境变量、API Server 端点、TTS provider、独立运行与 Docker 五节——即 `bridge/README.md` 里仍然成立的那部分。
+- 搬运时按代码更正了 README 的旧说法：`session_key` 示例改成实际默认值（`agent:default:dsh-xiaoai-bridge` / `agent:main:dsh-xiaoai-bridge`，上游写的是 `open-xiaoai-bridge`）；删掉并不存在的 `openai.tts_provider`；`tts.openai` / `tts.mlx_audio` 从「示例配置」降级为说明（模板里没有这两段）；豆包兜底音色按模板写 `zh_female_vv_uranus_bigtts`；端点表补一列鉴权口径（回环免令牌、非回环必须带 bearer）。
+- Rust 导出面补上原先漏掉的两个注册：`native/src/python.rs` 的 `register_fn` / `unregister_fn` 与 `native/src/opus.rs` 的 `OpusEncoder` / `OpusDecoder` 两个类（`lib.rs` 依次调 opus / python / tts 三个 `init_module`）。
+- 代价：`check_agents_md.py` 对单文件有 200 行的建议预算，271 行会报一条 info。取舍是**接受这条 info**——原先「两份文件、以更接近改动点的那份为准」这条规则正是这次要消掉的东西，而单文件换来的是每条规则的落点只有一个；真要再涨，再拆回目录级文件也不迟。
+
+#### 12.47.4 免责句与引用改指
+
+四处免责句按用户要求**只删不加**（不许写成「`bridge/` 已与代码一致」）：`README.md` 那句以「本仓库**独立演进**，不跟进上游。」收尾；`CONTRIBUTING.md` 只删中间从句、保留首尾（「提交只推 `origin`。本仓库对 `bridge/` 的每一处改动逐条记在 CHANGELOG.md 里，别顺手重排格式。」）；`bridge/AGENTS.md` 文档索引里那半句与 `bridge/README.md` 顶部那个「关于本文件」引用块随文件一起消失。用户原话是「把这一句删了」，所以没有任何替代声明。
+
+引用改指与清理：`README.md` 的端点表指向 `bridge/docs/openxiaoai-voice-api.md`；配置项与打断两条指向 `AGENTS.md`（后者只删掉括号里的指针）；`README.md` 结尾删掉「桥接器进入本仓库之前的变更在 bridge/CHANGELOG.md」；`bridge/docker-compose.yml:6` 改成「正式部署请用本地源码运行（见 ../AGENTS.md 的「桥接器（bridge/）」一节）」；`TODO.md` 里「搬来的旧内容有意保留」那条与 `CHANGELOG.md` 抬头「`bridge/` 保留它自己的历史与 bridge/CHANGELOG.md」那半句一并删掉（中英两处）。
+
+#### 12.47.5 顺带修掉的文档与代码不符
+
+- `bridge/docs/openxiaoai-voice-api.md`：`/api/wakeup` 的 `silent` 默认值 `true` → `false`（`bridge/core/services/api_server.py:432` 是 `data.get("silent", False)`，`:427` 的 docstring 也写着 `default false (audible wakeup)`）；`/api/play/text` 与 `/api/play/url` 的 `timeout` `60000` → `600000`（`:164` 与 `:253` 都是 `10 * 60 * 1000`）；`/api/health` 字段表里 `status` 原写「可为 `unhealthy`」，代码 `:485` 硬编码 `"healthy"`，改成「目前只会是 `healthy`」。
+- **故意没动的遗漏类**（不是「文档与代码冲突」，而是文档没写全，留待需要时补）：`/api/health` 的实际返回还有 `data.auth`（`api_server.py:490`）与 `data.asr`（`:498`）；`/api/play/file` 的参数表缺 `sample_rate`（`:305`，默认 24000）；文档把「默认从 `config.py` 读」写得比实现宽松（实现读的是插件渲染出的 `<dataDir>/config.py`）。
+- `bridge/skills/xiaoai-tts/SKILL.md`：环境变量一节补 `XIAOAI_API_TOKEN`（依据同目录 `scripts/api_client.py:56-60` 的 `get_api_token()` 与 `bridge/core/services/api_auth.py` 的 `TOKEN_ENV_VAR = "XIAOAI_API_TOKEN"`；非回环调用方需要，env 优先、其次配置文件里的 `dsh.token`）；「完整情感列表参考：`xiaoai-tts voices`」改成指向 `bridge/docs/doubao-tts-api.md` 的 `audio_params.emotion` 一节（`list_doubao_voices.py` 只列音色，`bridge/core/services/tts/doubao.py:546-547` 只透传 `audio_params.emotion`）；删掉文件末尾多余的一个代码围栏。
+- `bridge/skills/xiaoai-tts/scripts/play_file.py`：multipart 请求按 `api_client.api_request` 的口径，在 `get_api_token()` 有值时带上 `Authorization: Bearer <token>`，401 分支追加 `UNAUTHORIZED_HINT`（原来这个脚本在开启 bearer 门禁的桥接器上必然被拒）。
+
+#### 12.47.6 检查与验证
+
+`npm run check` 九条全绿（这一批没动 JS，跑它是为了确认删文件没有碰坏检查的输入——`check-session.mjs` 里引用 `preset/xiaoai` 的那行注释是上一批改的）；`bridge` 里 `pytest -q` 仍是 `130 passed, 19 subtests`；仓库外的 `doc-check.mjs`（`anchors in README: 13, headings: 38`）与 `changelog-check.mjs`（11 个版本，Unreleased 到 0.1.0）绿；`check_agents_md.py --root D:\WorkSpace\Github\dsh-xiaoai-bridge` 报 `error 0 / warn 0 / info 1`，那一条就是 12.47.3 说明的「AGENTS.md 271 行超过 200 行建议预算」，本轮唯一的告警。删后 `git grep "bridge/README.md\|bridge/AGENTS.md\|bridge/CHANGELOG.md"` 已无活引用；`git grep "从上游搬来\|以代码为准"` 只剩三处合法位置：`AGENTS.md` 里 TTS provider 那条（「早期条目说这里直接抛异常，以代码为准」）、`CHANGELOG.md` 的口径更正条目与 §12.37 的历史记录。
+
+#### 12.47.7 生效方式与历史引用
+
+纯文档加两个技能脚本：没有版本号变化、也没有配置键变化。桥接器不用重启（`SKILL.md` 与 `play_file.py` 下次被调用时生效）；插件侧刷新设置页即可，本轮不改界面。
+
+`CHANGELOG.md` 与 `docs/deploy.md` 的早期 §12.x 里对三份被删文件的引用**按「不改写历史」保留**（§12.29 的文档索引、§12.37 的口径更正、§12.41 的提示词落点表、§12.42 的示例配置同步），它们记录的是当时的动作，不是现在的文档结构；这一轮的结构变化记在本节。
 
 
 

@@ -75,7 +75,7 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 | 字段 | 说明 |
 |------|------|
-| status | 服务状态：`"healthy"`, `"unhealthy"` |
+| status | 服务状态：目前只会是 `"healthy"`（进程活着才答得上话） |
 | speaker_ready | 是否音箱已初始化并准备好接收指令 |
 
 ---
@@ -114,7 +114,7 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| silent | bool | 否 | 是否静默唤醒（不播放提示音），默认 `true` |
+| silent | bool | 否 | 是否静默唤醒（不播放提示音），默认 `false` |
 
 **Example:**
 ```bash
@@ -171,7 +171,7 @@ curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
 |------|------|------|------|
 | text | string | 是 | 要播放的文字 |
 | blocking | bool | 否 | 是否阻塞等待，默认 `false` |
-| timeout | int | 否 | 超时时间（毫秒），默认 60000 |
+| timeout | int | 否 | 超时时间（毫秒），默认 600000 |
 
 **Example:**
 ```bash
@@ -194,7 +194,7 @@ curl -X POST http://{host}:9092/api/play/text \
 |------|------|------|------|
 | url | string | 是 | 音频 URL |
 | blocking | bool | 否 | 是否阻塞等待，默认 `false` |
-| timeout | int | 否 | 超时时间（毫秒），默认 60000 |
+| timeout | int | 否 | 超时时间（毫秒），默认 600000 |
 
 **Example:**
 ```bash

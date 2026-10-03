@@ -38,7 +38,7 @@
 
 仓库分两半：根目录是 **DSH 插件**（Node，`lib/`），`bridge/` 是 **Python 桥接器**。桥接器负责设备那一侧（TCP 音频、VAD、唤醒词、语音识别、语音合成、播放闸门），插件负责 DSH 这一侧（设置页、运行状态卡、进程托管与看门狗、接口鉴权、随包技能与预设）。插件拉起桥接器进程、渲染它的配置、看住它；桥接器也能脱离插件单独跑。
 
-`bridge/` 的源码来自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT，其上游是 [Open-XiaoAI](https://github.com/idootop/open-xiaoai)），本仓库在它之上加了 DSH 后端、播报纪律、鉴权与生命周期管理。本仓库**独立演进**，不跟进上游；`bridge/` 里仍有一部分文档是从上游搬来的旧内容，示例与代码冲突时以代码为准。
+`bridge/` 的源码来自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT，其上游是 [Open-XiaoAI](https://github.com/idootop/open-xiaoai)），本仓库在它之上加了 DSH 后端、播报纪律、鉴权与生命周期管理。本仓库**独立演进**，不跟进上游。
 
 ## 核心特性
 
@@ -87,7 +87,7 @@
 
 ### 桥接器 HTTP 接口
 
-桥接器进程里有一个 HTTP API Server（默认 `127.0.0.1:9092`），插件用它做播报与健康检查，端点表见 `bridge/README.md`。插件自己的路由挂在宿主 webServer 上，前缀 `/plugin/xiaoai`：
+桥接器进程里有一个 HTTP API Server（默认 `127.0.0.1:9092`），插件用它做播报与健康检查，端点见 `bridge/docs/openxiaoai-voice-api.md`。插件自己的路由挂在宿主 webServer 上，前缀 `/plugin/xiaoai`：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -417,12 +417,12 @@ DSH 退出、插件重载与 `dsh plugin remove` 跑的是同一套清理，它�
 
 ### 音箱侧的调参
 
-下面这些键在桥接器的模板 `bridge/config.py` 里，插件不渲染它们。要改就直接改那份模板（渲染产物把它当模块加载，改完 1 秒内热重载），改动前先看 `bridge/README.md`：
+下面这些键在桥接器的模板 `bridge/config.py` 里，插件不渲染它们。要改就直接改那份模板（渲染产物把它当模块加载，改完 1 秒内热重载），改动前先看 [AGENTS.md](AGENTS.md) 的「桥接器（bridge/）」一节：
 
 - 唤醒词不灵：换更好识别的词；`kws.keywords_threshold`（默认 0.2）调低会更灵敏；启动后模型加载要几十秒。
 - 话没说完就被抢答：调大 `vad.min_silence_duration`（默认 500 毫秒，可以先试 1000）。
 - 麦克风收得小：调 `audio_input.gain`（默认 1.0，从 2.0 试着加，过高会失真）。
-- 想打断播报：直接对小爱喊「小爱同学」（见 `bridge/README.md` 的常见问题）。
+- 想打断播报：直接对小爱喊「小爱同学」。
 
 ### 卸载
 
@@ -479,7 +479,7 @@ docs/deploy.md       实施与验证记录（不随包发布）
 
 ## 更新日志
 
-逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：插件自 `0.1.0` 起记录，当前版本 `0.2.8`（仓库里的 tag 都属于上游桥接器，插件版本号没有单独打 tag）；桥接器进入本仓库之前的变更在 `bridge/CHANGELOG.md`。
+逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：插件自 `0.1.0` 起记录，当前版本 `0.2.8`（仓库里的 tag 都属于上游桥接器，插件版本号没有单独打 tag）。
 
 ## 支持与致谢
 

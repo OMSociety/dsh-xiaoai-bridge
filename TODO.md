@@ -11,7 +11,6 @@
 ## 可选（用户没点头就不动）
 
 - [ ] 外观项去品牌化：`bridge/pyproject.toml` 的分发名 `open-xiaoai-bridge`（dist-info 至今仍是 `open_xiaoai_bridge-1.0.0.dist-info`）、`bridge/docker-compose.yml` 的服务名与镜像名、豆包 TTS 的 uid。三处要一起改才自洽，所以没单独动。
-- [ ] `bridge/README.md` 与 `bridge/CHANGELOG.md` 里搬来的旧内容（快速开始的 clone 地址、旧 `session_key` 示例、`v1.0.7` 历史条目）**有意保留**；真要重写，先确认不再需要出处与历史。
 
 ## 需要用户动手（不是编码任务）
 

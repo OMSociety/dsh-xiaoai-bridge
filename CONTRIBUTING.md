@@ -73,7 +73,7 @@ git fetch upstream
 git log --oneline upstream/main | Select-Object -First 20
 ```
 
-提交只推 `origin`。`bridge/` 里仍有一部分文档是从上游搬来的旧内容（`bridge/README.md` 的快速开始与示例、`bridge/CHANGELOG.md` 的历史条目、本仓库所有 tag 都来自上游桥接器），示例与代码冲突时以代码为准；本仓库对 `bridge/` 的每一处改动逐条记在 [CHANGELOG.md](CHANGELOG.md) 里，别顺手重排格式。
+提交只推 `origin`。本仓库对 `bridge/` 的每一处改动逐条记在 [CHANGELOG.md](CHANGELOG.md) 里，别顺手重排格式。
 
 ## 许可
 

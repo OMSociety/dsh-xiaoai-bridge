@@ -9,7 +9,7 @@ import argparse
 import urllib.request
 import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from api_client import get_api_config
+from api_client import get_api_config, get_api_token, UNAUTHORIZED_HINT
 
 
 def play_file(file_path, blocking=False):
@@ -45,6 +45,9 @@ def play_file(file_path, blocking=False):
     headers = {
         "Content-Type": f"multipart/form-data; boundary=----{boundary}"
     }
+    token = get_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     
     req = urllib.request.Request(full_url, data=body, headers=headers, method="POST")
     
@@ -58,6 +61,8 @@ def play_file(file_path, blocking=False):
             return result
     except urllib.error.HTTPError as e:
         error_msg = f"HTTP 错误: {e.code} - {e.reason}"
+        if e.code == 401:
+            error_msg += f"\n{UNAUTHORIZED_HINT}"
         raise Exception(error_msg)
     except Exception as e:
         raise Exception(f"请求失败: {e}")

@@ -13,6 +13,7 @@ description: Control Xiaoai speaker via OpenXiaoAI Voice API for high-quality TT
 
 ```bash
 OPENXIAOAI_BASE_URL="http://192.168.x.x:9092"  # OpenXiaoAI 服务地址
+XIAOAI_API_TOKEN="<token>"  # 非 loopback 调用方需要；env 优先，其次配置文件的 dsh.token（loopback 调用可留空）
 ```
 
 ## 使用方法
@@ -108,10 +109,9 @@ xiaoai-tts tts "你好，我是你的专属语音助手" -s S_xxxxxxxx
 | 广告营销 | advertising | 广告营销语气 |
 | 磁性 | magnetic | 磁性声音 |
 
-完整情感列表参考：`xiaoai-tts voices`
+完整情感列表参考：`bridge/docs/doubao-tts-api.md` 的 `audio_params.emotion` 一节（`xiaoai-tts voices` 只列音色，给不出情感参数名；不同音色支持的范围不同）
 
 ## API 端点
 
 - Base URL: `http://{host}:9092`
 - Content-Type: `application/json`
-```
