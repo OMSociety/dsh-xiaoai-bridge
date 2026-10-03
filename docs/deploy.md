@@ -332,6 +332,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       豆包；新增「豆包语音合成」分区的 App ID、凭据名、音色、音频格式、边合成边播放与
       0.5–2.0 语速；凭据真值走 DSH 凭据库 → 子进程环境变量 `DOUBAO_ACCESS_KEY` →
       桥接器优先读环境变量；见 §12.45）
+- [x] 4.25 设置页收尾（三项）：Agent 预设并进插件 bundle（插件列表少一张卡）、豆包那一组不再折叠、
+      删掉与「语音合成方式」重复的「朗读音色」（`ttsProvider` 从三档收成小爱原生 / 豆包两档）；
+      「豆包语音合成」的分区名按用户要求改过一次，用户看过设置页后又要求改回，最终未变；见 §12.46
 
 ## 9. 第 1 期实现决策
 
@@ -2384,14 +2387,12 @@ the preset scope, and the Agent scope's parent link controls visibility」——
   `await agentPresets.mount(agentCtx, id)`。`ResumeAgentOptions` **没有 `meta`**，所以 resume 只能在
   `setup` 里挂。`select()` 在第一轮之后会抛 `agent-preset/locked`。
 
-#### 12.36.3 这份 bundle（`preset/xiaoai/`）
+#### 12.36.3 这份 bundle（根 `cordis.patch.yml` 的第二条 insert）
 
-两个文件，随仓库发布，用户在插件市场里点一次安装：
-
-- `preset/xiaoai/package.json`：`@local/dsh-xiaoai-preset`，`private`，`dsh.bundle.patch` 指向
-  `./cordis.patch.yml`。
-- `preset/xiaoai/cordis.patch.yml`：`- insert: - id: preset-xiaoai / name: '@deepseek-ai/dsh-agent-preset' /
-  config: { id: xiaoai, name: 小爱模式, description: …, order: 5 }`。
+预设声明与插件本体在同一个 bundle 里：根 `cordis.patch.yml` 一次 `- insert:` 下两条，第一条是插件自己
+（`id: xiaoai`），第二条就是预设（`- id: preset-xiaoai / name: '@deepseek-ai/dsh-agent-preset' /
+config: { id: xiaoai, name: 小爱模式, description: …, order: 5 }`）。它原先单独放在 `preset/xiaoai/`
+（包名 `@local/dsh-xiaoai-preset`），并在插件列表里多出一张卡；并进来的经过与代价见 §12.46.2。
 
 `plugins` 是 **standard 减掉一部分**（standard 的 146 行清单是从 asar 抽出来逐条读的）：
 
@@ -2448,10 +2449,10 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 
 #### 12.36.6 用户怎么装
 
-1. 在 DSH 里把这个目录装成 bundle：`plugin_manager` 的 `install_bundle`，`target` = 仓库里的
-   `preset/xiaoai`（绝对路径），或在插件市场里安装本地 bundle 目录。
-2. 装完 `plugin_manager list_plugins` 里应看到 `preset-xiaoai` 行；`plugin_manager list_bundles` 里有
-   `@local/dsh-xiaoai-preset`。
+1. 装插件就够了：`plugin_manager` 的 `install_bundle`，`target` = 仓库根（或插件市场里的本地 bundle
+   目录）——插件本体与预设在同一条 insert 里（§12.36.3）。
+2. 装完 `plugin_manager list_plugins` 里应看到 `preset-xiaoai` 行；`plugin_manager list_bundles` 里是
+   `dsh-xiaoai-bridge`（`@local/dsh-xiaoai-preset` 那个 bundle 不再有独立的一行）。
 3. 设置页的 `agentPreset` 保持默认 `xiaoai` 即可。**已经存在的音箱会话保留它启动时的 revision**，
    要看新预设得让它新建一个会话（删掉 `devices.json` 里那条记录，或换一台设备）——这是宿主语义，
    不是插件能改的。
@@ -2476,7 +2477,7 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 于是被问「电脑上运行着什么？」时它只能回答「我这会儿没法直接看到你电脑上跑的所有程序」。补齐的是终端
 （pwsh，含平台门控的 bash）、后台任务与待办；子代理/工作流、计划模式、问询卡片仍然不要。
 
-改的是 `preset/xiaoai/cordis.patch.yml` 的 `plugins`，加四行，全部照 `@deepseek-ai/dsh-web-app` 那份
+改的是根 `cordis.patch.yml` 里 `preset-xiaoai` 那条的 `plugins`，加四行，全部照 `@deepseek-ai/dsh-web-app` 那份
 `presets/standard.patch.yml` 逐字抄（在 `resources/app.asar` 的
 `dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`，用 `_oxb-wheels\asar.mjs cat` 读）：
 
@@ -2496,7 +2497,7 @@ standard 即可，不必把这份预设钉死在 Windows 上。
 已知代价，留着不改：谁把音箱会话的权限预设切到需要审批的那一档，语音这一轮就会等一张卡片——这与
 `dsh-tool-ask-user` 被拿掉是同一个理由，但那是会话级选择，不该由预设替用户决定。
 
-生效方式：这份 bundle 在 profile 里是 `link:`（`@local/dsh-xiaoai-preset` → 仓库目录），改完**不用重装**，
+生效方式：插件在 profile 里是 `link:`（`dsh-xiaoai-bridge` → 仓库目录），改完**不用重装**，
 但要**重启 DSH**；而且已经存在的音箱会话保留它启动时的 revision（§12.36.6 第 3 条），要看新的工具表得让
 它新建会话（删掉 `devices.json` 里那条记录，或换台设备）。
 
@@ -2931,6 +2932,110 @@ function isArchived(sessionId) {
 #### 12.45.7 生效方式
 
 豆包参数写在插件渲染出的 `config.py` 里，桥接器秒级热重载，所以改 App ID / 音色 / 音频格式 / 流式 / 语速不用重启。`DOUBAO_ACCESS_KEY` 是子进程环境变量，换了凭据名要重启桥接器进程（插件重拉子进程，或重启 DSH）。实机上这次要听的是「设置页选豆包 → 说一句话 → 用豆包音色播报」。
+
+### 12.46 设置页收尾：预设并进插件、豆包组不折叠、删掉朗读音色（4.25）
+
+#### 12.46.1 用户要的四件事
+
+用户先指出插件列表里多出一张 `@local/dsh-xiaoai-preset` 卡片，随后在一次消息里（m04142）写下四条：
+
+```
+不能不显示或者并入插件配置里吗。
+豆包配置选项改名「豆包 TTS」
+豆包配置项无需折叠。
+“朗读音色”功能和语音合成方式重复，考虑砍掉“朗读音色”配置项
+```
+
+第 4 条是「考虑」，所以先把两种砍法摆出来问了一次；用户选的是**控件和设置项一起砍**：「语音合成方式」
+只剩「小爱原生」与「豆包」，豆包音色统一由「豆包音色」（`doubaoSpeaker`）给。下面四小节各记一条。
+
+#### 12.46.2 预设并进插件 bundle
+
+原来 `preset/xiaoai/`（`@local/dsh-xiaoai-preset`、`private`、`dsh.bundle.patch` 指向本地
+`cordis.patch.yml`）是**独立的 bundle**：profile 的 `dsh.profile.bundles` 里因此有两行，插件列表里也就
+有两张卡。DSH 没有「把某张卡藏起来」的开关——卡片是照 bundle 渲染的，所以想少一张卡只有一条路：把预设
+声明并进插件自己的 bundle。现在根 `cordis.patch.yml` 的一次 `- insert:` 下两条（插件本体 `id: xiaoai` +
+预设 `id: preset-xiaoai`），`preset/` 目录整体删除。
+
+预设自己的 id 仍是 `xiaoai`，所以设置项 `agentPreset` 的默认值、诊断码与 §12.36 的清单全部不用动；变了
+的只有它住在哪个 bundle 里。两个附带的收获：根 `cordis.patch.yml` 本来就在 `package.json` 的 `files`
+白名单里，而原 `preset/` 不在——预设从此真的随包发布（过去只有 checkout 里有）；安装说明也从「装插件，
+再装一次预设」变成「装插件」。代价是预设不再单独可关：要关就只能关整个插件，而关掉插件本来也不会再启动
+音箱会话，所以这个代价是空的。
+
+profile 侧要跟着改（本机 `desktop`）：`package.json` 里删掉 `"@local/dsh-xiaoai-preset":
+"link:…/preset/xiaoai"` 依赖行与 `dsh.profile.bundles` 里那一行，跑一次 `pnpm install` 去掉软链，然后
+**重启 DSH**——组合是在进程启动时算的，不重启的话旧进程里还挂着原来那条 bundle。
+
+#### 12.46.3 分区名保持「豆包语音合成」
+
+用户原话是「豆包配置选项改名「豆包 TTS」」，于是 `section.doubao` 的中英两条先改成了 `豆包 TTS` /
+`Doubao TTS`。用户看过改完的设置页后要求改回，所以最终值与改动前一致：中文 `豆包语音合成`、英文
+`Doubao speech synthesis`，`hint.ttsProvider` 里那句也回到「选中后才会出现下面的豆包设置」，README 的
+小节标题同样是「豆包语音合成」。这一条留在这里只为记住「改名试过又被否掉」，代码与 README 里都没有
+净变化（改名与回退落在同一条提交里，中间状态没有进历史）。`doc-check.mjs` 的 README 锚点表是照标题现算
+的，仓库里没有手写的 `#豆包语音合成` 链接，所以标题无论改还是不改都不需要动别处。
+
+#### 12.46.4 豆包那一组不再折叠
+
+`SECTIONS` 的条目现在除了 `show` 门还能带 `fold: false`：渲染循环里 `section.fold === false` 时不再套
+`Fold`，改成 `h4.xiaoai_sectionTitle` + `div.xiaoai_fields`（就像运行状态卡那样），外壳、`show` 门与
+`xiaoai_hidden` 的处理完全不变。`FOLD_DEFAULTS` 里那条 `doubao: true` 随之删掉——它已经没有消费者。
+折叠本来只管显示，所以草稿、校验提示与门控行为一个都没动。
+
+`scripts/check-client.mjs` 的折叠计数从 `>= 8` 收紧成 `=== 8`（7 个分区折叠 + 「桥接器进程」里嵌套的
+「高级」），并新增一条内容断言：`seen.folds` 里不许出现标题 `豆包语音合成`——门控或折叠被改回去就会失败。
+`seen.folds` 里存的是每次 `DisclosureRow` 渲染的 props，`title` 本来就在里面，所以这条断言不需要新的
+stub 能力。
+
+#### 12.46.5 删掉「朗读音色」（`ttsSpeaker`）
+
+判定依据是桥接器那条旧规则：`bridge/core/services/tts/router.py` 的
+`resolve_provider(configured_provider, tts_speaker)` 在配置为空时 `return "xiaoai" if tts_speaker ==
+cls.XIAOAI_TTS_SPEAKER else "doubao"`，`_play_doubao` 与 `_play_openai_compatible` 也在
+`tts_speaker != XIAOAI_TTS_SPEAKER` 时把它当音色 ID 用。也就是说「跟随音色」这一档的全部含义就是那个音色
+值：它和「语音合成方式」是同一件事的两套入口。删掉音色项，等于把「跟随」这一档一并删掉——留下的两档
+（小爱原生 / 豆包）用显式的 provider 就能说清，豆包音色由「豆包音色」给。
+
+插件侧这一批改到的地方：`lib/config.js` 的 `DEFAULTS` 去掉 `ttsSpeaker`、`DEFAULTS.ttsProvider` 从 `''`
+改成 `'xiaoai'`、`TTS_PROVIDER_VALUES` 从 `['', 'xiaoai', 'doubao']` 收成 `['xiaoai', 'doubao']`，
+`CONFIG_SCHEMA` 去掉 `ttsSpeaker` 那条并改写 `ttsProvider` 的描述，`CONFIG_RULES` 里 `ttsProvider` 的
+文案与判定不再处理空串；`lib/render-config.js` 的 `buildOverrides()` 不再写 `dsh.tts_speaker`（改成总是
+写 `dsh.tts_provider`），`RENDERED_TTS_PROVIDERS` 的注释同步；`lib/index.js` 的状态事实去掉
+`ttsSpeaker`；`lib/client.js` 去掉 `field.ttsSpeaker` / `hint.ttsSpeaker` / `option.ttsProvider.auto`
+三条中英文案与 `FIELDS` 里那个控件，`hint.ttsProvider` 改成两档说明，`GATE_DEFAULTS.ttsProvider` 从
+`""` 改成 `"xiaoai"`。
+
+行为上的变化（同时写进 CHANGELOG）：桥接器不再收到插件写的 `dsh.tts_speaker`，它模板里那个 `"xiaoai"`
+原样生效——想用豆包音色就在设置页选「豆包」，音色交给「豆包音色」。老配置里残留的 `ttsSpeaker` 会被
+`sanitizeConfig()` 当未知键丢掉，不再有任何效果。**桥接器侧一行未改**：`tts_speaker` 仍是它自己的配置
+键（`bridge/config.py` 模板里那份与 `session_tts_speakers` 都还在），只是插件不再写它——手工改
+`bridge/config.py` 仍然可以走「按音色判断」的旧规则。
+
+设置页有个小事实值得记：枚举控件在 `/config` 还没答之前不预先选中任何一项（其余枚举一直如此），所以
+「语音合成方式」刚打开时是空白的，答案到了才落到 `xiaoai`；门控读的是 `GATE_DEFAULTS`，因此豆包那一组
+不会先闪一下再消失。
+
+#### 12.46.6 检查与验证
+
+`scripts/check-config.mjs`：`bare` 的期望值里多了 `tts_provider: 'xiaoai'`（原来是「空选择什么都不写」
+那条 `ok`），`full` 与 `writeConfig` 的样本去掉 `ttsSpeaker`，新增 `ok(!('tts_speaker' in full.dsh))`，
+真 Python 加载那条改成断言 `dsh_tts_speaker` 仍是模板默认 `xiaoai`，稀疏文件那条从「provider 不写进
+文件」改成「连默认值也照写」。`scripts/check-client.mjs`：标签清单去掉「朗读音色」、分区标题仍是
+「豆包语音合成」、折叠计数 `>= 8` → `=== 8`、新增「`豆包语音合成` 不在折叠标题里」、`ttsProvider` 的选项改成
+`['xiaoai=小爱原生', 'doubao=豆包']` 并把「未播种时 `value` 是空串」写进注释理由。
+`scripts/check-session.mjs` 只改了一行注释（不再引用已删掉的 `preset/xiaoai`）。
+
+结果：`npm run check` 九条绿；`bridge` 的 `pytest -q` 仍是 `130 passed, 19 subtests`（这一批不动
+Python）；`doc-check.mjs`、`changelog-check.mjs` 与 `check_agents_md.py` 绿。
+
+#### 12.46.7 生效方式
+
+浏览器半的改名、取消折叠与字段删除刷新设置页就能看到（DSH 直接读仓库里那份 `lib/client.js`），豆包那组
+的显隐照旧跟着「语音合成方式」实时走。预设声明的搬家与 profile 里删掉那行 bundle 都要**重启 DSH** 才
+算落地，插件列表里那张 `@local/dsh-xiaoai-preset` 卡片要等重启后才会消失。桥接器侧不需要重启：这一批
+没有动它读的任何键，`dsh.tts_speaker` 只是不再被写——渲染出的 `config.py` 少了那一行，秒级热重载后
+生效。
 
 
 

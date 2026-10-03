@@ -204,7 +204,7 @@ if (captured !== null) {
             '启用插件', '音箱名称', '音箱地址', '唤醒词', '语音识别后端', '会话工作区',
             '随插件启动桥接器', '日志级别',
             '启用本地 API 服务', '监听地址', '监听端口', '访问令牌凭据名',
-            '对话保持时长（秒）', '连续对话', '语音合成方式', '朗读音色', '豆包 App ID', '豆包访问令牌凭据名', '豆包音色', '豆包音频格式', '边合成边播放', '豆包语速', '唤醒应答', '退出应答', '退出词',
+            '对话保持时长（秒）', '连续对话', '语音合成方式', '豆包 App ID', '豆包访问令牌凭据名', '豆包音色', '豆包音频格式', '边合成边播放', '豆包语速', '唤醒应答', '退出应答', '退出词',
             '兜底播报文本', '会话键',
             '自动念出回复', '任何会话都能让小爱说话', '播报字数上限', '回复器提供商', '回复器模型', '回复器参考轮数',
             '回复器失败提示语', '审批等待提示语', '人格设定', '说话风格', '行动准则', '输出限制', '语音消息附加提示',
@@ -217,9 +217,11 @@ if (captured !== null) {
           for (const label of ['桥接器目录', 'Python 解释器']) {
             check(source.includes(label), `the 高级 fold is missing the field ${JSON.stringify(label)}`);
           }
+          // Seven sections fold, plus the nested 高级 fold; the Doubao group is
+          // rendered as a plain heading and is asserted below.
           check(
-            seen.folds.length >= 8,
-            `the page should fold its 8 sections, got ${seen.folds.length} DisclosureRow renders`,
+            seen.folds.length === 8,
+            `the page should fold its 7 sections plus the 高级 fold, got ${seen.folds.length} DisclosureRow renders`,
           );
           for (const heading of ['基本', '唤醒与语音', '豆包语音合成', '应答与兜底', '播报与回复器', '人格与提示词', '桥接器进程', '本地 API 服务', '运行状态']) {
             check(page.includes(heading), `page view is missing the section ${JSON.stringify(heading)}`);
@@ -230,6 +232,12 @@ if (captured !== null) {
           check(
             seen.hidden.includes('xiaoai_section xiaoai_hidden'),
             'the Doubao section should carry xiaoai_hidden while the provider is not Doubao',
+          );
+          // And it is not collapsible: its heading has to reach the page as a
+          // plain title, so no DisclosureRow may carry it.
+          check(
+            !seen.folds.some((fold) => fold.title === '豆包语音合成'),
+            'the Doubao group should render as a plain heading, not as a fold',
           );
 
           // Every settings key the host can store must have a control here;
@@ -280,17 +288,18 @@ if (captured !== null) {
             check(typeof control.onChange === 'function', `SegmentedControl ${control.id} has no onChange`);
           }
 
-          // 6b. The TTS provider control carries its own option wording and a
-          //     real fallback for an unseeded draft: every choice is translated
-          //     rather than shown raw, and an empty choice (the default, "follow
-          //     the voice") must not render as "undefined".
+          // 6b. The TTS provider control carries its own option wording: both
+          //     choices are translated rather than shown raw. Nothing is staged
+          //     before `/config` answers, so the control starts unselected; the
+          //     value it lands on is DEFAULTS.ttsProvider (`xiaoai`), which
+          //     check-config.mjs holds down on the rendering side.
           const provider = seen.segments.find((control) => control.id === 'xiaoai-ttsProvider');
           check(Boolean(provider), 'page view did not render the TTS provider control');
           if (provider) {
-            check(provider.value === '', `the TTS provider control should default to the empty choice, got ${JSON.stringify(provider.value)}`);
+            check(provider.value === '', `the TTS provider control should start unselected, got ${JSON.stringify(provider.value)}`);
             const options = (provider.options ?? []).map((option) => `${option.value}=${option.label}`);
             check(
-              JSON.stringify(options) === JSON.stringify(['=跟随音色', 'xiaoai=小爱原生', 'doubao=豆包']),
+              JSON.stringify(options) === JSON.stringify(['xiaoai=小爱原生', 'doubao=豆包']),
               `unexpected TTS provider options: ${JSON.stringify(options)}`,
             );
           }

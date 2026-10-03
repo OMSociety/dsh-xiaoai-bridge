@@ -522,10 +522,10 @@ check('only an explicit true opens the escape hatch', () => {
 });
 
 // --- case 11: the Agent preset ----------------------------------------------
-// The speaker conversation can be composed from a host preset (preset/xiaoai in
-// this repository). Two halves have to hold: the session is really created and
-// bound inside the preset, and a preset that is not there degrades to the host
-// default instead of costing the utterance.
+// The speaker conversation can be composed from a host preset (this repository's
+// own bundle declares one, 「小爱模式」). Two halves have to hold: the session is
+// really created and bound inside the preset, and a preset that is not there
+// degrades to the host default instead of costing the utterance.
 console.log('case 11: agent preset');
 const presetDir = mkdtempSync(join(tmpdir(), 'xiaoai-preset-check-'));
 

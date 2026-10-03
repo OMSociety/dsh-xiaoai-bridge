@@ -83,7 +83,7 @@
 
 ### 小爱模式
 
-仓库里带一个音箱会话专用的 Agent 预设（`preset/xiaoai/`，显示名「小爱模式」）：只有音箱会话用它，能跑命令、读写文件、查资料、记待办，没有子代理、工作流与计划模式——在音箱上这些只会拖慢第一句话。默认已经指向它；没装也不会报错，只回落宿主默认预设并留一条诊断。
+插件自带的 bundle 里还有一个音箱会话专用的 Agent 预设（显示名「小爱模式」）：只有音箱会话用它，能跑命令、读写文件、查资料、记待办，没有子代理、工作流与计划模式——在音箱上这些只会拖慢第一句话。它随插件一起装好，设置页默认已经指向它；宿主读不到这个预设也不会报错，只回落宿主默认预设并留一条诊断。
 
 ### 桥接器 HTTP 接口
 
@@ -179,7 +179,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 > **提示：**刷机教程见 [open-xiaoai 的 flash.md](https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md)，客户端补丁见 [client-rust 的 README](https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md)。设备侧还要确认音箱上 `/data/open-xiaoai/server.txt` 指向 `ws://<这台电脑的局域网 IP>:4399`——那是设备自己的拨号地址，不在本仓库里；指错了的表现是音箱完全没反应，本地日志里什么错都不会有。
 
-> **提示：**想让音箱会话用「小爱模式」：在 DSH 的插件管理里安装 bundle，target 指向仓库的 `preset/xiaoai/`。设置页的「音箱会话的 Agent 预设」默认就是 `xiaoai`；没装不会报错，只会回落宿主默认并留一条 `agent-preset-missing` 诊断。
+> **提示：**「小爱模式」预设就写在插件的 `cordis.patch.yml` 里，随插件一起装好，不用单独安装。设置页的「音箱会话的 Agent 预设」默认就是 `xiaoai`；宿主读不到它不会报错，只会回落宿主默认并留一条 `agent-preset-missing` 诊断。
 
 > **注意：**装完必须重启 DSH。保存设置只会重新渲染桥接器的配置文件（桥接器 1 秒内热重载），但写在子进程环境变量里的那几项——日志级别、静默启动、本地 API 服务的开关与监听地址、两枚凭据名——要重启桥接器才生效，见[配置怎么生效](#配置怎么生效)。
 
@@ -211,7 +211,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 | 通道 | 覆盖哪些设置 | 什么时候生效 |
 | --- | --- | --- |
-| 渲染出的 `<数据目录>/config.py` | 唤醒词、对话保持时长、连续对话、退出词、唤醒应答、退出应答、兜底播报文本、会话键、设备名、语音合成方式与朗读音色、豆包 App ID 与音色/音频格式/流式/语速、语音识别后端、行动准则与语音消息附加提示 | 写盘即热重载：桥接器每秒轮询它的 mtime，一般 1 秒内生效 |
+| 渲染出的 `<数据目录>/config.py` | 唤醒词、对话保持时长、连续对话、退出词、唤醒应答、退出应答、兜底播报文本、会话键、设备名、语音合成方式、豆包 App ID 与音色/音频格式/流式/语速、语音识别后端、行动准则与语音消息附加提示 | 写盘即热重载：桥接器每秒轮询它的 mtime，一般 1 秒内生效 |
 | 桥接器子进程的环境变量 | 日志级别、静默启动、本地 API 服务的开关与监听地址/端口、音箱名称与音箱地址，以及两枚凭据 | 进程启动时快照：改完要重启桥接器（设置页只重渲染配置，不会替你重启） |
 | 只影响插件自己的会话 | 会话工作区、Agent 预设、任何会话都能让小爱说话、播报与回复器那一组 | 新会话按新值组建；已经在跑的会话保留它启动时的预设与路由 |
 
@@ -219,13 +219,14 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 **凭据怎么放**：设置页里只填**凭据名**（字母或下划线开头的标识符），真值放在 DSH 的凭据库里；插件启动桥接器时才把它解析出来放进子进程环境（`XIAOAI_API_TOKEN`、`DOUBAO_ACCESS_KEY`）。所以设置表和渲染出的 `config.py` 里都没有明文令牌。**换凭据名之后要重启桥接器**，新值才会被带上。访问令牌第一次启动时如果还没有值，插件会生成一个随机值写进凭据库。
 
-**三种语音合成方式**：
+**两种语音合成方式**：
 
 | 语音合成方式 | 写进配置 | 实际用谁 | 什么时候选 |
 | --- | --- | --- | --- |
-| 跟随音色（默认，留空） | 不写 `tts_provider` | 桥接器按「朗读音色」判断：`xiaoai` 用小爱原生，其它音色 ID 走豆包 | 大多数安装；换音色就等于换 provider |
-| 小爱原生 | `xiaoai` | 音箱自带的合成 | 不想配豆包凭据，音色由设备决定 |
+| 小爱原生（默认） | `xiaoai` | 音箱自带的合成 | 不想配豆包凭据，音色由设备决定 |
 | 豆包 | `doubao` | 火山引擎的豆包语音合成 | 想要固定音色、复刻音色或统一语速 |
+
+选中的值一定会写进渲染出的 `config.py`，不存在「留空跟随模板」。以前的「朗读音色」（`ttsSpeaker`）已经删掉：它和这个开关本来是同一件事的两套入口——桥接器的旧规则就是看那个音色值是不是 `xiaoai` 来决定走哪条路。豆包音色现在只在选「豆包」时由「豆包音色」给，插件不再写 `dsh.tts_speaker`，桥接器模板里那个默认值原样留着。
 
 > **注意：**写一个桥接器不认识的值不会报错：它只记一条 `Unknown tts_provider=...`，然后按音色回退。「没报错」不等于「接上了」。
 
@@ -248,12 +249,11 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 | **对话保持时长（秒）** `wakeupTimeout` | 整数 1-600 | `20` | 一次唤醒之后，这次对话保持多久。 |
 | **连续对话** `continuousConversation` | 布尔 | 关 | 关：一句话一次唤醒。开：一次唤醒可以接着说下一句，直到静默超时或说出退出词。这一项即使关掉也会照写进配置，免得桥接器模板里的默认值反过来压过设置页。 |
 | **语音识别后端** `asrBackend` | 枚举 | `sense_voice` | 另两个选项是 `paraformer` 与 `fire_red_asr`。选完后按「后端 + 量化 + 模型目录」重建识别器；选了本机没装模型的后端不会把音箱弄哑：继续用已装好的识别器，只警告一次，并记一条 `asr-model-unavailable`。识别语言固定为中文（`auto` 会把短音频判成日文，插件不暴露这个开关）。 |
-| **语音合成方式** `ttsProvider` | 枚举 | 跟随音色（留空） | 三个选项：跟随音色 / 小爱原生 / 豆包，区别见上面那张表。只有后两个会被写进配置。 |
-| **朗读音色** `ttsSpeaker` | 文本 | `xiaoai` | `xiaoai` 表示小爱原生音色；填豆包音色 ID 则改用豆包合成。与「语音合成方式」一起决定实际用哪个 provider。 |
+| **语音合成方式** `ttsProvider` | 枚举 | `xiaoai`（小爱原生） | 两个选项：小爱原生 / 豆包，区别见上面那张表。 |
 
 ### 豆包语音合成
 
-这一组只在「语音合成方式」选「豆包」时显示，其余两种选择下整组隐藏（值还留着，切回「豆包」就原样回来）。只有在想要豆包音色（固定音色、复刻音色、统一语速）时才要配；用「跟随音色」加 `ttsSpeaker = xiaoai` 的话整组留空即可。注意「跟随音色」配上豆包音色 ID 也会走豆包合成，但这一组不显示，那时用的是桥接器配置里的值——所以要用豆包音色，直接选「豆包」最清楚。
+这一组只在「语音合成方式」选「豆包」时显示，选「小爱原生」时整组隐藏（值还留着，切回「豆包」就原样回来）。它不折叠：选中「豆包」以后就是展开的样子。只有在想要豆包音色（固定音色、复刻音色、统一语速）时才要配。
 
 去哪拿：在火山引擎控制台开通豆包语音合成、创建应用，拿到 App ID 与 Access Token（App ID 与 Access Token 的位置见控制台使用 FAQ https://www.volcengine.com/docs/6561/196768 ，可选音色见音色列表 https://www.volcengine.com/docs/6561/1257544 ）。Access Token 存成 DSH 凭据，设置页只填凭据名。
 
@@ -343,8 +343,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
   "continuousConversation": false,
   "agentPreset": "xiaoai",
   "asrBackend": "sense_voice",
-  "ttsProvider": "",
-  "ttsSpeaker": "xiaoai",
+  "ttsProvider": "xiaoai",
   "autoSpeak": true,
   "fallbackText": "连不上电脑，请稍后再试",
   "autoStart": true,
@@ -470,7 +469,7 @@ lib/speech-log.js    播报留痕
 lib/cleanup.js       数据目录切分与卸载
 lib/client.js        设置页与运行状态卡
 skills/xiaoai-speak/ 模型用的技能
-preset/xiaoai/       「小爱模式」Agent 预设
+cordis.patch.yml     bundle 声明（插件本体 + 「小爱模式」预设）
 bridge/              Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/             自检脚本（九个 check-*.mjs 与聚合入口）
 docs/deploy.md       实施与验证记录（不随包发布）

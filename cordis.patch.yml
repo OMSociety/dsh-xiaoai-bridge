@@ -1,11 +1,90 @@
 # Profile patch layer contributed by the dsh-xiaoai-bridge bundle.
 #
-# `id` is the settings-card namespace: DSH keys a plugin's settings entry by the
-# profile entry id, which is also what `ctx.settings.update(ns, patch, rev)`
-# writes to. It is the same value the host half reads back through
-# `ctx.fiber.entry.options.id`. Once shipped it cannot change without stranding
-# every stored settings section.
+# The first insert is the plugin itself. `id` is the settings-card namespace:
+# DSH keys a plugin's settings entry by the profile entry id, which is also what
+# `ctx.settings.update(ns, patch, rev)` writes to. It is the same value the host
+# half reads back through `ctx.fiber.entry.options.id`. Once shipped it cannot
+# change without stranding every stored settings section.
+#
+# The second insert is the 「小爱模式」 agent preset the speaker sessions are
+# composed from. It ships inside this bundle rather than in a bundle of its own
+# so that installing the plugin leaves one card in the plugin list; the preset
+# stays a separate entry, so the settings page still lists it by name.
+#
+# The composition is "standard minus a part": persona, instruction files, file
+# tools and search, skills, web, compaction, terminal (bash/pwsh), background
+# jobs and the to-do list; no subagents or workflows, no plan mode, and none of
+# the tools that wait for someone to click a card. A speaker session is spoken,
+# so a card would park the turn where nobody is looking.
+#
+# Terminal, jobs and to-do are in the list (see docs/deploy.md §12.36.8): the
+# speaker session has to be able to look at this machine and run commands. Only
+# the tool rows are declared here -- the sandbox seam, the sandbox policy, the
+# approval service and the shell environment live on the host side (same as
+# `standard`), so the session's permission preset still governs them.
 - insert:
     - id: xiaoai
       name: 'dsh-xiaoai-bridge'
       config: {}
+    - id: preset-xiaoai
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: xiaoai
+        name: 小爱模式
+        description: 音箱会话专用：会说话，能读写文件、查资料、跑终端命令、记待办，没有子代理与计划模式。
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |-
+                You are the assistant behind a Xiaomi Xiaoai smart speaker. The speaker reads everything you write aloud, so answer in short spoken sentences. Never use tables, fenced code blocks, or long lists, and never use emoji. Lead with the headline, then offer to say more. Speak Chinese unless the person speaks another language.
+              suffix: Your working directory is {{cwd}}.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024

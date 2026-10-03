@@ -78,14 +78,15 @@ eq(splitList(''), [], 'empty text');
 eq(splitList(undefined), [], 'absent text');
 
 console.log('render-config: overrides');
-const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', ttsSpeaker: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', behaviorStyle: '', asrBackend: '' });
-// Four values are always written because the plugin owns them outright: the
+const bare = buildOverrides({ ...DEFAULTS, wakeKeywords: '', exitKeywords: '', sessionKey: '', deviceName: '', wakeupReplyText: '', exitReplyText: '', fallbackText: '', voiceRuleText: '', behaviorStyle: '', asrBackend: '' });
+// Five values are always written because the plugin owns them outright: the
 // conversation timeout (same 20 seconds as the template), the single-shot switch
-// (whose false default is the documented behavior) and the two Doubao playback
-// controls the settings page shows (streaming on, speed 1.0).
+// (whose false default is the documented behavior), the TTS provider (whose
+// native default must beat whatever the template says) and the two Doubao
+// playback controls the settings page shows (streaming on, speed 1.0).
 eq(bare, {
   wakeup: { timeout: DEFAULTS.wakeupTimeout },
-  dsh: { continuous_conversation: DEFAULTS.continuousConversation, tts_speed: DEFAULTS.ttsSpeed },
+  dsh: { continuous_conversation: DEFAULTS.continuousConversation, tts_provider: DEFAULTS.ttsProvider, tts_speed: DEFAULTS.ttsSpeed },
   tts: { doubao: { stream: DEFAULTS.doubaoStream } },
 }, 'emptied fields fall back to the template default');
 const full = buildOverrides({
@@ -95,7 +96,6 @@ const full = buildOverrides({
   wakeupTimeout: 33,
   sessionKey: 'agent:butler:dsh-xiaoai-bridge',
   deviceName: '客厅音箱',
-  ttsSpeaker: 'zh_female_1',
   wakeupReplyText: '在呢',
   exitReplyText: '拜拜',
   fallbackText: '电脑睡了',
@@ -106,7 +106,9 @@ eq(full.wakeup.timeout, 33, 'wakeup.timeout');
 eq(full.dsh.wakeup_keywords, ['你好小智', '小爱小爱'], 'dsh.wakeup_keywords');
 eq(full.dsh.exit_keywords, ['退出', '再见'], 'dsh.exit_keywords');
 eq(full.dsh.session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
-eq(full.dsh.tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
+// The reading voice is gone: the page decides between the two providers, and
+// the Doubao voice travels as `tts.doubao.default_speaker`.
+ok(!('tts_speaker' in full.dsh), 'dsh.tts_speaker is not written any more');
 eq(full.dsh.wakeup_reply, '在呢', 'dsh.wakeup_reply');
 eq(full.dsh.exit_reply, '拜拜', 'dsh.exit_reply');
 eq(full.dsh.fallback_text, '电脑睡了', 'dsh.fallback_text');
@@ -123,9 +125,9 @@ eq(
   true,
   'dsh.continuous_conversation flips with the switch',
 );
-// The provider follows the switch, but only for a provider the bridge can load:
-// an empty choice keeps the router's own voice-id rule.
-ok(!('tts_provider' in bare.dsh), 'an empty provider choice writes nothing');
+// The provider follows the switch, and both choices are names the bridge can
+// load; the native one is what the page starts on.
+eq(bare.dsh.tts_provider, 'xiaoai', 'the native provider is the default');
 eq(buildOverrides({ ...DEFAULTS, ttsProvider: 'xiaoai' }).dsh.tts_provider, 'xiaoai', 'the native provider is written');
 eq(buildOverrides({ ...DEFAULTS, ttsProvider: 'doubao' }).dsh.tts_provider, 'doubao', 'the Doubao provider is written');
 const doubaoFull = buildOverrides({
@@ -193,7 +195,6 @@ try {
       wakeupTimeout: 33,
       sessionKey: 'agent:butler:dsh-xiaoai-bridge',
       deviceName: '客厅音箱',
-      ttsSpeaker: 'zh_female_1',
       wakeupReplyText: '在呢',
       exitReplyText: '拜拜',
       fallbackText: '电脑睡了',
@@ -276,7 +277,7 @@ print(json.dumps({
   eq(loaded.wakeup_timeout, 33, 'wakeup.timeout');
   eq(loaded.dsh_session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
   eq(loaded.dsh_device_name, '客厅音箱', 'dsh.device_name');
-  eq(loaded.dsh_tts_speaker, 'zh_female_1', 'dsh.tts_speaker');
+  eq(loaded.dsh_tts_speaker, 'xiaoai', 'the reading voice is the template default, no longer steered by the page');
   eq(loaded.dsh_wakeup_reply, '在呢', 'dsh.wakeup_reply');
   eq(loaded.dsh_exit_reply, '拜拜', 'dsh.exit_reply');
   eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
@@ -306,7 +307,10 @@ print(json.dumps({
   // writes `rule_prompt_for_skill` and must leave the other one alone.
   ok(!sparseSource.includes('"rule_prompt"'), 'template-only keys are never restated in the generated file');
   ok(sparseSource.includes('"continuous_conversation": False'), 'a false switch is still written, as a Python literal');
-  ok(!sparseSource.includes('tts_provider'), 'the provider stays out of the file while the choice is empty');
+  // The provider is page-owned like the switch and the number above: even its
+  // default is restated, so the template can never silently steer TTS behind
+  // the settings page.
+  ok(sparseSource.includes('tts_provider'), 'the page-owned provider is written even at its default');
   ok(sparseSource.includes('"stream": True'), 'a page-owned switch is written even at its default');
   ok(sparseSource.includes('"tts_speed": 1'), 'a page-owned number is written even at its default');
   ok(!sparseSource.includes('response_timeout'), 'template-only keys are never restated in the generated file');
