@@ -15,6 +15,7 @@
   },
   "homepage": "https://github.com/OMSociety/dsh-xiaoai-bridge#readme",
   "main": "lib/index.js",
+  "icon": "./icon.svg",
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
@@ -30,6 +31,7 @@
   },
   "files": [
     "lib/",
+    "icon.svg",
     "skills/",
     "locale/",
     "cordis.patch.yml",

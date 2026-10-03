@@ -23,6 +23,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - 第九个离线检查 `scripts/check-http.mjs`：把真路由挂进临时 `http.Server` 用真请求驱动，覆盖缺令牌 fail-closed 503、错误或缺失 bearer 401、正确 bearer 只投递一次、非 JSON 400、裸 socket 上超限体收到 400 而不是 `ECONNRESET`、跨源 403 且不带 CORS 头、未知路由 404、`/data/wipe` 缺 confirm 拒绝，以及 bridge 客户端拒绝恶意 host:port。
 - 设置项 `speakFromAnySession`（任何会话都能让小爱说话，默认关）：关闭时 `xiaoai_speak` 只在音箱发起的会话里可用，电脑或网页的普通对话调用会被拒。
 - 随插件发布「小爱模式」Agent 预设（`id: xiaoai`、`order: 5`，写在插件的 `cordis.patch.yml` 里）：音箱那个会话按它组建——会说话、能读写文件与查资料，没有终端、子代理、计划模式，也没有要点选的界面；配套设置项 `agentPreset`（默认 `xiaoai`，留空用宿主默认）。
+- 插件有了自己的图标：包根 `icon.svg`（36×36，对称声波柱），由 `package.json` 顶层 `icon` 字段声明并列入 `files`。插件列表里不再显示 DSH 的默认图形。
 
 ### 变更
 
@@ -84,6 +85,7 @@ This file tracks the DSH plugin at the repository root (`dsh-xiaoai-bridge`, ver
 - A ninth offline check, `scripts/check-http.mjs`: it mounts the real routes into a throwaway `http.Server` and drives them with real requests, covering fail-closed 503 without a token, 401 for a wrong or missing bearer, exactly-once delivery with the right bearer, 400 for a non-JSON body, 400 (not `ECONNRESET`) for an over-limit body over a raw socket, 403 without CORS headers for a foreign origin, 404 for an unknown route, a refused `/data/wipe` without `confirm`, and the bridge client rejecting a hostile host:port.
 - A `speakFromAnySession` setting (let any conversation speak, off by default): with it off, `xiaoai_speak` works only in conversations the speaker started.
 - An "小爱模式" (Xiaoai mode) agent preset now ships with the plugin (declaring `id: xiaoai` at `order: 5` in the plugin's `cordis.patch.yml`): the speaker's conversation is composed from it -- it talks, can read and write files and look things up, and has no terminal, no subagents, no plan mode and nothing that pops up a picker. A matching `agentPreset` setting (default `xiaoai`, empty means the host default) joins it.
+- The plugin now ships its own icon: `icon.svg` at the package root (36×36, symmetric sound-wave bars), declared through the top-level `icon` field in `package.json` and listed in `files`. The plugin list no longer falls back to the default DSH artwork.
 
 ### Changed
 
