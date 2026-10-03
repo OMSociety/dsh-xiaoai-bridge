@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 
 from core.services.tts.doubao import DoubaoTTS
 from core.services.tts.mlx_audio import MLXAudioTTS
@@ -109,7 +109,7 @@ class TTSRouter:
         )
         resolved_format = tts.resolve_audio_format(text)
         if tts_config.get("stream", False):
-            await open_xiaoai_server.tts_stream_play(
+            await dsh_xiaoai_server.tts_stream_play(
                 text,
                 app_id=app_id,
                 access_key=access_key,
@@ -121,7 +121,7 @@ class TTSRouter:
                 playback_token=playback_token,
             )
         else:
-            await open_xiaoai_server.tts_play(
+            await dsh_xiaoai_server.tts_play(
                 text,
                 app_id=app_id,
                 access_key=access_key,

@@ -196,7 +196,7 @@ class MLXAudioTTSTest(unittest.IsolatedAsyncioTestCase):
 class MLXAudioTTSFallbackTest(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         sys.modules.setdefault(
             "aiohttp",
             types.SimpleNamespace(ClientSession=object, ClientTimeout=object),

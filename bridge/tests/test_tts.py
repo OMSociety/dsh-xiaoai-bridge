@@ -48,7 +48,7 @@ import subprocess
 import tempfile
 import base64
 import requests
-import open_xiaoai_server
+import dsh_xiaoai_server
 from core.utils.config_loader import ensure_config_module_loaded
 
 ensure_config_module_loaded()
@@ -181,7 +181,7 @@ def synthesize_pcm(tts: DoubaoTTS, text: str, fmt: str = None, speed: float = 1.
     if not encoded_audio:
         return None
     return bytes(
-        open_xiaoai_server.decode_audio(
+        dsh_xiaoai_server.decode_audio(
             encoded_audio,
             format=audio_format,
             sample_rate=SAMPLE_RATE,

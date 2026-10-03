@@ -29,7 +29,7 @@ class _FakeSpeaker:
 
 class FallbackSpeechTest(unittest.TestCase):
     def setUp(self):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
         sys.modules.pop("core.dsh", None)

@@ -3,7 +3,7 @@ import threading
 import time
 
 import numpy as np
-import open_xiaoai_server
+import dsh_xiaoai_server
 
 from core.ref import get_speaker, set_xiaoai
 from core.services.audio.stream import GlobalStream
@@ -119,7 +119,7 @@ class XiaoAI:
     @classmethod
     def on_output_data(cls, data: bytes):
         async def on_output_data_async(data: bytes):
-            return await open_xiaoai_server.on_output_data(data)
+            return await dsh_xiaoai_server.on_output_data(data)
 
         asyncio.run_coroutine_threadsafe(
             on_output_data_async(data),
@@ -128,7 +128,7 @@ class XiaoAI:
 
     @classmethod
     async def run_shell(cls, script: str, timeout: float = 10 * 1000):
-        return await open_xiaoai_server.run_shell(script, timeout)
+        return await dsh_xiaoai_server.run_shell(script, timeout)
 
     @classmethod
     async def on_event(cls, event: str):
@@ -310,12 +310,12 @@ class XiaoAI:
         cls.config_manager.add_reload_listener(cls.refresh_runtime_config)
         set_xiaoai(XiaoAI)
         GlobalStream.on_output_data = cls.on_output_data
-        open_xiaoai_server.register_fn("on_input_data", cls.on_input_data)
-        open_xiaoai_server.register_fn("on_event", cls.__on_event)
+        dsh_xiaoai_server.register_fn("on_input_data", cls.on_input_data)
+        dsh_xiaoai_server.register_fn("on_event", cls.__on_event)
         cls.__init_background_event_loop()
         logger.info("[XiaoAI] 启动小爱音箱服务...")
         print(ASCII_BANNER)
-        await open_xiaoai_server.start_server()
+        await dsh_xiaoai_server.start_server()
 
     @classmethod
     def stop_conversation(cls):

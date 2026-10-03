@@ -135,7 +135,7 @@ fn start_recording(py: Python) -> PyResult<Bound<PyAny>> {
 
 
 #[pymodule]
-fn open_xiaoai_server(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
+fn dsh_xiaoai_server(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(start_server, &m)?)?;
     m.add_function(wrap_pyfunction!(on_output_data, &m)?)?;
     m.add_function(wrap_pyfunction!(run_shell, &m)?)?;

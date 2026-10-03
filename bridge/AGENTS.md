@@ -1,375 +1,131 @@
-# AGENTS.md
+# AGENTS.md — 桥接器（bridge/）
 
-> 小爱音箱与外部 AI 服务（DSH、OpenAI 兼容服务）的桥接器。
-> 接管音箱音频输入输出，实现与第三方 AI 的对话。
+适用范围：`bridge/` 全目录。与更靠近改动点的子目录文件冲突时以子目录为准；与仓库根 `AGENTS.md` 冲突时以本文件为准（根文件管仓库级纪律：版本号、提交、依赖与出版面；本文件管桥接器本身）。
 
-## 系统架构
+桥接器是可以独立运行的进程，由 DSH 插件以子进程方式托管：它把音箱接进 DSH，也能脱离插件单独跑。
 
-详见 [README.md 系统架构](README.md#系统架构)（含 Mermaid 流程图和各模块工作流程）。
+## 项目概览
 
-## 项目结构
+小爱音箱的实时语音网关。Rust 扩展在 TCP `4399` 上接收设备音频，Python 侧做 VAD、唤醒词与 ASR，把一句话交给会话后端（DSH / OpenAI 兼容 / 小爱原生），再把回复经 TTS 播回音箱；播放期间半双工闸门关掉麦克风通路。
+
+- 运行时：Python `>=3.12`；依赖与 Rust 扩展编译都走 `uv` + `maturin`（PyO3）
+- 本地推理：`sherpa-onnx` + `onnxruntime`，配 `numpy` / `scipy` / `soundfile`
+- HTTP：`aiohttp`（API Server）；设备侧命令面：`mphelper` / `miplayer` / `tts_play.sh`
+
+文档索引：
+
+- `bridge/README.md`：Docker Compose 与本地编译、环境变量表、API Server 端点、TTS provider 用法。其中一部分是搬运来的旧内容（快速开始的 clone 地址、`session_key` 示例），示例与代码冲突时以代码为准
+- `bridge/docs/`：豆包克隆音色、豆包 TTS、小爱语音 API 的接口参考
+- `bridge/CHANGELOG.md`：本桥接器进入本仓库之前的变更历史，最新条目 `v1.0.7`；本仓库对 `bridge/` 的改动记在根 `CHANGELOG.md`
+- 根 `docs/deploy.md`：插件侧的实现决策与踩坑（§12.x）
+- 根 `README.md` / `CONTRIBUTING.md`：整体用法与开发纪律
+
+## 常用命令
+
+除注明外都在 `bridge/` 下执行。
+
+| 目的 | 命令 |
+|---|---|
+| 装依赖 / 重编译 Rust 扩展 | `uv sync`（改过 `native/**/*.rs` 或 `native/Cargo.toml` 必须重跑；先停桥接器） |
+| 跑全部测试 | `.\.venv\Scripts\python.exe -m pytest -q` |
+| 跑单个测试文件 | `.\.venv\Scripts\python.exe -m pytest -q tests/test_tts_router.py` |
+| 要真设备、真凭据时才跑的手动脚本 | `.\.venv\Scripts\python.exe tests/test_tts.py` |
+| 单独起桥接器 | `.\.venv\Scripts\python.exe main.py` |
+| 只开 API Server | `$env:API_SERVER_ENABLE='1'; .\.venv\Scripts\python.exe main.py` |
+| 确认 Rust 扩展能导入 | `.\.venv\Scripts\python.exe -c "import dsh_xiaoai_server"` |
+
+`uv` 不在 PATH 时用绝对路径。没先 `uv sync` 就导入会报 `No module named 'dsh_xiaoai_server'`。`uv sync` 会把 pytest 一起清掉（它不在运行依赖里），所以每次 sync 之后、跑测试之前先 `uv pip install --python .venv\Scripts\python.exe pytest`。
+
+## 架构边界
+
+依赖方向（下层不认识上层）：
 
 ```
-open-xiaoai-bridge/
-├── main.py                        # 入口：解析环境变量，启动 MainApp
-├── config.py                      # 用户配置（唤醒词、路由钩子、TTS、DSH、OpenAI 等）
-├── core/
-│   ├── app.py                     # MainApp 主控制器（单例，管理生命周期）
-│   ├── xiaoai.py                  # XiaoAI 设备接入 / 事件桥接
-│   ├── xiaoai_conversation.py     # 小爱连续对话策略
-│   ├── dsh.py                     # DSH 后端客户端（连接、消息、TTS 播放）
-│   ├── dsh_conversation.py        # DSH 连续对话循环（VAD → ASR → 后端 → TTS）
-│   ├── external_conversation.py   # 外部后端连续对话基类
-│   ├── openai.py                  # OpenAI 兼容服务客户端
-│   ├── openai_conversation.py     # OpenAI 兼容服务连续对话循环
-│   ├── wakeup_session.py          # 唤醒会话状态机
-│   ├── ref.py                     # 全局引用注册表（get/set 依赖注入）
-│   ├── models/                    # 模型文件（KWS/VAD/ASR，.gitignore 排除）
-│   ├── assets/sounds/             # 音效（tts_notify.mp3 等）
-│   ├── services/
-│   │   ├── speaker.py             # SpeakerManager 音箱硬件控制
-│   │   ├── api_server.py          # HTTP REST API（aiohttp）
-│   │   ├── tts/router.py          # 统一 TTS provider 路由与播放
-│   │   ├── audio/
-│   │   │   ├── stream.py          # GlobalStream 全局音频流（多路输入广播）
-│   │   │   ├── vad/silero.py      # Silero VAD 语音活动检测（ONNX）
-│   │   │   ├── kws/sherpa.py      # Sherpa KWS 关键词唤醒
-│   │   │   └── asr/sherpa.py      # Sherpa ASR 离线语音识别（SenseVoice）
-│   │   ├── tts/doubao.py          # 豆包 TTS 客户端（火山引擎）
-│   │   ├── tts/openai.py          # OpenAI-compatible TTS 协议客户端
-│   │   ├── tts/mlx_audio.py       # MLX-Audio TTS provider（复用 OpenAI 协议客户端）
-│   │   └── protocols/
-│   │       └── typing.py          # 协议类型定义
-│   └── utils/
-│       ├── logger.py              # 彩色日志（BridgeLogger 单例）
-│       ├── config.py              # ConfigManager（嵌套路径查询、热重载）
-│       ├── config_loader.py       # config.py 动态导入
-│       ├── base.py                # 基础工具
-│       ├── file.py                # 文件工具
-│       └── ort_dll.py             # Windows onnxruntime DLL 目录修正
-├── native/                        # Rust PyO3 扩展（maturin 编译）
-│   └── src/
-│       ├── lib.rs                 # 模块入口：on_output_data, start_server, stop/start_recording, stop/start_playing
-│       ├── server.rs              # WebSocket 音频服务器（TCP :4399）
-│       ├── python.rs              # Python 回调注册中心（HashMap）
-│       ├── macros.rs              # 辅助宏
-│       └── tts/                   # TTS 音频处理（流式、PCM 直通、MP3 解码）
-├── skills/xiaoai-tts/             # Agent 工具：通过 HTTP API 控制小爱播放
-└── tests/                         # 测试脚本
+native/src（PyO3 模块 dsh_xiaoai_server）
+    ↑ 只有 Python 调 Rust，Rust 不反向导入 Python 模块
+core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 ```
 
-## 核心组件
-
-### MainApp (core/app.py)
-
-应用主控制器，单例模式，管理全部服务生命周期。
-
-- `instance(enable_openai=False, enable_dsh=False)` → 单例获取
-- `run(enable_api_server)` → 启动各服务
-- `set_device_state(state)` → 管理设备状态（IDLE / LISTENING / SPEAKING / CONNECTING）
-- `send_to_dsh(text, wait_response)` → 发送消息到 DSH（返回 run_id 或回复文本）
-- `send_to_dsh_and_play_reply(text, wait_response)` → 发送并 TTS 播放回复
-- `set_dsh_session_key(session_key)` → 运行时切换 DSH 会话
-- `send_to_openai(text, wait_response)` / `send_to_openai_and_play_reply(text, wait_response)` → OpenAI 兼容服务
-- `set_openai_session_key(session_key)` → 运行时切换 OpenAI 兼容服务会话
-- `schedule(callback)` → 主线程任务队列
-- `shutdown()` → 优雅关闭
-
-**边界约束**:
-- `MainApp` 是业务主循环和设备状态的单一入口
-- `device_state` 以 `MainApp` 为准，其他模块通过代理回写，不各自维护平行状态
-- `MainApp.loop` 是业务协程的主调度循环
-- 后端开关只有 `enable_openai` / `enable_dsh` 两个，OpenAI 后端不再额外暴露独立开关
-
-### XiaoAI (core/xiaoai.py)
-
-小爱音箱交互接口，类级变量（classmethod 风格）。
-
-- `init_xiaoai()` → 初始化原生服务，注册事件处理
-- `on_event(event)` → 处理小爱事件（RecognizeResult / AudioPlayer）
-- `on_input_data(data)` / `on_output_data(data)` → 麦克风 / 扬声器音频回调
-- `run_shell(script, timeout)` → 远端 shell 执行
-- 内部维护独立 `async_loop`（后台线程），仅用于原生扩展回调和事件桥接
-
-**边界约束**:
-- 负责设备接入和事件桥接，不承载连续对话策略
-- 连续对话状态放在 `xiaoai_conversation.py`
-- `async_loop` 不应承载新的业务状态机
-
-### DshManager (core/dsh.py)
-
-DSH 后端客户端，管理本机 DeepSeek Harness xiaoai 桥接插件的 HTTP 连接、消息分发与 TTS 播放。
-
-- `initialize_from_config(enabled)` / `reload_from_config(enabled)` → 从 config 初始化
-- `connect()` → 探测 `{base_url}/health`（失败只记录 `last_error`，不抛异常）
-- `send(text, wait_response)` → 发送消息，返回 run_id 或回复文本，失败返回 None
-- `send_and_play_reply(text, wait_response)` → 发送并 TTS 播放回复
-- `is_connected()` / `is_enabled()` → 状态查询
-- `set_session_key(session_key)` → 运行时切换会话
-- `get_tts_speaker_for_session_key(session_key)` → 按会话选择音色
-
-**内部机制**:
-- HTTP 端点默认为 `http://127.0.0.1:19387/plugin/xiaoai`，token 走环境变量 `XIAOAI_API_TOKEN`
-- 请求 ID（run_id）映射追踪响应；`_submit_utterance()` 提交文本到 `/asr`
-- TTS 播放：通过共享 TTS Router 选择 `xiaoai`、`doubao`、`openai` 或 `mlx_audio` provider
-- Rust TTS 播放使用单一活动 `playback_token`：开始新的 Rust TTS 会使旧 token 失效；`stop_tts_playback(token)` 只应由持有该 token 的调用方定向停止自己的播放
-- 日志通过 `module=f"DSH({session_key})"` 输出，`user_speech` / `ai_response` 依赖该前缀
-
-**连接参数限制**:
-- `session_key`: 只从 config.py 的 `dsh.session_key` 读取（默认 `agent:main:open-xiaoai-bridge`）
-- `base_url`: 只从 config.py 的 `dsh.base_url` 读取
-
-### DshConversationController (core/dsh_conversation.py)
-
-DSH 连续对话控制器，继承 `core/external_conversation.py` 的 `ExternalConversationController`。唤醒词触发后进入独立的 VAD → ASR → DSH → TTS 循环。
-
-- `start()` → 进入对话模式
-- `stop()` → 退出对话
-- `is_active()` → 状态查询
-
-**对话循环** (`_run_one_turn_with_local_asr`):
-1. VAD 检测语音开始（`_wait_for_speech`）
-2. 录制完整语音（VAD 帧 hook）
-3. SherpaASR 离线识别
-4. 退出关键词检测（config `dsh.exit_keywords`）
-5. 发送到 DSH
-6. TTS 播放回复（阻塞等待完成）
-7. 恢复监听
-
-**回声防护机制**:
-- `stop_recording` → kill 远端 arecord → 麦克风物理静音
-- TTS 和提示音都在关麦期间播放，开麦后 VAD 从干净状态开始检测
-- `VAD.resume()` 会自动 `_reset_state()` + `input_bytes.clear()`，清除旧的 `speech_frames` 和音频流缓冲
-
-**VAD 状态泄漏陷阱**:
-- VAD 检测循环持续运行，`speech_frames` 会不断积累音频帧
-- 如果 `resume()` 不调用 `_reset_state()`，旧帧（唤醒词回声、TTS 回声）会泄漏到下一轮检测，导致 ASR 识别出幽灵音频
-- `pause()` 会调 `_reset_state()`，但 `resume()` 必须也调——两者都需要清理状态
-
-**边界约束**:
-- 使用独立 VAD Future，不与 WakeupSessionManager 冲突
-- TTS 完全阻塞，播放完成后才继续监听
-- 自己持有并管理当前 TTS 的 `playback_token`；停止 DSH 对话时应调用 `stop_tts_playback(token)`，不要在外层直接无 token 全局停止 Rust TTS
-
-### WakeupSessionManager (core/wakeup_session.py)
-
-唤醒会话状态机，协调 KWS → VAD → DSH / OpenAI 兼容服务的唤醒流程。
-
-- `wakeup(text, source)` → 处理唤醒（调用 `before_wakeup` 钩子，路由到 DSH 或 OpenAI 兼容服务）
-- `wait_next_step(timeout)` → 异步等待状态变化（带待决状态缓冲）
-- `update_step(step, step_data)` → 更新步骤
-- 事件回调：`on_interrupt()`, `on_tts_start()`, `on_tts_end()`, `on_speech()`, `on_silence()`
-- `on_interrupt()` → 小爱唤醒时：cancel 后端 task、停止设备音频播放、恢复录音通道、stop XiaoAI conversation
-
-**路由规则**（`before_wakeup` 返回值）:
-- `"dsh"` → 走 DSH 连续对话
-- `"openai"` → 走 OpenAI 兼容服务连续对话
-- `None` → 不处理（用户自行处理）
-
-**边界约束**:
-- 它是唤醒会话状态机，不是通用事件总线
-- 只允许缓存 `on_speech` / `on_silence` 等外部探测信号
-- 不要缓存 `on_interrupt` 等控制步骤
-
-### XiaoAIConversationController (core/xiaoai_conversation.py)
-
-小爱自身的连续对话管理。
-
-- `handle_text_command(text, speaker)` → 处理退出 / 连续对话关键词
-- `handle_listening_timeout(speaker)` → 超时重试逻辑
-- `handle_audio_player_instruction(header_name)` → 检测播放器指令退出
-- `handle_playing_status(playing_status, speaker)` → TTS 完成后重新唤醒
-
-**边界约束**:
-- 小爱连续对话和外部后端唤醒 / 会话超时是两套独立机制
-- 只有在「小爱连续对话确实激活」时才允许停止
-- 外部后端超时退出时不应打印「小爱停止连续对话」日志
-
-### SpeakerManager (core/services/speaker.py)
-
-音箱硬件控制。
-
-- `play(text, url, buffer, blocking, timeout)` → 播放文字 / URL / PCM 缓冲
-- `stop_device_audio()` → 停止设备上的播放链路（阻塞 TTS / 非阻塞 TTS / PCM），并重启 PCM 播放通道
-- `wake_up(awake, silent)` → 唤醒 / 休眠小爱
-- `abort_xiaoai()` → 中断小爱当前操作
-- `ask_xiaoai(text, silent)` → 让小爱执行指令
-- `run_shell(command, timeout)` → RPC shell
-
-**边界约束**:
-- `stop_device_audio()` 只负责「停播放」，不负责恢复录音；`start_recording()` 属于会话层恢复逻辑，应由 `WakeupSessionManager` / `DshConversationController` 等上层按场景决定
-
-### APIServer (core/services/api_server.py)
-
-HTTP REST API 服务器（aiohttp），端口可配（默认 9092）。
-
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `/api/play/text` | POST | 播放文本 |
-| `/api/play/url` | POST | 播放 URL |
-| `/api/play/file` | POST | 播放本地文件 |
-| `/api/status` | GET | 获取设备状态 |
-| `/api/wakeup` | POST | 唤醒设备 |
-| `/api/interrupt` | POST | 中断播放 |
-| `/api/health` | GET | 健康检查 |
-| `/api/tts/doubao` | POST | Doubao TTS 合成 |
-| `/api/tts/doubao_voices` | GET | 获取音色列表 |
-
-### 音频处理链
-
-| 模块 | 文件 | 职责 |
-|------|------|------|
-| GlobalStream | `audio/stream.py` | 多路输入广播（模拟 PyAudio API） |
-| VAD | `audio/vad/silero.py` | Silero ONNX 语音活动检测 |
-| KWS | `audio/kws/sherpa.py` | Sherpa ONNX 关键词唤醒（信心度 2.0，阈值 0.2） |
-| ASR | `audio/asr/sherpa.py` | Sherpa SenseVoice 离线语音识别（懒加载，INT8 量化） |
-| TTS | `tts/openai.py`, `tts/mlx_audio.py`, `tts/doubao.py` | OpenAI-compatible TTS、MLX-Audio 与豆包 TTS（一次性/本地音频播放） |
-
-### Rust 原生扩展 (native/)
-
-通过 maturin + PyO3 编译的 `open_xiaoai_server` Python 模块。
-
-| 文件 | 职责 |
-|------|------|
-| `lib.rs` | 模块入口：`on_output_data`, `start_server`, `stop/start_recording`, `stop/start_playing`, `run_shell` |
-| `server.rs` | TCP :4399 WebSocket 服务器，处理音频流和事件路由 |
-| `python.rs` | Python 回调注册中心（`register_fn` / `call_fn`），跨语言调用 |
-| `tts/` | TTS 音频处理：HTTP 流式请求、MP3 解码、PCM 直通 |
-
-## 运行模式
-
-### 模式 1: 仅小爱（默认）
-```bash
-uv run main.py
-```
-- 不启动 KWS/VAD 初始化
-- `core/services/audio/kws/keywords.py` 在此模式下应直接退出成功
-
-### 模式 2: DSH
-```bash
-DSH_ENABLE=1 uv run main.py
-```
-- 启动 VAD + KWS，唤醒后进入 DSH 连续对话
-- KWS 初始化失败应视为启动失败
-
-### 模式 3: OpenAI 兼容服务
-```bash
-OPENAI_ENABLE=1 uv run main.py
-```
-- 小爱指令拦截 → 转发到 OpenAI 兼容服务 → TTS 播放结果
-
-### 模式 4: DSH + OpenAI 兼容服务（混合）
-```bash
-DSH_ENABLE=1 OPENAI_ENABLE=1 uv run main.py
-```
-- config.py `before_wakeup` 按唤醒词路由到 DSH 或 OpenAI 兼容服务
-- DSH 连续对话：VAD → ASR → DSH → TTS 循环
-- 退出关键词：config `dsh.exit_keywords`
-
-### 启用 API Server
-```bash
-API_SERVER_ENABLE=1 uv run main.py
-```
-
-## 开发规范
-
-### 代码风格
-- 中文注释和文档字符串
-- 英文 commit message
-- 类型提示: `dict[str, asyncio.Future]`
-
-### 异步编程
-- 所有 I/O 使用 `async/await`
-- 线程安全使用 `asyncio.run_coroutine_threadsafe()`
-- `MainApp.loop` 是业务协程主循环
-- `XiaoAI.async_loop` 仅用于原生扩展回调桥接，不挂新业务状态机
-
-### 日志规范
-- 所有日志必须带模块标识：通过 `module=` 参数或 `[Module]` 前缀
-- 使用 `core.utils.logger.logger`，禁止裸 `print`
-- 调试输出用 `DEBUG` 级别，不污染 `INFO`
-- 消息体不要重复模块名（模块名已在日志前缀中）
-- 唯一允许的裸输出：启动 ASCII banner
-
-### 全局引用 (ref.py)
-- `set_app/get_app`, `set_xiaoai/get_xiaoai`
-- `set_vad/get_vad`, `set_kws/get_kws`, `set_speaker/get_speaker`
-- `set_speech_frames/get_speech_frames`
-
-### 兼容约束
-- `CLI` 环境变量不再作为功能开关，不要引入依赖 `CLI` 的运行时分支
-- `DSH_ENABLE` / `OPENAI_ENABLE` 未设置时必须允许跳过 KWS 初始化
-- `scripts/start.sh` 在仅小爱模式下不应检查 `core/models/` 下的模型文件
-
-## 测试
-
-```bash
-# 无音箱流式冒烟测试
-python3 tests/test_tts_stream.py
-
-# 比较长文本 mp3/pcm 流式时延
-python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 8
-```
-
-## 音箱设备控制命令
-
-小爱音箱（LX06 等）基于 OpenWrt + busybox，设备端命令和行为如下：
-
-### 音频播放通道
-
-音箱上有多条独立的音频播放通道，中断时需要分别处理：
-
-| 通道 | 进程/服务 | 触发方式 | 中断方式 |
-|------|-----------|---------|---------|
-| PCM 直通 | `aplay` | `open_xiaoai_server.start_playing()` → WebSocket stream | `open_xiaoai_server.stop_playing()` |
-| 阻塞 TTS | `tts_play.sh` → `miplayer -f <file>` | `speaker.play(blocking=True)` | `killall tts_play.sh miplayer` |
-| 非阻塞 TTS | `mibrain_service` (内部播放) | `speaker.play(blocking=False)` → `ubus call mibrain text_to_speech` | `mphelper pause`（不一定可靠） |
-| 媒体播放器 | `mediaplayer` (系统守护进程) | `ubus call mediaplayer player_play_url` | `mphelper pause` / `ubus call mediaplayer player_play_operation '{"action":"pause"}'` |
-
-### tts_play.sh 工作流程
-
-`/usr/sbin/tts_play.sh` 是设备上的阻塞 TTS 脚本，内部流程：
-1. `mphelper pause` — 暂停当前播放
-2. `ubus call mibrain text_to_speech '{"text":"...","save":1}'` — 生成音频文件到 `/tmp/tts/`
-3. `miplayer -f <path>` — 播放音频文件（子进程）
-4. `rm <path>` — 清理临时文件
-
-**关键注意事项**：
-- 杀掉 `tts_play.sh` **不会**自动杀掉子进程 `miplayer`，必须同时 `killall miplayer`
-- `miplayer` 是一次性播放器（非守护进程），杀掉后不影响后续 TTS 调用
-- busybox 的 `pkill` 无法匹配到 `miplayer`，必须用 `killall`
-
-### 录音通道
-
-| 操作 | 命令 | 说明 |
-|------|------|------|
-| 停止录音 | `open_xiaoai_server.stop_recording()` | 杀掉设备端 `arecord` 进程，麦克风静音 |
-| 恢复录音 | `open_xiaoai_server.start_recording()` | 重启 `arecord`，音频数据恢复流入 `GlobalStream` |
-
-**注意**：DSH 对话中 TTS 播放时会 `stop_recording` 防止回声。如果在此期间触发中断（「小爱同学」），必须在中断处理中调用 `start_recording` 恢复录音，否则 KWS 将因无音频数据而永久失效。
-
-### on_interrupt 中断处理要点
-
-`on_interrupt()` 触发时（用户喊「小爱同学」），需要完成以下步骤：
-1. Cancel DSH asyncio task
-2. 让 DSH controller 自己停止当前 TTS（使用自己持有的 `playback_token`）
-3. `SpeakerManager.stop_device_audio()` — 停止阻塞 TTS / 非阻塞 TTS / PCM，并重置 PCM 通道
-4. `start_recording` — 恢复录音（KWS 依赖此通道）
-5. `XiaoAI.stop_conversation()` — 停止连续对话
-
-### 不可用的中断方式
-
-以下方式在实践中验证**不可靠或有副作用**：
-- `abort_xiaoai()`（重启 `mico_aivs_lab`）— 会导致小爱整体不可用，恢复需 1-2 秒
-- `pkill miplayer` — busybox `pkill` 无法匹配到 `miplayer` 进程名
-- `ubus call mediaplayer player_play_operation '{"action":"pause"}'` — 对 `mibrain text_to_speech` 触发的播放无效
-
-### 相关讨论
-
-- [open-xiaoai#36](https://github.com/idootop/open-xiaoai/issues/36) — 小爱 TTS 打断方案讨论
-
-## 参考资源
-
-- 项目主页: https://github.com/coderzc/open-xiaoai-bridge
-- 刷机教程: https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md
-- Client 端补丁: https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md
+- `main.py`：进程入口。按环境变量决定开哪些后端：`API_SERVER_ENABLE`、`OPENAI_ENABLE`、`DSH_ENABLE`、`AUDIO_INPUT_ENABLE`
+- `core/app.py`：装配与生命周期；读 `API_SERVER_HOST`、`API_SERVER_PORT`（默认 `127.0.0.1:9092`）、`AUDIO_INPUT_ENABLE`
+- `core/services/audio/`：`stream.py`，`asr/{service,sherpa,doubao}`，`kws/{keywords,sherpa}`，`vad/silero`
+- `core/services/tts/`：`router.py` 是唯一入口（`TTSRouter`，`SUPPORTED_PROVIDERS = frozenset(("xiaoai", "doubao", "openai", "mlx_audio"))`），provider 实现在同目录 `doubao` / `openai` / `mlx_audio`
+- `core/services/speaker.py`：设备命令面（`mphelper`、`miplayer -f`、`/usr/sbin/tts_play.sh`、打断）
+- `core/services/api_server.py` + `api_auth.py`：HTTP 端点与统一 bearer 门禁
+- `core/utils/`：`config.py`（`ConfigManager`）、`config_loader.py`（`CONFIG_PATH`）、`logger.py`（只读 `LOGLEVEL`）、`playback_gate.py`（半双工闸门 `PlaybackGate`），以及 `base` / `background` / `file` / `ort_dll`
+- `core/*.py` 会话后端：`dsh.py`（DSH 后端）、`dsh_conversation.py`、`openai.py` / `openai_conversation.py`、`xiaoai.py` / `xiaoai_conversation.py`（小爱原生）、`external_conversation.py`（长连接外部网关）、`wakeup_session.py`（唤醒会话与打断）、`ref.py`（全局单例）
+- `native/src/`：`lib.rs`（PyO3 导出）、`server.rs`（TCP `4399`）、`opus.rs`、`python.rs`、`macros.rs`、`tts/`
+- `core/assets/sounds/`：提示音；`core/models/`：本地模型，不入库（安装见 `bridge/README.md` 的模型文件一节）
+
+要守住的边界：
+
+- Rust 导出面就是 Python 侧的契约。`lib.rs` 注册 `start_server` / `start_recording` / `stop_recording` / `start_playing` / `stop_playing` / `run_shell` / `on_output_data`；`native/src/tts/mod.rs` 另注册 `tts_play` / `tts_play_background` / `tts_stream_play` / `tts_stream_play_background` / `tts_stream_collect` / `begin_playback_session` / `stop_tts_playback` / `decode_audio` / `play_audio_file`。改名或改签名要同时改全部调用点，Python 侧没有任何类型检查兜底
+- 环境变量分两侧读：Python 侧是 `main.py` / `core/app.py` / `core/utils/*`；Rust 侧 `native/src/server.rs` 读 `AUDIO_INPUT_ENABLE`、`SILENT_START_ENABLE`、`DSH_XIAOAI_TOKEN`（`4399` 的客户端鉴权，留空即不鉴权）。API Server 的开关与监听地址只由环境变量决定，`config.py` 里没有 `api_server` 段。另有 `core/dsh.py` 读 `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST`（插件侧由 `lib/process.js` 按设置项写入）：它们是设备绑定随每次 `/asr` 提交的来源，改设备绑定要确认这两条没有被绕过
+- 会话后端之间不互相调用；要出声一律走 `core/services/tts/router.py` 的 `TTSRouter`，不要在某个后端里直接实例化 provider
+- 设备命令集中在 `core/services/speaker.py`，**新代码不要另拼 shell**。既存例外只有 `core/xiaoai.py` 里那一份打断命令串与 `run_shell` 直调（历史遗留，改打断路径时两处都要看），它不是可以照抄的范例。Rust 导出的播放类函数（`on_output_data` / `play_audio_file` / `start_playing` / `tts_play*`）是**不带闸门的底层出口**，现有调用点分布在 `speaker.py`、`core/xiaoai.py`、`core/wakeup_session.py`、`core/services/api_server.py` 与 TTS router；新代码要出声就走 `speaker.play(...)` 或 `TTSRouter`，新增直调就必须自己承担闸门责任（这条与下一条是同一件事：直接调那些导出等于绕过闸门）
+- 任何播报路径都必须过 `core/utils/playback_gate.py` 的单例 `PlaybackGate`，不要自己另写一份计时。闸门由 `speaker.play()` 内部按 buffer 时长 `hold_for(...)` 关、放完自动放；`core/external_conversation.py` 里 `play(buffer=…)` 之后那个 `asyncio.sleep(len(_NOTIFY_PCM)/(24000*2))` 只是等这一句放完，**不是**闸门的替代品
+
+## 修改契约
+
+- 改配置项：改 `bridge/config.py` 的默认值与注释。插件渲染的 `<dataDir>/config.py` 以它为模板，所以还要确认插件侧 `lib/render-config.js` 的 `buildOverrides()` 会写这个键，否则设置页改了不生效。跑 `pytest -q tests/test_config_loader.py`
+- 加 TTS provider：名字必须进 `core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS`，否则会被当未知 provider **回退**（`logger.warning` 记一条 `Unknown tts_provider=`，再按 `tts_speaker` 选 xiaoai / doubao），**不报错**——所以「没报错」不等于「接上了」。跑 `pytest -q tests/test_tts_router.py`。还要动插件侧两张表：`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`（不加就永远不把 `tts_provider` 写进渲染配置，设置页选中等于没选）与 `lib/config.js` 的 `TTS_PROVIDER_VALUES`（设置页能选什么，允许先于桥接器存在，那就是「预留」）
+- 改 API Server：端点在 `core/services/api_server.py` 的 setup 里注册，鉴权由 `api_auth.py` 的 middleware 统一加，不要在 handler 里另判令牌。新增端点同步更新 `bridge/README.md` 的端点表，跑 `pytest -q tests/test_api_server_auth.py tests/test_api_server_playback_queue.py`
+- 改 Rust 扩展：先停桥接器 → `uv sync` → 跑测试。`native/src/**/*.rs` 改过必须重编译，`pyproject.toml` 的 `tool.uv.cache-keys` 已声明触发路径
+- 改音频链路（VAD / KWS / ASR）：代码在 `core/services/audio/`，模型放 `core/models/`（不入库）。牢记前提「设备说话时麦克风仍在往本进程送音频」
+- 新增播报点或提示音：照 `core/external_conversation.py` 的现成范例（`_NOTIFY_SOUND_PATH` / `_load_notify_sound()` / `_play_notify()` 一带；音频解码用 Rust 的 `decode_audio(..., format="mp3", sample_rate=24000)`，声音文件放 `core/assets/sounds/`），播放一律走 `speaker.play(...)` → 跑 `pytest -q tests/test_playback_gate.py`，并实机听一次有没有自问自答
+- 改设备命令面：改 `core/services/speaker.py`，并保持「不打断 FileMonitor」的约束（见禁止操作）
+- 改端口：`4399` 硬编码在**三处**——`native/src/server.rs`（`let addr`）、插件侧 `lib/ports.js`（`SPEAKER_PORT`）、`docker-compose.yml` 的端口映射；设备侧还有一处不在本仓库的拨号配置（音箱上 `/data/open-xiaoai/server.txt` 写 `ws://<host>:4399`）。漏改设备侧的现象是**音箱完全没反应**，本地不报任何错
+- 改 PyO3 模块名（现在叫 `dsh_xiaoai_server`）：一次要改 `native/Cargo.toml` 的 `[package] name` 与 `[lib] name`、`native/src/lib.rs` 的 `#[pymodule] fn`、所有 Python 侧的 `import` 与 `sys.modules.setdefault` 测试桩、以及文档里的导入示例；site-packages 里的包装包目录名与 `Cargo.lock` 的包名跟着变，改完必须停桥接器 → `uv sync` → `import dsh_xiaoai_server` 验证
+
+## 禁止操作
+
+- 禁止把 `bridge/core/models/` 的模型文件入库。原因：数百 MB，而 `bridge/` 在 npm 包白名单（`package.json` 的 `files`）里，入库会把包与克隆一起撑爆。装模型照 `bridge/README.md` 的模型文件一节做
+- 禁止改名、移走或当生成物删掉 `bridge/config.py`。原因：它是插件渲染运行时配置的模板，删了插件就渲染不出 `<dataDir>/config.py`。要改渲染逻辑去改插件侧 `lib/render-config.js`
+- 禁止在 `core/external_conversation.py` 里调用 `speaker.abort_xiaoai()`。原因：会打断 FileMonitor 的唤醒通道（该文件顶部注释写明了这条）。要停播用播放闸门或 `stop_playing`。它的实现是设备侧的 `/etc/init.d/mico_aivs_lab restart`（不在本仓库）
+- 禁止在业务代码里**新增**绕开 `core/services/speaker.py` 的设备命令。原因：打断语义（`killall tts_play.sh miplayer 2>/dev/null; mphelper pause`）集中在那里，散落会让某些路径打不断。`core/xiaoai.py` 里已经有一份同内容的副本与 `run_shell` 直调，那是有意保留的既存状态
+- 禁止在播报路径上跳过 `PlaybackGate`。原因：麦克风一直在流，闸门没关时桥接器会听见自己并自问自答，实机日志里出现过整段「我说：…」。这不是理论风险
+- 禁止手改 `bridge/uv.lock` / `bridge/Cargo.lock`。原因：用 `uv` 更新它们；两个锁文件有意入库，手改会与 `pyproject.toml` / `Cargo.toml` 漂移
+- 禁止引入第二个日志级别环境变量（如 `LOG_LEVEL`）。原因：`core/utils/logger.py` 只读 `LOGLEVEL`，另一个名字看着生效其实是死键
+- 禁止让需要真设备或真凭据的脚本进 pytest 收集。原因：pytest 只要导入模块就会连云端甚至让音箱出声，没设备时收集阶段就炸。这类脚本放 `tests/test_tts*.py` 并登记到 `tests/conftest.py` 的 `collect_ignore`
+- 禁止自行改 `bridge/pyproject.toml` 的 `name` / `version`。原因：`name` 是分发名（dist-info 仍是 `open_xiaoai_bridge-1.0.0.dist-info`），改它要连带处理打包与安装；Rust 模块名与导入路径**不来自它**，而来自 `native/Cargo.toml` 的 `[package]` / `[lib] name` 与 `native/src/lib.rs` 的 `#[pymodule]`。版本号变动要先报备
+
+## 验收标准
+
+改动完成 = 下列全部通过：
+
+1. `.\.venv\Scripts\python.exe -m pytest -q`：基线 `115 passed, 19 subtests passed`，只许升不许降
+2. 改过 `.py`：桥接器真的起得来。停掉旧进程 → 起 `main.py` → 日志里没有 `Traceback`
+3. 改过 `native/src/**/*.rs`：`uv sync` 编译通过，且 `import dsh_xiaoai_server` 成功
+4. 仓库根 `npm run check` 全绿（九条离线检查）
+5. 改过配置键、端点或 provider：`bridge/README.md` 与本文件同步更新
+
+仓库没有 CI，上面这些只能在本地跑。
+
+## 已知风险区
+
+| 路径 | 风险 | 动作 |
+|---|---|---|
+| `core/utils/playback_gate.py` | 半双工闸门：引用计数或设备事件时序写错会自问自答；设备不上报播放事件时还可能把麦克风关死 | 改前读文件顶部 docstring；跑 `tests/test_playback_gate.py` |
+| `native/src/server.rs` | `4399` 硬编码，与插件 `lib/ports.js`、`docker-compose.yml` 镜像；设备侧另有一份不在仓库内的拨号配置 | 三处一起改 + 人工改设备侧 `/data/open-xiaoai/server.txt` |
+| `core/services/speaker.py` | 设备命令面与打断，写错在单测里看不出来 | 实机验证一次打断 |
+| `core/services/api_server.py` + `api_auth.py` | 监听地址可被设成 `0.0.0.0`，等于把音箱的播放与唤醒交给整个局域网 | 新端点走既有 middleware，不要绕过 |
+| `core/utils/config.py` + `config_loader.py` | 配置由插件渲染到 `<dataDir>/config.py` 并秒级热重载 | 不要在模块顶层缓存配置值（`api_auth.py` 就是每请求读） |
+| `core/dsh.py` | 令牌来源（`XIAOAI_API_TOKEN` 优先、渲染配置的 `dsh.token` 兜底）与 `run_id` 关联 | 令牌单源；取不到值会让音箱每句被插件 503 |
+| `bridge/README.md` 的示例 | 快速开始与配置示例还是旧值（`session_key` 写作 `agent:main:open-xiaoai-bridge`） | 默认值以 `bridge/config.py` 的 `dsh.session_key` / `openai.session_key` 为准 |
+| `bridge/.venv` 里的 `.pyd` | Windows 上文件被占用就删不掉 | 改 Rust 前先停桥接器 |
+
+## 出错怎么办
+
+| 症状 | 处理 |
+|---|---|
+| `No module named 'dsh_xiaoai_server'`、`ImportError: DLL load failed` | Rust 扩展没编译好：停桥接器后 `uv sync`；`main.py` 会自动补 onnxruntime 的库路径 |
+| `failed to remove file ...dsh_xiaoai_server.pyd: 拒绝访问 (os error 5)` | 桥接器还在跑，`.pyd` 被占用：停掉再 `uv sync` |
+| 日志刷 `Unknown tts_provider=` | provider 名字没进 `SUPPORTED_PROVIDERS`，见修改契约 |
+| 音箱自己接自己的话 | 有播报路径没过 `PlaybackGate`，或闸门提前放开 |
+| 音箱完全没反应，日志里 `[DSH] Plugin not reachable at` | 桥接器连不上插件：确认 DSH 在跑，且 `base_url` 是 `http://127.0.0.1:19387/plugin/xiaoai` |
+| 每一句都被拒 | 令牌没拿到：看插件 `/health` 的 `tokenConfigured` 与诊断里的 `token-not-applied` |
+| `No module named pytest` | 刚跑过 `uv sync` 清掉了 dev 依赖：`uv pip install --python .venv\Scripts\python.exe pytest`；也可能是用了系统 Python，改用 `bridge/.venv` 的解释器 |
+
+## 维护说明
+
+改验收命令、模块边界、禁止项或风险区时，同一次提交里改本文件。`bridge/` 的结构与命令以代码和配置为准，本文件只写规则与结论，不复制代码细节。

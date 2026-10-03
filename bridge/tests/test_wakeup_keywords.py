@@ -80,7 +80,7 @@ class XiaoAIWakeupKeywordTest(unittest.TestCase):
                 sys.modules,
                 {
                     "numpy": np_stub,
-                    "open_xiaoai_server": server_stub,
+                    "dsh_xiaoai_server": server_stub,
                     "core.utils.config": config_stub,
                 },
             ):

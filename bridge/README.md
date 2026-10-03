@@ -1,6 +1,6 @@
 <div align="center">
 
-# Open-XiaoAI Bridge
+# Bridge（bridge/）
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![Rust](https://img.shields.io/badge/Rust-native_module-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![License](https://img.shields.io/badge/License-MIT-green)](../LICENSE) [![GitHub Stars](https://img.shields.io/github/stars/coderzc/open-xiaoai-bridge?style=flat&logo=github)](https://github.com/coderzc/open-xiaoai-bridge/stargazers) [![Docker Image](https://img.shields.io/badge/ghcr.io-open--xiaoai--bridge-2496ed?logo=docker&logoColor=white)](https://ghcr.io/coderzc/open-xiaoai-bridge)
 
@@ -16,10 +16,11 @@
 
 > 本项目受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发，并参考其 `examples/` 示例演进而来，现已作为独立项目持续维护。
 
-> **关于本文件**：这是上游 `coderzc/open-xiaoai-bridge` README 的搬运版，本 fork
-> 只改写了品牌字样、删掉了不适用的章节，正文结构仍是上游的。因此文中个别徽章、
-> 演示视频与 Docker 镜像链接仍指向上游仓库与上游镜像（它们不是本 fork 的产物）；
-> 需要点击时以仓库根目录的 [README.md](../README.md) 为准。
+> **关于本文件**：这个文件有一部分是从上游 `coderzc/open-xiaoai-bridge` 搬来的旧内容，
+> 只改写过品牌字样、删掉了不适用的章节，正文结构仍是上游的。因此文中个别徽章、
+> 演示视频与 Docker 镜像链接仍指向上游仓库与上游镜像（它们不是本仓库的产物）；
+> 本仓库的入口文档是根目录的 [README.md](../README.md)，示例与代码冲突时以代码为准，
+> 改动逐条记在 [CHANGELOG.md](../CHANGELOG.md) 与 [bridge/CHANGELOG.md](CHANGELOG.md) 里。
 
 </div>
 
@@ -106,7 +107,7 @@ cd open-xiaoai-bridge
 API_SERVER_ENABLE=1 DSH_ENABLE=1 OPENAI_ENABLE=1 ./scripts/start.sh
 
 # 启用 Client 鉴权（需与音箱端 token 一致）
-OPEN_XIAOAI_TOKEN=your-secret-token API_SERVER_ENABLE=1 ./scripts/start.sh
+DSH_XIAOAI_TOKEN=your-secret-token API_SERVER_ENABLE=1 ./scripts/start.sh
 ```
 
 ### ⚙️ 环境变量
@@ -119,7 +120,7 @@ OPEN_XIAOAI_TOKEN=your-secret-token API_SERVER_ENABLE=1 ./scripts/start.sh
 | `AUDIO_INPUT_ENABLE` | 启用音频输入（关闭后 KWS / local\_asr 不可用） | 启用            |
 | `API_SERVER_HOST`    | API 监听地址    | `127.0.0.1`   |
 | `API_SERVER_PORT`    | API 监听端口    | `9092`        |
-| `OPEN_XIAOAI_TOKEN`  | Client 鉴权 token，设置后仅持有相同 token 的 Client 才能连接 | 不鉴权 |
+| `DSH_XIAOAI_TOKEN`  | Client 鉴权 token，设置后仅持有相同 token 的 Client 才能连接 | 不鉴权 |
 | `XIAOAI_API_TOKEN`   | DSH 后端的 API Token（优先级高于 `dsh.token`） | 空             |
 | `CONFIG_PATH`        | 自定义配置文件路径   | `./config.py` |
 | `LOGLEVEL`           | 日志级别        | `INFO`        |
@@ -139,7 +140,7 @@ flowchart TB
 
     subgraph OpenXiaoAI["🧠 Open-XiaoAI Bridge"]
         direction TB
-        WSServer["open_xiaoai_server<br/>WebSocket :4399"]
+        WSServer["dsh_xiaoai_server<br/>WebSocket :4399"]
         XiaoaiPy["XiaoAI<br/>设备接入 / 事件桥接"]
         GlobalStream["GlobalStream<br/>全局音频流"]
 

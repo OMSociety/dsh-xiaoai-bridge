@@ -1,10 +1,10 @@
 [package]
-name = "open_xiaoai_server"
+name = "dsh_xiaoai_server"
 version = "1.0.0"
 edition = "2021"
 
 [lib]
-name = "open_xiaoai_server"
+name = "dsh_xiaoai_server"
 crate-type = ["cdylib"]
 
 [dependencies]

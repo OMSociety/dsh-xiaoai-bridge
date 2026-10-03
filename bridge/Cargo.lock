@@ -169,6 +169,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsh_xiaoai_server"
+version = "1.0.0"
+dependencies = [
+ "audiopus",
+ "audiopus_sys",
+ "base64",
+ "open-xiaoai",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,26 +745,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "uuid",
-]
-
-[[package]]
-name = "open_xiaoai_server"
-version = "1.0.0"
-dependencies = [
- "audiopus",
- "audiopus_sys",
- "base64",
- "open-xiaoai",
- "pyo3",
- "pyo3-async-runtimes",
- "reqwest",
- "serde",
- "serde_json",
- "symphonia",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
 ]
 
 [[package]]

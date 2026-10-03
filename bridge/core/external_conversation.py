@@ -18,7 +18,7 @@ Key design decisions:
 import asyncio
 import os
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 
 from core.ref import get_speaker, get_vad
 from core.utils.config import ConfigManager
@@ -41,7 +41,7 @@ def _load_notify_sound() -> bytes | None:
     try:
         with open(_NOTIFY_SOUND_PATH, "rb") as f:
             mp3_data = f.read()
-        return open_xiaoai_server.decode_audio(mp3_data, format="mp3", sample_rate=24000)
+        return dsh_xiaoai_server.decode_audio(mp3_data, format="mp3", sample_rate=24000)
     except Exception:
         return None
 
@@ -52,7 +52,7 @@ def _load_send_sound() -> bytes | None:
     try:
         with open(_SEND_SOUND_PATH, "rb") as f:
             mp3_data = f.read()
-        return open_xiaoai_server.decode_audio(mp3_data, format="mp3", sample_rate=24000)
+        return dsh_xiaoai_server.decode_audio(mp3_data, format="mp3", sample_rate=24000)
     except Exception:
         return None
 
@@ -163,7 +163,7 @@ class ExternalConversationController:
         self._cancel_vad_future()
         self._cancel_xiaoai_asr_future()
         if self._playback_token is not None:
-            open_xiaoai_server.stop_tts_playback(self._playback_token)
+            dsh_xiaoai_server.stop_tts_playback(self._playback_token)
             self._playback_token = None
         if self.uses_xiaoai_asr():
             speaker = get_speaker()
@@ -590,7 +590,7 @@ class ExternalConversationController:
     async def _stop_recording(self):
         """Kill the remote arecord process so the mic doesn't pick up TTS."""
         try:
-            await open_xiaoai_server.stop_recording()
+            await dsh_xiaoai_server.stop_recording()
             logger.debug("Recording stopped", module=self.LOG_MODULE)
         except Exception as exc:
             logger.debug(f"stop_recording error: {exc}", module=self.LOG_MODULE)
@@ -598,7 +598,7 @@ class ExternalConversationController:
     async def _start_recording(self):
         """Restart the remote arecord process to resume mic input."""
         try:
-            await open_xiaoai_server.start_recording()
+            await dsh_xiaoai_server.start_recording()
             logger.debug("Recording started", module=self.LOG_MODULE)
         except Exception as exc:
             logger.debug(f"start_recording error: {exc}", module=self.LOG_MODULE)
@@ -607,7 +607,7 @@ class ExternalConversationController:
 
     async def _play_tts(self, text: str):
         """Play text via Doubao TTS (blocks until playback finishes)."""
-        self._playback_token = open_xiaoai_server.begin_playback_session()
+        self._playback_token = dsh_xiaoai_server.begin_playback_session()
         try:
             await self.backend._play_response_with_tts(
                 text,

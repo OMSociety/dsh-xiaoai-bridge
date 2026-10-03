@@ -59,7 +59,7 @@ class KeepsListeningFlagTest(unittest.TestCase):
     """The switch the settings page owns, with the template's own default."""
 
     def setUp(self):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
         self.module = importlib.import_module("core.dsh_conversation")
@@ -99,7 +99,7 @@ class ConversationLoopTest(unittest.TestCase):
     """The shared loop, driven with the probe above instead of audio."""
 
     def setUp(self):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
         self.base = importlib.import_module("core.external_conversation")

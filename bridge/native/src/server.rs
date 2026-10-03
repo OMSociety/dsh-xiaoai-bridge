@@ -75,7 +75,7 @@ async fn test() -> Result<(), AppError> {
 
 impl AppServer {
     pub async fn connect(stream: TcpStream) -> Result<WsStream, AppError> {
-        let expected_token = std::env::var("OPEN_XIAOAI_TOKEN").unwrap_or_default();
+        let expected_token = std::env::var("DSH_XIAOAI_TOKEN").unwrap_or_default();
         if !expected_token.is_empty() {
             use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
             let ws_stream = accept_hdr_async(stream, move |req: &Request, response: Response| {

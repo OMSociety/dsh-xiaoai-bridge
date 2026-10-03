@@ -10,7 +10,7 @@ import tempfile
 import threading
 import weakref
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 from aiohttp import web
 from core.ref import get_speaker, get_xiaoai
 from core.services.api_auth import auth_mode, bearer_auth
@@ -582,9 +582,9 @@ class APIServer:
             if use_stream:
                 async def play_tts_stream():
                     play_fn = (
-                        open_xiaoai_server.tts_stream_play
+                        dsh_xiaoai_server.tts_stream_play
                         if blocking
-                        else open_xiaoai_server.tts_stream_play_background
+                        else dsh_xiaoai_server.tts_stream_play_background
                     )
                     await play_fn(
                         text,
@@ -607,9 +607,9 @@ class APIServer:
             else:
                 async def play_tts_audio():
                     play_fn = (
-                        open_xiaoai_server.tts_play
+                        dsh_xiaoai_server.tts_play
                         if blocking
-                        else open_xiaoai_server.tts_play_background
+                        else dsh_xiaoai_server.tts_play_background
                     )
                     await play_fn(
                         text,

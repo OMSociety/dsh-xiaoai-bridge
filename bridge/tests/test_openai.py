@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class OpenAIHeadersTest(unittest.TestCase):
     def setUp(self):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         sys.modules.setdefault(
             "aiohttp",
             types.SimpleNamespace(ClientSession=object, ClientTimeout=object),

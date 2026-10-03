@@ -56,7 +56,7 @@ class _GateTestCase(unittest.TestCase):
     """把模块级单例换成可控的小闸门（尾音为 0，测试不用等）。"""
 
     def setUp(self):
-        sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+        sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
         self.gate_module = importlib.import_module("core.utils.playback_gate")

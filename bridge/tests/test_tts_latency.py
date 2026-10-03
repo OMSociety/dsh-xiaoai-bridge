@@ -37,7 +37,7 @@ def add_local_venv_site_packages() -> None:
 
 add_local_venv_site_packages()
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 from core.utils.config_loader import ensure_config_module_loaded
 
 ensure_config_module_loaded()
@@ -98,7 +98,7 @@ def estimate_pcm_duration_ms(pcm_bytes: int, sample_rate: int) -> float:
 
 async def run_once(audio_format: str, text: str) -> dict:
     tts = build_tts(audio_format)
-    result = await open_xiaoai_server.tts_stream_collect(
+    result = await dsh_xiaoai_server.tts_stream_collect(
         text,
         app_id=tts.app_id,
         access_key=tts.access_key,

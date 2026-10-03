@@ -36,7 +36,7 @@ def add_local_venv_site_packages() -> None:
 add_local_venv_site_packages()
 
 import requests
-import open_xiaoai_server
+import dsh_xiaoai_server
 from core.utils.config_loader import ensure_config_module_loaded
 
 ensure_config_module_loaded()
@@ -216,7 +216,7 @@ def save_wav(audio_data: bytes, output_path: Path, sample_rate: int) -> None:
 
 def decode_pcm(encoded_audio: bytes, audio_format: str, sample_rate: int) -> bytes:
     return bytes(
-        open_xiaoai_server.decode_audio(
+        dsh_xiaoai_server.decode_audio(
             encoded_audio,
             format=audio_format,
             sample_rate=sample_rate,

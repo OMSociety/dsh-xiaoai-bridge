@@ -2405,6 +2405,74 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 
 **重启 DSH** 才载入：新模块、设置页 bundle、以及刚安装的那个预设 bundle，都是启动时读取的。
 
+### 12.37 两份 AGENTS.md 重写 + 桥接器去品牌化改名（4.14，文档与命名）
+
+#### 12.37.1 用户要的是什么
+
+用户原文：「第一个任务，重写agenrt.md，并子代理复查质量。」重写对象是**两份**：仓库根 `AGENTS.md` 与 `bridge/AGENTS.md`（后者是根文件指向的子目录文件）。随后用户发现文档里仍有 `OPEN_XIAOAI` 字样，追问「照理来说不应该能替换成DSH_就替换了吗，除非涉及小爱音响上的客户端不能换」；在给出「哪些能换、哪些是硬边界」的分类后，用户选择**环境变量与 Rust 扩展模块名一起换成 DSH 前缀**。
+
+#### 12.37.2 重写做了什么
+
+根 `AGENTS.md` 最终 140 行（旧版 139 行，规则全部保留但重排）；`bridge/AGENTS.md` 从 375 行压到 131 行。两份共同点：
+
+- 章节按「项目概览 / 常用命令 / 架构边界 / 修改契约 / 禁止操作 / 验收标准 / 已知风险区 / 出错怎么办 / 维护」组织；修改契约按**改动类型**写（触发条件 → 先做什么 → 命令 → 完成标准），每条禁令都带**原因**与**正确路径**。
+- 删掉全部行号锚点（`lib/client.js:205-206` 这类），改为「搜符号名」：行号必然漂，符号名不会。根文件在架构边界里列了最常用的唯一符号（`inject`、`ctx.inject(['webServer'], …)`、`DATA_DIR_NAME`、`reportHeldPorts`、`BUNDLE_SLOT` / `BUNDLE_KEY`、`SPEAKER_PORT`、`DIAGNOSTIC_CODES`）。
+- 只写与仓库有关的事实。本机绝对路径、`~/.dsh/profiles` 的 junction、cp936 控制台乱码这类**本机环境**问题不进文档（用户明确要求「agent.md 不应该有本机环境的问题」）。
+- 删除「合上游时必须人工复核 `bridge/AGENTS.md` / `bridge/README.md`」这条义务，理由见 12.37.4。
+
+#### 12.37.3 子代理双通道复查
+
+- 盲测：一个只读子代理拿四个改动任务（加 TTS provider、把 4399 改成 4390、给音频链路加提示音、调整日志级别），只许依据两份 `AGENTS.md` 与仓库代码推演，报执行步骤、文档充分度与缺陷。
+- 事实核查：另一个只读子代理逐条核查两份文件里所有可核查断言（出处 / 证据 / 判定）。
+
+盲测发现的缺陷已全部回改进文档：
+
+- TTS provider 契约点名插件侧 `lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`（不加它就永远不写 `dsh.tts_provider`）与 `lib/config.js` 的 `TTS_PROVIDER_VALUES`（设置页能选什么，允许先于桥接器存在），并说明未知 provider 是**回退**不是报错。
+- 端口从「两处」改成仓库内**三处**（补 `bridge/docker-compose.yml`），并补上**设备侧**不在仓库内的 `/data/open-xiaoai/server.txt`（`ws://<host>:4399`）与漏改它的后果（音箱完全没反应，本地不报错）。
+- 「设备命令只经 `core/services/speaker.py` 或 Rust 导出函数」与「禁止跳过 `PlaybackGate`」自相矛盾：改成「Rust 播放类导出（`on_output_data` / `play_audio_file` / `start_playing` / `tts_play*`）是不带闸门的底层出口，只允许 `speaker.py` 与 TTS router 调」。
+- 补上提示音范例的落点（`core/external_conversation.py` 的 `_load_notify_sound()` / `_play_notify()` 一带，解码走 `decode_audio`），并说明 `play()` 之后的 `asyncio.sleep(时长)` 只是等放完，**不是** `PlaybackGate` 的替代品。
+- 根文件补上 `PlaybackGate` 这条最硬的约束（原来通篇没提）。
+
+事实核查（逐条判「对 / 错 / 拿不到证据」）又回改了一批**文档与代码不符**的地方：
+
+- `TTSService` 是凭空写的符号：`core/services/tts/router.py` 里的类叫 `TTSRouter`，全仓没有 `TTSService`。
+- 「Rust 播放类导出只允许 `speaker.py` 与 TTS router 调」与代码不符：`core/wakeup_session.py`（start_recording / stop_playing）、`core/xiaoai.py`（on_output_data）、`core/services/api_server.py`（tts_stream_play*）都在直调；改成「现有调用点分布在这几处，新代码要出声就走 `speaker.play(...)` 或 `TTSRouter`，新增直调要自己承担闸门责任」。
+- 「设备命令只经 `speaker.py`」有既存反例：`core/xiaoai.py` 里另有同一份打断命令串与 `run_shell` 直调（有意保留的既存状态），规则改成「不要**新增**绕开它的设备命令」。
+- 根文件的 HTTP 端点清单漏了 `/bridge/status`、`/bridge/health`、`/bridge/restart`——其中 `/bridge/health` 与插件自身 `/health` 是两个东西，正是容易混的地方。
+- `core/utils/` 的模块地图写了不存在的 `playback`（真实文件是 `playback_gate.py`）且漏 `base.py`；`native/src/` 漏 `macros.rs`。
+- 「禁止改 `bridge/pyproject.toml` 的 `name`」理由写错了：Rust 模块名与导入路径来自 `native/Cargo.toml` 的 `[package]` / `[lib] name` 与 `native/src/lib.rs` 的 `#[pymodule]`，`pyproject.toml` 的 `name` 只是分发名（dist-info 至今仍是 `open_xiaoai_bridge-1.0.0.dist-info`）。
+- `sanitizeConfig` 的告警不是「只告警一次」，而是**按坏值集合去重**：同一组坏值一次，不同组各一次。
+- 两份文件都没写 `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST`（`core/dsh.py` 读、插件侧 `lib/process.js` 写、随每次 `/asr` 提交）与 `abort_xiaoai` 的实际实现 `/etc/init.d/mico_aivs_lab restart`；`bridge/AGENTS.md` 也缺「`uv sync` 会卸载 pytest」这条前置。
+- 一处**不采信**：事实核查子代理读 `bridge/.venv` 的快照早于本轮的 `uv sync`，因此报「venv 里仍是旧模块名」；实测那时已经换成 `dsh_xiaoai_server/`。并发窗口下拿到的快照要按现状复核再用。
+
+#### 12.37.4 口径更正：本仓库不追上游
+
+早期文档（`README.md`、`CONTRIBUTING.md` 的「同步上游」一节、`.gitignore` 抬头）把 `bridge/` 描述成「基于上游原文的 fork 增补版」，还要求合上游时人工过一遍那三个文件。用户明确：**「我虽然是fork，但已经脱离上游了，是自有项目，不考虑合上游啊。文档里也不应过量强调我们是fork，误导agent」**。据此：
+
+- `bridge/` 源码仍源自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT，署名保留），但本仓库**独立演进**：不合并上游改动、不需要保留上游 tag、没有「合上游要人工过一遍」的义务。
+- `CONTRIBUTING.md` 的 `## 同步上游` 改为 `## 与上游的关系`（只陈述事实，不写合并流程）；`README.md` 与 `.gitignore` 的「fork 增补版」措辞一并改成「源码来自上游、本仓库自行演进」。
+- `bridge/README.md`、`bridge/CHANGELOG.md` 里搬来的旧内容（快速开始的 clone 地址、旧 `session_key` 示例、`v1.0.7` 历史条目）**有意保留**：那是历史与出处，不是本仓库的承诺；示例与代码冲突时以代码为准（`bridge/AGENTS.md` 已写明这条）。
+
+#### 12.37.5 改名：`OPEN_XIAOAI_TOKEN` → `DSH_XIAOAI_TOKEN`，`open_xiaoai_server` → `dsh_xiaoai_server`
+
+- 环境变量：`bridge/native/src/server.rs` 读的那个（4399 的客户端鉴权，留空即不鉴权）改名为 `DSH_XIAOAI_TOKEN`，文档同步。
+- PyO3 模块名：`native/Cargo.toml` 的 `[package] name` 与 `[lib] name`、`native/src/lib.rs` 的 `#[pymodule] fn`、20 个 Python 文件的 `import` 与 `sys.modules.setdefault` 测试桩、以及四份文档里的导入示例，一起改成 `dsh_xiaoai_server`。
+- **不能改的硬边界**：Rust crate `open-xiaoai`（`native/Cargo.toml` 的 git 依赖与 `use open_xiaoai::…`）、设备端 `/data/open-xiaoai/` 路径（含客户端补丁目录）与设备命令 `tts_play.sh` / `miplayer` / `mphelper` / `mico_aivs_lab`。
+- **有意不改的历史**：`bridge/CHANGELOG.md` 的 `v1.0.7` 条目、本文件早期 §12.x 里的旧名字——改写历史会让取证不可信。
+- 本轮未动的可选外观项（用户没要求）：`bridge/pyproject.toml` 的分发名 `open-xiaoai-bridge`、`docker-compose.yml` 的服务名 / 镜像名、豆包 TTS 用的 uid。
+- 实测：停桥接器 → `uv sync`（22.85 s，重编译 1 个包）→ `import dsh_xiaoai_server` 成功；site-packages 里只剩 `dsh_xiaoai_server/` 与 `open_xiaoai_bridge-1.0.0.dist-info/`（分发名未改，故 dist-info 仍是旧的），旧 `open_xiaoai_server/` 目录被替换。顺带记一条：`uv sync` 会卸载 pytest，跑测试前要 `uv pip install --python .venv\Scripts\python.exe pytest`。
+
+#### 12.37.6 与早期记录不一致的一处（以代码为准）
+
+本文件早前与 `CHANGELOG.md` 有一条说法是未知 `tts_provider` 会「直接抛异常」。实际 `bridge/core/services/tts/router.py` 的 `resolve_provider()` 是 `logger.warning` 记一条 `Unknown tts_provider=` 后**回退**（`"xiaoai" if tts_speaker == "xiaoai" else "doubao"`），不抛异常。历史条目不改，这里更正口径。
+
+#### 12.37.7 这一轮的检查
+
+- 仓库根 `npm run check`（九条离线检查）全绿；`bridge/` 的 pytest 基线是 `115 passed, 19 subtests`，只许升不许降。
+- 仓库外的 `agent-md-creator` 校验器（`check_agents_md.py`）对两份文件报 error 0 / warn 0。
+- `bridge/AGENTS.md` 的行数预算（建议 ≤200 行）已从 375 行降到 131 行（根文件 140 行）。
+- 事实核查回改之后又跑了一轮：九条检查绿、`doc-check.mjs` 报 `anchors in README: 10, headings: 17`、`changelog-check.mjs` 报 `versions: 11`、校验器 0 / 0 / 0、pytest 仍 `115 passed, 19 subtests`。
+
 
 
 

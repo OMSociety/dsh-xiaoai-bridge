@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 
 tts_module = importlib.import_module("core.services.tts.openai")
 OpenAITTS = tts_module.OpenAITTS
-sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
 
 
 class FakeResponse:

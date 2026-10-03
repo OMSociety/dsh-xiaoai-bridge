@@ -1,7 +1,7 @@
 import os
 from typing import Literal
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 
 from core.ref import get_xiaoai, set_speaker
 from core.utils.background import spawn_background
@@ -127,14 +127,14 @@ class SpeakerManager:
 
         if blocking:
             with PlaybackGate:
-                await open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
+                await dsh_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate)
             return True
 
         # 异步播放本机文件时闸门无从估算时长，只保证最短关闸时间；
         # 需要严格半双工的调用方应使用 blocking=True。
         PlaybackGate.hold_for(estimate_speech_seconds(""))
         spawn_background(
-            open_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate),
+            dsh_xiaoai_server.play_audio_file(file_path, sample_rate=sample_rate),
             name=f"speaker-play-file-{os.path.basename(file_path)}",
         )
         return True
@@ -148,7 +148,7 @@ class SpeakerManager:
         await self.run_shell(
             "killall tts_play.sh miplayer 2>/dev/null; mphelper pause"
         )
-        await open_xiaoai_server.stop_playing()
+        await dsh_xiaoai_server.stop_playing()
 
     async def wake_up(self, awake=True, silent=True):
         """

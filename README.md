@@ -1,7 +1,7 @@
 <div align="center">
   <h1>DSH XiaoAI Bridge</h1>
   <p>把小爱音箱接进 DeepSeek Harness：喊一声唤醒词，答案从音箱里念出来。</p>
-  <p>桥接器是本仓库 fork 的 Python 服务，由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
+  <p>桥接器是一个本地 Python 服务（源码在 <code>bridge/</code>），由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
   <p>
     <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.8-4f6ef7" alt="Version"></a>
@@ -22,7 +22,7 @@
 
 它不只是个播报器——会话是完整的 DSH 会话（模型、工具、工作区都由你选），音箱只是它的耳朵和嘴。人在电脑上改代码，音箱在书房里答话，是同一场对话。
 
-Python 桥接器 fork 自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT），上游又受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发。本仓库在它上面加了 DSH 对话后端（`core/dsh.py`、`core/dsh_conversation.py`）、播报纪律、鉴权与生命周期管理，并删掉了用不上的连接器。上游那半是**基于原文的 fork 增补版**、不是原样搬运：`bridge/AGENTS.md`、`bridge/README.md`、`bridge/CHANGELOG.md` 都在 `09ef117` 那次改写里动过（品牌字样、删掉不适用章节），改动逐条记在 [CHANGELOG.md](CHANGELOG.md) 与 [bridge/CHANGELOG.md](bridge/CHANGELOG.md) 里；署名与许可链条见 [LICENSE](LICENSE) 与 [DISCLAIMER.md](DISCLAIMER.md)。
+Python 桥接器的源码来自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT），上游又受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发。本仓库是**独立演进**的项目，不跟进上游：DSH 对话后端（`core/dsh.py`、`core/dsh_conversation.py`）、播报纪律、鉴权与生命周期管理，以及 `dsh_xiaoai_server` 模块名与 `DSH_XIAOAI_TOKEN` 环境变量，都是在本仓库里加的。`bridge/` 的文档（`bridge/README.md`、`bridge/CHANGELOG.md`、`bridge/AGENTS.md`）里有一部分是从上游搬来的旧内容，示例与代码冲突时**以代码为准**；本仓库的改动逐条记在 [CHANGELOG.md](CHANGELOG.md) 里，署名与许可链条见 [LICENSE](LICENSE) 与 [DISCLAIMER.md](DISCLAIMER.md)。
 
 ## 核心特性
 
@@ -47,7 +47,7 @@ flowchart LR
     SPK["喇叭"]
   end
   subgraph BR["bridge/（Python，插件托管的子进程）"]
-    RUST["open_xiaoai_server（Rust），端口 4399"]
+    RUST["dsh_xiaoai_server（Rust），端口 4399"]
     APP["core/app.py 唤醒会话"]
     API["API Server，端口 9092"]
   end
@@ -166,7 +166,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `sessionCwd` | 工作区 | 空 | 音箱会话归入的工作区；空则用第一个工作区 |
-| `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；fork 默认值与上游文档不同（见 CHANGELOG） |
+| `sessionKey` | 文本 | `agent:main:dsh-xiaoai-bridge` | 形如 `agent:<agentId>:<rest>`；本仓库默认值与上游文档不同（见 CHANGELOG） |
 | `autoSpeak` | 布尔 | 开 | 模型没调工具时也把回复念出来 |
 | `speakFromAnySession` | 布尔 | 关 | 开：电脑或网页的普通对话也能调用 `xiaoai_speak`（工具注册回全局层）；关（默认）只有音箱发起的会话能调，工具也只出现在那个会话里（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.34 与 §12.35） |
 | `agentPreset` | 文本 | `xiaoai` | 音箱那个会话按哪个 Agent 预设组建。本仓库带一个「小爱模式」（[preset/xiaoai/](preset/xiaoai/)，需要先在插件市场里安装它）；留空用宿主默认预设。填了但没安装**不是错误**：这次回落到宿主默认预设，并留下一条 `agent-preset-missing` 诊断（见 §12.36） |
@@ -295,7 +295,7 @@ lib/bridge.js       桥接器 HTTP 客户端与失败分类
 lib/diagnostics.js  错误库（稳定 code + 原始 detail）
 lib/client.js       设置页与运行状态卡（客户端 bundle）
 skills/xiaoai-speak/  教模型什么时候开口的技能
-bridge/             Python 桥接器（fork 上游；DSH 后端在 core/dsh*.py）
+bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            九个自检脚本 + check-all.mjs 聚合入口（`npm run check`），改动前后都该跑
 docs/deploy.md      实施与验证记录：每一期的决策、坑与取证（不随包发布）
 ```

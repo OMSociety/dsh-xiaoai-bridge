@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
-sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
 
 router_module = importlib.import_module("core.services.tts.router")
 TTSRouter = router_module.TTSRouter

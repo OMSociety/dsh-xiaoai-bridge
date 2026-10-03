@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-sys.modules.setdefault("open_xiaoai_server", types.SimpleNamespace())
+sys.modules.setdefault("dsh_xiaoai_server", types.SimpleNamespace())
 
 
 def _make_test_manager(base, submit_name, *, complete: bool = True):

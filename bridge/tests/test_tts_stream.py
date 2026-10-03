@@ -36,7 +36,7 @@ def add_local_venv_site_packages() -> None:
 
 add_local_venv_site_packages()
 
-import open_xiaoai_server
+import dsh_xiaoai_server
 from core.utils.config_loader import ensure_config_module_loaded
 
 ensure_config_module_loaded()
@@ -86,7 +86,7 @@ async def main() -> None:
     print(f"Audio Format : {tts.audio_format}")
     print(f"Text         : {TEXT}")
 
-    result = await open_xiaoai_server.tts_stream_collect(
+    result = await dsh_xiaoai_server.tts_stream_collect(
         TEXT,
         app_id=tts.app_id,
         access_key=tts.access_key,
