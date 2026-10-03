@@ -307,6 +307,8 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       §12.33 补父标题；见 §12.38）
 - [x] 4.16 设置页重新排版（7 个可折叠分区 + 「高级」折叠 + 联动显隐；
       隐藏而不是卸载，草稿不丢；见 §12.39）
+- [x] 4.17 设置页按官方插件的写法重做视觉（改用宿主 `DisclosureRow` 的折叠行几何、
+      注入式样式表 + `--dsw-*` 主题变量、控件几何对齐宿主字段；见 §12.40）
 
 ## 9. 第 1 期实现决策
 
@@ -2577,6 +2579,44 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 #### 12.39.6 这一轮的检查
 
 `npm run check`（九条，含改动后的 `check-client.mjs`）绿；`doc-check.mjs`（README 锚点只有 `#排错` 与 `#快速开始`，配置项章节的重排没动它们）与 `changelog-check.mjs` 绿；`check_agents_md.py` 0 / 0 / 0；`bridge` 侧 pytest 未受影响（这一批不动 Python）。仓库外另有一个不入库的临时脚本 `render-outline.mjs`（`D:\WorkSpace\_oxb-wheels\`），用同一套 vm + stub 渲染一次设置页并打印折叠 / 隐藏 / 控件大纲，用来在改检查之前先肉眼确认结构。
+
+### 12.40 设置页视觉重做：照官方插件的写法（4.17，UI 精修）
+
+#### 12.40.1 用户要的是什么
+
+原话：「折叠的有点难看，下拉列表也写的不好看，看看官方插件的写作：@deepseek-ai/dsh-experimental-voice-input-bundle 和 /impeccable」。功能与结构一律不动（4.16 的分区、折叠、联动、字段归属全部保留），只重做视觉与控件写法。判定基准是官方 `dsh-experimental-client-ui-voice-input` 的客户端半，以及宿主 `@deepseek-ai/dsh-client-ui-primitives` 各 `*.module.css`。
+
+#### 12.40.2 为什么不再用内联 style
+
+内联 style 表达不了 `:hover`、`:focus-visible`，也没法制服原生 `<select>` 自带的那套 chrome；4.16 的代码因此在每个控件上摆一堆常量（`MUTED`、`BORDER`、`selectStyle`…）。改成**一个 CSS 字符串 + 注入一次 `<style>`**，与官方客户端半同构：官方 `VoiceInput.module.css` 就是建 `style` 标签、写 `tag.dataset.plugin = "<包名>"` 与 `tag.dataset.pluginCss = "<包名>/<文件>.module.css"`、再 `document.head.appendChild`。我们的 `ensureStyles()`：
+
+- 在 `apply(ctx)` 里调一次；`apply` 在 `check-client.mjs` 的沙箱里也会跑，所以第一行是 `typeof document === "undefined" || !document.head` 守卫；
+- 用 `document.querySelector('style[data-plugin-css="dsh-xiaoai-bridge/client.css"]')` 去重（宿主可能把同一个席位挂两次，样式表只该进一次）。
+
+#### 12.40.3 颜色与几何全部取宿主的值
+
+- 颜色只用 `--dsw-alias-*`、圆角只用 `--dsw-radius-sm|-md`。这套 token 是逐条对着宿主的 `*.module.css` 核过的；注意警告色叫 `--dsw-alias-state-warn-primary`，**没有** `state-warning-primary`。
+- 表单几何照抄 `settings-form/fields.module.css`：字段 `padding: 12px 0`、`gap: 6px`、字段之间 `0.5px solid var(--dsw-alias-border-l2)`、标签 13px/500、控件高 34px、`border-radius: var(--dsw-radius-md)`、底色 `--dsw-alias-bg-layer-3`、焦点换 `--dsw-alias-state-business-primary`。**这不是抄着好看，是为了和同一页里宿主自己渲染的 `SettingsValueField` 严丝合缝**：我们自画的控件（下拉、多行文本、分段控件）与宿主画的文本框并排放，任何一处差 2px 或差一档灰都会看得出来。
+- 同一理由，这一轮**去掉了原先 520px 的宽度上限**：宿主的输入框占满整栏（`.field` 是纵向 flex，子项默认 stretch），自画控件跟着占满才对齐。
+
+#### 12.40.4 折叠头：`DisclosureRow` + 常显箭头
+
+`Fold()` 传 `icon: IconChevronDownOutlineRegular` 与 `previewChevron: false`。原语的默认行为是「收起时箭头只在悬停出现、展开时换成向上箭头」，收起态看起来就是一行纯文本 —— 用户嫌难看的正是这个。传了 `icon` 之后：收起态显示向下箭头，展开态原语自己渲染 `IconChevronUpOutlineRegular`（这是原语内部的逻辑，`previewChevron` 只作用于收起态）。行高与字号用 `rowClassName` / `titleClassName` 覆盖：`.xiaoai_sectionRow` 把固定的 24px 放开成 `min-height: 30px`，分区头 14px/500 一级色，嵌套的「高级」13px/500 二级色并让内容左缩进 20px（正好对齐父级标题文字）。
+
+#### 12.40.5 下拉框：去掉原生箭头，换宿主自己的箭头图标
+
+`<select>` 用 `appearance: none` + `.xiaoai_selectChevron`（`IconChevronDownOutlineRegular`，绝对定位在右侧、`pointer-events: none`、悬停随 `.xiaoai_selectWrap:hover` 变二级色）。官方 voice-input 的做法是留着原生箭头只给它上色；我们换成主题图标，因为同一页里的折叠箭头就是这套图标，两种箭头并排会很杂。`scripts/check-client.mjs` 的「原生 `<select>` 恰好 1 个且 `id === "xiaoai-sessionCwd"`」断言不受影响 —— 控件种类没变，只是 className 变了。
+
+#### 12.40.6 每个字段一个 `.xiaoai_fieldWrap`
+
+宿主的字段分隔线是 `.field + .field`（相邻兄弟选择器）。4.16 给每个字段套 wrapper 之后，宿主的相邻选择器再也匹配不上（字段之间永远隔着一层），分隔线统一由 `.xiaoai_fieldWrap + .xiaoai_fieldWrap` 画：**被联动隐藏的字段也占着这一层，所以它前后的线不会塌**（隐藏用的是 `.xiaoai_hidden`，见 §12.39.3）。同一轮还修掉了 `summary` 视图里最后一处 `style: summaryStyle` —— 常量块被 CSS 取代后它成了未定义变量，`check-client` 立刻报 `component render threw: summaryStyle is not defined`，这条报错就是这个检查的意义。
+
+#### 12.40.7 这一轮的检查
+
+`node scripts/check-client.mjs` 绿，且这一批**没有改检查的任何期望值**（视觉与 className 的重做不动渲染文本、也不动控件计数 —— 这正是 12.39.5 那两条断言的边界）；`npm run check` 九条绿；`doc-check.mjs` / `changelog-check.mjs` / `check_agents_md.py` 绿；`bridge` 侧未动（pytest 基线 115 passed, 19 subtests）。结构另用仓库外不入库的 `render-outline.mjs` 复核了一遍（7 个折叠 + 高级折叠 + 各字段归属）。
+
+**这一轮没有真机截图**：`127.0.0.1:19387` 的浏览器界面要求 `dsh web` 打印的进程令牌，桌面壳里的会话拿不到（`GET /` 回 `dsh web authentication required`），所以视觉是按官方 CSS 逐条复刻的，最终以用户刷新页面后所见为准。
+
 
 
 

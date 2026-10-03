@@ -130,7 +130,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 
 ## 配置项
 
-设置页里改；下面是常用项与默认值。页面按 7 个可折叠分区排：基本 / 唤醒与语音 / 应答与兜底 / 播报与回复器 / 人格与提示词 / 桥接器进程 / 本地 API 服务；`bridgeDir` 与 `pythonPath` 这类排障项收在「桥接器进程」下的**高级**折叠里。折叠与联动只改显示：某个开关关掉时它管着的那组项会隐藏，但已经填过的值和暂存的草稿都还在，开关打开就回来（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.39）。
+设置页里改；下面是常用项与默认值。页面按 7 个可折叠分区排：基本 / 唤醒与语音 / 应答与兜底 / 播报与回复器 / 人格与提示词 / 桥接器进程 / 本地 API 服务；`bridgeDir` 与 `pythonPath` 这类排障项收在「桥接器进程」下的**高级**折叠里。折叠与联动只改显示：某个开关关掉时它管着的那组项会隐藏，但已经填过的值和暂存的草稿都还在，开关打开就回来（见 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md) §12.39）。版式不是自画的：分区头用宿主的折叠行原语，字段用宿主的设置字段组件，颜色与圆角全部取 `--dsw-*` 主题变量，所以深浅色跟随宿主、和插件市场里其它插件的设置页一致（见 §12.40）。
 
 保存走 `POST /plugin/xiaoai/config`，写入前会用 `validateConfig()` 严格校验：不合法的值**当场回 400**（错误信息里带着是哪一项，例如 `wakeupTimeout must be a whole number of seconds in [1, 600]`），不会先存进去再说。校验在 revision 围栏之前跑，所以「既过期又不合法」的请求回的是 400 而不是 409。已经躺在设置里的坏值（手改过配置文件、或旧版本写进去的）走另一条路：载入时由 `sanitizeConfig()` 逐键回退成默认值，并只告警一次 `unusable config repaired with defaults: …`。
 
