@@ -2060,6 +2060,43 @@ webServer 已经处在同一个信任域里，插件路由不比它更宽；而�
 `doc-check.mjs`（零 emoji、无独立 `---`、表格列数、README 锚点）与 `changelog-check.mjs`
 （版本节与日期、中英条目 1:1）都必须过；口径见 §12.28.7。
 
+#### 12.33.1 子进程与 `/asr` 门禁共用一个令牌（令牌单源）
+
+事出两条线：`/asr` 的门禁在 `lib/http.js:536` 取 `deps.resolveToken()`，取不到就 503 fail-closed
+（§12.31 那一批改的）；桥接器子进程的环境由 `lib/process.js:577-598` 的 `childEnv()` 生成，解析到
+非空令牌才写 `XIAOAI_API_TOKEN`，否则显式 `delete`。两处必须拿到**同一个**秘密，否则桥接器发来的
+语音请求会被自己的门禁拒掉 —— 现象是「音箱没反应」，而不是报错弹窗。
+
+改之前两处各自调 `resolveToken()`。凭据库允许「`describe` 说已配置、`resolve` 却给不出值」这种
+状态（`@deepseek-ai/dsh-credentials` 的文档写明：空的存储值处处视为不存在，`resolve` 跳过它、
+`describe` 报未配置），一旦落进这个状态，子进程没有令牌、门禁却仍然要令牌，每一句都被 503 拒掉。
+
+改法：`lib/index.js` 新增 `currentToken()`（紧跟 `ensureToken()` 之后），作为唯一的取令牌入口，
+三处接线都从 `resolveToken` 换成它 —— `lib/index.js:415`（传给 `createBridgeSupervisor`）、
+`lib/index.js:422`（传给 `createBridgeClient`）、`lib/index.js:550`（传给 `mountHttp`）。语义：
+
+1. `resolveToken()` 有值就以它为准，凭据轮换因此仍然立刻生效；
+2. `resolveToken()` 给不出时退回 `ensureToken()`（缺失就生成、写入凭据库并返回值），把这个值记在
+   `heldToken` 里，宿主进程生命周期内稳定，不会每个请求重新生成；
+3. 凭据名（`apiServerTokenCredential`）变了就作废上面的缓存，不会把旧名字下的值喂给新名字。
+
+`lib/index.js:591` 那句 `await ensureToken();` 保留：加载时就落库，凭据库写不进去的话早暴露。
+
+离线取证在 `scripts/check-supervisor.mjs` 的 case I：把伪造的 `bridgeDir\main.py` 写成一个三行的
+node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `process.env.XIAOAI_API_TOKEN` 写进 marker
+文件 —— 于是「子进程到底有没有令牌」变成可断言的。两条断言：
+
+- `resolveToken` 返回 `probe-token-32-hex` 时，marker 里就是它（`XIAOAI_API_TOKEN is passed to the
+  bridge`）；
+- `resolveToken` 返回 null 时，即便宿主环境里先塞了 `XIAOAI_API_TOKEN=leaked-from-the-host`，子进程
+  看到的也是 null（`an unconfigured token is not inherited from the host`）。
+
+这段是「离线检查不启动桥接器、不出声」的例外说明：它只 spawn 一个三行的 node 脚本，不碰设备、
+不碰 9092，也不写用户的 `DSH_HOME`。
+
+取舍：`heldToken` 是插件自己生成的值，只在这一种状态（存储答不出）下兜底；用户随后手工把凭据库里
+的值换成别的、而 `resolve` 又能答了，下一句就用新值，符合第 1 条优先级，无需额外处理。
+
 
 
 

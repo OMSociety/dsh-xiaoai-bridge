@@ -401,6 +401,44 @@ console.log('case H: two callers asking for a start at the same time share one s
   check('stop kills the single bridge', await waitGone(a.pid, Date.now() + 10_000));
 }
 
+console.log('case I: the API token reaches the bridge process, and only when there is one');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  const marker = join(dataDir, 'env-probe.json');
+  // main.py is executed by node here, so it can report back what the supervisor
+  // actually put in its environment -- a visible stand-in for the Python bridge
+  // reading XIAOAI_API_TOKEN out of os.environ.
+  writeFileSync(
+    join(bridgeDir, 'main.py'),
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, `
+      + `JSON.stringify({ token: process.env.XIAOAI_API_TOKEN ?? null }));\n`
+      + 'setInterval(() => {}, 1000);\n',
+    'utf8',
+  );
+
+  const withToken = makeSupervisor({ resolveToken: async () => 'probe-token-32-hex' });
+  const res = await withToken.start();
+  check('a start with a configured token succeeds', res.ok === true);
+  check('the bridge process reported its environment', await until(() => existsSync(marker), 10_000));
+  const seen = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : {};
+  check('XIAOAI_API_TOKEN is passed to the bridge', seen.token === 'probe-token-32-hex');
+  await withToken.stop();
+
+  // The mirror image: with no token to pass, the host's own variable must not
+  // leak into the child, or the bridge would demand a bearer nobody sends.
+  rmSync(marker, { force: true });
+  process.env.XIAOAI_API_TOKEN = 'leaked-from-the-host';
+  const withoutToken = makeSupervisor({ resolveToken: async () => null });
+  const bare = await withoutToken.start();
+  check('a start without a configured token still succeeds', bare.ok === true);
+  check('the tokenless bridge reported its environment', await until(() => existsSync(marker), 10_000));
+  const bareSeen = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : {};
+  check('an unconfigured token is not inherited from the host', bareSeen.token === null);
+  delete process.env.XIAOAI_API_TOKEN;
+  await withoutToken.stop();
+}
+
 rmSync(root, { recursive: true, force: true });
 
 if (failures > 0) {
