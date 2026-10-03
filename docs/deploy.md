@@ -2097,6 +2097,15 @@ node 脚本（node 以 CJS 执行未知扩展名），它把自己看到的 `pro
 取舍：`heldToken` 是插件自己生成的值，只在这一种状态（存储答不出）下兜底；用户随后手工把凭据库里
 的值换成别的、而 `resolve` 又能答了，下一句就用新值，符合第 1 条优先级，无需额外处理。
 
+接线时**改的是值、不是键名**：`createBridgeSupervisor`（`lib/process.js:152`）、`createBridgeClient`
+（`lib/bridge.js:53`）与 `mountHttp` 的 `deps`（`lib/http.js:536`）读的都是 `resolveToken`，所以三处
+一律写成 `resolveToken: currentToken`。这批修复的第一版把键名也改成了 `currentToken`，结果是两个使用者
+拿到 `undefined`：子进程不带令牌、`/asr` 直接 fail-closed 503，实机表现为「对着音箱说话没反应」。为了
+不再静默，`lib/process.js` 的 `childEnv()` 现在区分「没接解析器」与「解析器说没有」：前者 warn 一次
+`no token resolver was handed to the supervisor; the bridge will start without XIAOAI_API_TOKEN`。
+仓库外的 `plugin-smoke.mjs` 也补了一条断言：假凭据库里明明有令牌时，不带 bearer 的 `POST /asr` 必须
+是 401，出现 503 就说明宿主没把解析器交给门禁。
+
 
 
 
