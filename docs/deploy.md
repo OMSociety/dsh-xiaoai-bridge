@@ -325,6 +325,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
 - [x] 4.22 锁定中文 + 唤醒提示音对准收音起点（SenseVoice 的 `language` 由 `auto`
       钉成 `zh`，不新增配置键；`external_conversation.py` 三处入口把开麦挪到提示音
       之前，提示音一结束就开始识别；见 §12.44.6）
+- [x] 4.23 音箱会话补回终端与待办（真机投诉「该有的工具没有」：预设加
+      `dsh-tool-pwsh`/`dsh-tool-bash`、`dsh-tool-jobs`、`dsh-tool-todo` 四行，
+      沙箱与审批仍在宿主侧、跟着会话权限预设走；见 §12.36.8）
 
 ## 9. 第 1 期实现决策
 
@@ -2378,6 +2381,8 @@ the preset scope, and the Agent scope's parent link controls visibility」——
 | --- | --- |
 | `dsh-agent-instructions`(maxBytes 65536) | 没有它，`AGENTS.md` 一类的仓库约定就进不了提示词 |
 | `dsh-tool-fs`、`dsh-tool-fs-search` | 音箱会话要能读文件、查资料（`sampleOverCapGlobResults: false` 与 standard 一致） |
+| `dsh-tool-pwsh`（非 Windows 上是 `dsh-tool-bash`）、`dsh-tool-jobs` | 音箱会话要能查本机进程、跑命令、把长命令甩到后台；见 §12.36.8 |
+| `dsh-tool-todo`（`allowParallelInProgress: true`） | 多步任务能在会话里记一笔，配置与 standard 逐字一致；同一天收回，见 §12.36.8 |
 | `dsh-skill-filesystem`、`dsh-tool-skill` | Skills 与音箱会话里那张 `xiaoai_speak` 技能卡 |
 | `dsh-tool-web`（`fetch: true`，`searchTimeoutMs: 60000`） | 「帮我查一下」是音箱最常见的正经请求 |
 | `dsh-persona`（换成语音人格） | prefix 明确写「你写的一切都会被念出来、用短句、不要 emoji」 |
@@ -2385,11 +2390,10 @@ the preset scope, and the Agent scope's parent link controls visibility」——
 
 | 有意去掉 | 为什么 |
 | --- | --- |
-| `dsh-tool-bash` / `dsh-tool-pwsh`、`dsh-tool-jobs` | 语音会话里跑终端＝几十秒沉默 + 审批弹窗 |
-| delegation 组（`dsh-tool-subagent*` / `dsh-agent-*` 子代理、`dsh-tool-workflow`、workflow-ptc、ralph） | 同上，且子代理的输出没有人读 |
+| delegation 组（`dsh-tool-subagent*` / `dsh-agent-*` 子代理、`dsh-tool-workflow`、workflow-ptc、ralph） | 子代理跑几十秒、输出没有人读，且音箱那头只会沉默 |
 | `dsh-plan-mode` 与 planning 组 | 计划模式要人看着点 |
 | `dsh-tool-ask-user` | 音箱那一头没有点选界面，选了就会卡住这一轮 |
-| `dsh-tool-todo`、`dsh-tool-present`、`dsh-tool-plugin-manager` | 对语音闭环没有正面作用（plugin-manager 在 standard 里本来也是 disabled） |
+| `dsh-tool-present`、`dsh-tool-plugin-manager` | 对语音闭环没有正面作用（plugin-manager 在 standard 里本来也是 disabled） |
 
 persona prefix 有意用英文：「You are the assistant behind a Xiaomi Xiaoai smart speaker. The speaker reads
 everything you write aloud…short spoken sentences…never use emoji.」——这份文本会进系统提示词，英文模板
@@ -2447,6 +2451,39 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 - `AGENTS.md` 里的诊断码数量 11 → 14。
 
 **重启 DSH** 才载入：新模块、设置页 bundle、以及刚安装的那个预设 bundle，都是启动时读取的。
+
+#### 12.36.8 事后修正：把终端与待办还给音箱会话（2026-10-04）
+
+音箱会话起初没有终端：会话记录里那一轮的工具表只有 49 个，`pwsh` / `bash` / `todo_write` 都不在里面，
+于是被问「电脑上运行着什么？」时它只能回答「我这会儿没法直接看到你电脑上跑的所有程序」。补齐的是终端
+（pwsh，含平台门控的 bash）、后台任务与待办；子代理/工作流、计划模式、问询卡片仍然不要。
+
+改的是 `preset/xiaoai/cordis.patch.yml` 的 `plugins`，加四行，全部照 `@deepseek-ai/dsh-web-app` 那份
+`presets/standard.patch.yml` 逐字抄（在 `resources/app.asar` 的
+`dsh/node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml`，用 `_oxb-wheels\asar.mjs cat` 读）：
+
+- `tool-bash`（`@deepseek-ai/dsh-tool-bash`，`disabled: !!js process.platform === 'win32'`）
+- `tool-pwsh`（`@deepseek-ai/dsh-tool-pwsh`，`disabled: !!js process.platform !== 'win32'`）
+- `tool-jobs`（`@deepseek-ai/dsh-tool-jobs`）
+- `tool-todo`（`@deepseek-ai/dsh-tool-todo`，`config: {allowParallelInProgress: true}`）
+
+两个关键事实是读 asar 与上游 SKILL.md 得到的，不是猜的：① **沙箱链条不在预设里**——`sandbox` /
+`sandbox-policy` / `pwsh-sandbox` / `approval` / `shell-env` 都由宿主组合提供（`editing-cordis-compositions`
+的原话是「Host plugins supply shared services: … sandbox policy …」，standard 预设里也确实只有工具那一行），
+所以审批与沙箱范围跟着**会话的权限预设**走（本机默认 `danger-full-access` → `never`，不会为一句语音弹卡片）；
+② `!!js` 在预设子插件的 `disabled` 里合法（同一份 SKILL.md：「Keep `!!js` expressions only in plugin
+configuration or `disabled`; the Loader evaluates them when activating the child plugin.」），所以平台门控照抄
+standard 即可，不必把这份预设钉死在 Windows 上。
+
+已知代价，留着不改：谁把音箱会话的权限预设切到需要审批的那一档，语音这一轮就会等一张卡片——这与
+`dsh-tool-ask-user` 被拿掉是同一个理由，但那是会话级选择，不该由预设替用户决定。
+
+生效方式：这份 bundle 在 profile 里是 `link:`（`@local/dsh-xiaoai-preset` → 仓库目录），改完**不用重装**，
+但要**重启 DSH**；而且已经存在的音箱会话保留它启动时的 revision（§12.36.6 第 3 条），要看新的工具表得让
+它新建会话（删掉 `devices.json` 里那条记录，或换台设备）。
+
+离线检查：`node scripts\check-session.mjs`（case 11 覆盖预设解析）与仓库根 `npm run check` 九条全过；
+`bridge\` 侧未改动，pytest 基线不变。
 
 ### 12.37 两份 AGENTS.md 重写 + 桥接器去品牌化改名（4.14，文档与命名）
 
