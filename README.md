@@ -258,6 +258,7 @@ dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"
 | `agent-preset-missing` | 设置里的 `agentPreset` 没安装，这次用宿主默认预设（detail 里有宿主给的原文；`warn`，见 §12.36） |
 | `agent-preset-broken` | 设置里的 `agentPreset` 装了但激活失败（声明本身有问题），这次用宿主默认预设（`warn`） |
 | `agent-preset-mount-failed` | 把预设挂到音箱会话上抛了异常，这次用宿主默认预设（detail 是原文；`warn`） |
+| `session-archived-rebound` | 音箱绑定过的那个会话被归档了（归档的会话跑不了模型步，宿主会静默拒掉），插件改用新会话；detail 里有旧会话 id（`warn`，见 §12.43） |
 
 日志与状态分四处，别混着看：数据目录里的 `bridge.log`（真正的日志）、插件自己的 `GET /plugin/xiaoai/bridge/logs`（读同一份日志，可带 `limit`）、桥接器 API `http://127.0.0.1:9092/api/health`（状态端点，回 `{status, speaker_ready, auth}`）、插件自己的 `GET /plugin/xiaoai/health`（状态端点，回 facts）。播报留痕 `spoken.jsonl` 不是日志而是历史：它有 5 MiB 上限，超了就整体轮转到单槽 `spoken.jsonl.1`，**旧的一代会被下一次轮转覆盖**，所以长期留痕只能靠自己另存。更细的内容——pnpm 供应链坑、模型目录、鉴权中间件、每一期的决策——都在 [docs/deploy.md](https://github.com/OMSociety/dsh-xiaoai-bridge/blob/main/docs/deploy.md)（这份文件不随包发布，所以用绝对地址）。
 

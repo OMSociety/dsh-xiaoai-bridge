@@ -132,7 +132,7 @@ function spyLogger() {
   const known = new Set(DIAGNOSTIC_CODES);
   const { logger } = spyLogger();
   const diagnostics = createDiagnostics({ logger });
-  const used = ['bridge-unreachable', 'bridge-rejected', 'bridge-error', 'bridge-timeout', 'start-failed', 'plugin-rejected', 'watchdog-gave-up', 'token-not-applied', 'scope-registration-unavailable', 'scope-registration-failed', 'agent-preset-missing', 'agent-preset-broken', 'agent-preset-mount-failed'];
+  const used = ['bridge-unreachable', 'bridge-rejected', 'bridge-error', 'bridge-timeout', 'start-failed', 'plugin-rejected', 'watchdog-gave-up', 'token-not-applied', 'scope-registration-unavailable', 'scope-registration-failed', 'agent-preset-missing', 'agent-preset-broken', 'agent-preset-mount-failed', 'session-archived-rebound'];
   for (const code of used) {
     diagnostics.note({ code, detail: code });
     check(`${code} is a declared code`, known.has(code));

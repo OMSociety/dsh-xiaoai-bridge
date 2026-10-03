@@ -31,7 +31,7 @@ const logger = {
 };
 
 /** Build a host-shaped ctx whose single device is a live agent. */
-function harness({ withDefaultModel = true, workspacePath, presetRegistry, resumable = false } = {}) {
+function harness({ withDefaultModel = true, workspacePath, presetRegistry, resumable = false, archivedSessionIds } = {}) {
   const created = [];
   const inbox = [];
   const renames = [];
@@ -71,16 +71,20 @@ function harness({ withDefaultModel = true, workspacePath, presetRegistry, resum
         return withDefaultModel ? { currentSelection: () => ({ provider: 'stub-provider', model: 'stub-model' }) } : undefined;
       }
       if (name === 'sessionTitle') return { rename: (session, label) => { renames.push({ id: session?.id, label }); } };
-      if (name === 'workspaceRegistry' && workspacePath !== undefined) {
+      if (name === 'workspaceRegistry' && (workspacePath !== undefined || archivedSessionIds !== undefined)) {
         const entry = {
           path: workspacePath,
           attachSession: async (sessionId) => { attached.push({ path: workspacePath, sessionId }); },
         };
         return {
-          list: () => [entry],
+          list: () => (workspacePath === undefined ? [] : [entry]),
           // Async on the host (it canonicalizes the path first): a fake that
           // answers synchronously would hide a missing `await`.
           resolveByPath: async (path) => (path === workspacePath ? entry : undefined),
+          // A live getter on the host, not a snapshot: the plugin must read it
+          // at reuse time, because the user can archive a conversation while the
+          // plugin is running.
+          archivedSessionIds: archivedSessionIds ?? [],
         };
       }
       return undefined;
@@ -692,6 +696,86 @@ check('the resumed agent gets the mount too', () => {
   assert.deepEqual(r11f.mounts, [{ agentCtx: h11f.agentCtx, id: 'xiaoai' }]);
 });
 
+// --- case 12: a bound conversation the user archived ------------------------
+// DSH archives a conversation instead of deleting it, and the host's
+// archived-session gate then refuses every model step proposed for it: a
+// follow-up is accepted by `agent.followup()` and the loop ends `blocked`
+// without a request, so the speaker goes silent while the plugin keeps believing
+// it still has a conversation. The binding has to be retired on the next
+// delivery, and the archive reported instead of swallowed.
+console.log('case 12: archived conversation');
+const archivedDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-archived-'));
+const archivedSessionId = 'session-3d0f1e6c-7a41-4c62-9c1f-2f6a3f6f9c11';
+writeFileSync(join(archivedDir, 'devices.json'), `${JSON.stringify({
+  version: 2,
+  devices: [{
+    key: '192.168.1.205',
+    host: '192.168.1.205',
+    name: '小爱音箱',
+    sessionId: archivedSessionId,
+    utterances: 3,
+    createdAt: 1,
+    updatedAt: 2,
+    titleLabel: '小爱音箱',
+  }],
+}, null, 2)}\n`, 'utf8');
+const notes12 = [];
+// `resumable: true` on purpose: a resume would succeed, so a resumed session
+// here would prove the archive check was skipped rather than that it failed.
+const h12 = harness({ archivedSessionIds: [archivedSessionId], resumable: true });
+const bridge12 = createSessionBridge({
+  ctx: h12.ctx,
+  getConfig: () => ({}),
+  dataDir: archivedDir,
+  logger,
+  diagnostics: { note: (entry) => { notes12.push(entry); } },
+});
+const result12 = await bridge12.deliver({ host: '192.168.1.205', name: '小爱音箱', text: '你好' });
+check('an archived conversation is neither reused nor resumed', () => {
+  assert.equal(result12.ok, true);
+  assert.equal(h12.resumeCalls, 0);
+  assert.equal(h12.created.length, 1);
+  assert.notEqual(result12.sessionId, archivedSessionId);
+  assert.match(result12.sessionId, /^session-/);
+});
+check('the archive is reported once, as a warning naming the old conversation', () => {
+  assert.deepEqual(notes12.map((entry) => entry.code), ['session-archived-rebound']);
+  assert.equal(notes12[0].level, 'warn');
+  assert.match(notes12[0].detail, new RegExp(archivedSessionId));
+});
+await new Promise((resolve) => { setTimeout(resolve, 400); });
+check('the store points at the new conversation', () => {
+  const stored = JSON.parse(readFileSync(join(archivedDir, 'devices.json'), 'utf8'));
+  assert.equal(stored.devices[0].sessionId, result12.sessionId);
+  assert.equal(stored.devices[0].utterances, 4);
+});
+check('the new conversation is titled again', () => {
+  assert.deepEqual(h12.renames, [{ id: result12.sessionId, label: '小爱音箱' }]);
+});
+// A conversation that is *not* archived still resumes: the check is about the
+// archive, not about preferring a fresh session.
+writeFileSync(join(archivedDir, 'devices.json'), `${JSON.stringify({
+  version: 2,
+  devices: [{
+    key: '192.168.1.205',
+    host: '192.168.1.205',
+    name: '小爱音箱',
+    sessionId: 'session-still-here',
+    utterances: 4,
+    createdAt: 1,
+    updatedAt: 2,
+    titleLabel: '小爱音箱',
+  }],
+}, null, 2)}\n`, 'utf8');
+const h12b = harness({ archivedSessionIds: ['session-somebody-else'], resumable: true });
+const bridge12b = createSessionBridge({ ctx: h12b.ctx, getConfig: () => ({}), dataDir: archivedDir, logger });
+const result12b = await bridge12b.deliver({ host: '192.168.1.205', name: '小爱音箱', text: '你好' });
+check('an unarchived conversation is still resumed', () => {
+  assert.equal(result12b.sessionId, 'session-still-here');
+  assert.equal(h12b.resumeCalls, 1);
+  assert.equal(h12b.created.length, 0);
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();
@@ -707,11 +791,14 @@ await bridge11c.dispose();
 await bridge11d.dispose();
 await bridge11e.dispose();
 await bridge11f.dispose();
+await bridge12.dispose();
+await bridge12b.dispose();
 rmSync(dataDir, { recursive: true, force: true });
 rmSync(legacyDir, { recursive: true, force: true });
 rmSync(workspaceDir, { recursive: true, force: true });
 rmSync(configuredDir, { recursive: true, force: true });
 rmSync(presetDir, { recursive: true, force: true });
+rmSync(archivedDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? '\nsession check OK' : `\nsession check FAILED (${failures})`);
 process.exitCode = failures === 0 ? 0 : 1;

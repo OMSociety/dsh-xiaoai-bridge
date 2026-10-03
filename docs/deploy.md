@@ -315,6 +315,9 @@ node D:\WorkSpace\_oxb-wheels\asar-tool.mjs extract "dsh/node_modules/@deepseek-
       三格从空串改成代码里原本兜底的文本，设置页看得见也能改；语音规则拆成
       「通道说明 + 行动准则」；并随用户当天追加的口径收短为「一般 50 字以内、
       长回复最多 300 字」，设置页说明去掉「例如」；见 §12.42、§12.42.7）
+- [x] 4.20 归档会话自动重开（DSH 只有归档、没有删除，而宿主的 archived-session-gate
+      会静默拒掉归档会话的每一个模型步，于是音箱看起来「谁也不连」；插件在复用前
+      先查归档，命中就换新会话并记一条 `session-archived-rebound`；见 §12.43）
 
 ## 9. 第 1 期实现决策
 
@@ -2725,6 +2728,57 @@ everything you write aloud…short spoken sentences…never use emoji.」——�
 **长度口径改成两档。** 统一成「一般 50 字以内，一两句话讲完，只有确实需要长回复时才展开，最多不超过 300 字」，落在四处：`DEFAULT_OUTPUT_LIMITS`（回复器请求的硬性约束）、`DEFAULT_BEHAVIOR_STYLE`（渲染成「行动准则：」）、`lib/tools.js` 里 `xiaoai_speak` 的 description，以及桥接器模板的两个 `rule_prompt_for_skill`（`dsh` 段与 `openai` 段；后者不被插件覆盖，会真的发给模型，`bridge/README.md` 的示例配置同步）。**刻意不动**的是 `dsh` / `openai` 两段的 `rule_prompt`：「将结果处理成纯文字版…字数控制在300字以内」是**处理指令**，300 在那里是播报上限而不是回复风格；`spokenMaxChars` 的默认值也保持 300，它是硬上限（超了先精简一次、再截断），不是模型该瞄准的目标。50 这个数字只写在提示词里，配置里没有对应开关。
 
 **检查。** `npm run check` 九条绿（没有断言引用这几段文本，所以只改了值）；`bridge` 侧 `pytest -q` 仍是 **115 passed, 19 subtests**（`tests/test_config_loader.py` 只断言键与合并语义，不比对提示词原文）；`doc-check.mjs`、`changelog-check.mjs`、`check_agents_md.py --root .` 绿。
+
+### 12.43 归档过的音箱会话：宿主门禁与自动重开
+
+用户报的现象（原话）：「由于dsh目前只有归档，没有删除会话，如果我把旧小爱的会话关了，它好像会直接不对接任何会话，你有什么维修法吗」。
+
+#### 12.43.1 根因：归档不是删除，是一道静默的门禁
+
+DSH 现在只提供归档：`workspaceRegistry.archiveSession(sessionId)` 把会话加进注册表的持久显示集合（`C:\Users\Administrator\.dsh\storages\workspace.json` 的 `global.archivedSessionIds`，每台机器上已有两百多条），`session.v4.jsonl.zstd` 原样留在 `.dsh\sessions\` 下不动，取消归档还能回到原位（宿主注释原文：`Archiving never touches workspace accounting — an archived session keeps its sessionIds slot so unarchiving restores its position`）。
+
+真正的变化在**准入门禁**上：`dsh-api-session-controller` 的 `lib/types/archived-session-gate.js` 里有一个 `ArchivedSessionGate`（`inject: ['agents','sessions','workspaceRegistry']`），它挂在 `agent/pre-step`，用 `underArchivedSession(ctx, agent)` 沿 subagent 血缘查 `ctx.workspaceRegistry.archivedSessionIds`，命中就 `return Promise.resolve({ kind: 'reject' })`。宿主自己的注释把这个后果写得最清楚：
+
+> A late waking delivery to an archived Session — … a queued follow-up — proposes a step the gate rejects, which the loop ends as `blocked` without a request.
+
+对上插件的形状就是：`ensureAgent()` 复用旧会话 → `agent.followup(...)` **不抛错也不返回失败**（消息真的进了 store）→ 宿主在 `pre-step` 把这一步拒掉、循环以 `blocked` 收尾、一个请求都不发 → 没有回复、没有任何日志。插件于是永远以为会话还在，每一句都往一个死会话里投递，用户看到的就是「关了旧会话以后音箱谁也不连」。
+
+#### 12.43.2 修法：复用之前先问一句
+
+`lib/session.js` 新增 `isArchived(sessionId)`（放在 `track()` 之前）：
+
+```js
+function isArchived(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return false;
+  try {
+    const archived = ctx.get?.('workspaceRegistry')?.archivedSessionIds;
+    if (!archived) return false;
+    return [...archived].some((id) => String(id) === sessionId);
+  } catch {
+    return false;
+  }
+}
+```
+
+宿主那个属性是**活的 getter**（不是快照），用户可能在插件运行期间归档，所以每次投递都要重新读，不能缓存到进程变量里；注册表没起来或这台宿主不提供时当作「没有意见」，绝不因此拦住一句话。
+
+`ensureAgent(record)` 里在 `factoryOptions()` 之后、原有 `if (record.sessionId)` 复用/恢复块之前插入退役逻辑：命中归档就把绑定作废（`sessionId = null`、`titleLabel = ''`、`updatedAt = Date.now()`、`schedulePersist()`），再往下自然走新建会话那条路——**触发这一切的就是本来要被丢掉的那一句**，不需要用户额外操作，新会话还会重新拿到设备标题（`titleLabel` 清空就是为这个）。
+
+两件刻意**不**做的事：
+
+- 不 `dispose()` 旧 handle：会话文件留着，用户在界面上取消归档后那份历史仍可继续用，插件卸载时才统一收 handle。
+- 不替用户 `unarchiveSession()`：归档是用户的决定，插件只负责不往死会话里说话。
+
+#### 12.43.3 可观测性：`session-archived-rebound`
+
+`notePreset()` 改名 `noteWarn()`（`warn` 这一级现在覆盖两种「音箱能绕着走」的状况：预设回落、归档会话），三个调用点照旧；`DIAGNOSTIC_CODES` 由 14 条变成 **15** 条，末位新增 `session-archived-rebound`，中英标签在 `lib/client.js` 里跟在 `agent-preset-mount-failed` 之后，README 排错表加一行（顺序仍以数组为准）。detail 写成 `session <旧 id> is archived, so this utterance starts a new conversation`，用户拿着状态卡就能确认「不是音箱坏了，是我归档了那个会话」。
+
+#### 12.43.4 检查与生效
+
+`scripts/check-session.mjs` 新增 case 12：把设备记录指向一个**在 `archivedSessionIds` 里**的会话，并在假宿主上给 `resumable: true`（能恢复却选择不恢复，才能证明检查真的生效），断言不复用也不恢复、只有一条 `session-archived-rebound`（`level === 'warn'`、detail 含旧 id）、落盘 `devices.json` 指向新会话、新会话重新被命名；case 12b 用 `archivedSessionIds: ['session-somebody-else']` 断言**未归档的照样恢复**，避免把「偏好新会话」当成归档检查。`harness()` 因此多收一个 `archivedSessionIds` 参数，假 `workspaceRegistry` 也改成能只提供归档集合（`list()` 返回空）。`scripts/check-diagnostics.mjs` 的 `used` 表加该码。
+
+改动落在 `lib/` 里，要**重启 DSH** 才生效；本机当前设备记录指向的 `session-56293798-4c38-4efb-9ce8-1b73a46e7cca` 就在归档集合里（`updatedAt` 一直在涨，说明归档后插件仍在投递），所以用户重启后的下一句语音会自动开一个新会话。
+
 
 
 
