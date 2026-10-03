@@ -64,11 +64,15 @@ if (captured !== null) {
   // 2. The factory requires react plus the shared primitives library. It may
   //    NOT require a cordis service package: those belong in `dsh.client.inject`.
   const requested = [];
-  const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [], folds: [] };
+  const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [], folds: [], hidden: [] };
   const element = (type, props, key) => {
     // Native controls are not stubbed components, so capture the one the page
     // builds by hand: the project-group picker.
     if (type === 'select') seen.selects.push(props ?? {});
+    // Gated fields and gated sections stay mounted behind `xiaoai_hidden`, so
+    // the class list is what says whether a group is on the page right now.
+    const className = props && typeof props.className === 'string' ? props.className : '';
+    if (className.includes('xiaoai_hidden')) seen.hidden.push(className);
     return { type, props: props ?? {}, key: key ?? null };
   };
   const text = (children) => children;
@@ -220,6 +224,13 @@ if (captured !== null) {
           for (const heading of ['基本', '唤醒与语音', '豆包语音合成', '应答与兜底', '播报与回复器', '人格与提示词', '桥接器进程', '本地 API 服务', '运行状态']) {
             check(page.includes(heading), `page view is missing the section ${JSON.stringify(heading)}`);
           }
+          // The Doubao group is mounted but hidden while the provider is not
+          // Doubao: hiding rather than dropping keeps its drafts and validation
+          // messages, the same rule the gated fields follow.
+          check(
+            seen.hidden.includes('xiaoai_section xiaoai_hidden'),
+            'the Doubao section should carry xiaoai_hidden while the provider is not Doubao',
+          );
 
           // Every settings key the host can store must have a control here;
           // otherwise a value exists that the user can only change by hand.

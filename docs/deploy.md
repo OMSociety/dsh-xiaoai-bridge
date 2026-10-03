@@ -2922,9 +2922,11 @@ function isArchived(sessionId) {
 
 `ttsProvider` 三选一（跟随音色 / 小爱原生 / 豆包）；新增「豆包语音合成」分区（可折叠分区 7 → 8），六个字段都归它；开关 7 → 8（多一个 `doubaoStream`），段控件 3 → 4（多一个音频格式）。`ttsSpeaker` 原本挂在 `ttsProvider != 'mimo'` 的门上，MiMo 一走这道门就没有消费者，字段恢复常显，`GATE_DEFAULTS` 里那一项也随之删掉。`ttsSpeed` 是小数，`parseField` 的 number 分支本来就接受小数，只新增了一条范围文案 `invalid.rangeFloat`（原来那条 `invalid.range` 的措辞写死了「整数」）。
 
+「豆包语音合成」这一组只在 `ttsProvider` 选「豆包」时显示。做法是让 `SECTIONS` 的条目也能带同一个 `show` 门（`gateOpen()` 复用，不再给六个字段各挂一道），关上门时整组套 `xiaoai_hidden`：与字段联动同一条规矩——只改显示、不卸载，草稿与校验提示不丢，切回「豆包」立刻回到原样。`GATE_DEFAULTS` 为此补回 `ttsProvider: ""`，`/config` 还没答之前按「跟随音色」算，不会先闪一下再消失。代价是「跟随音色」＋豆包音色 ID 这条组合：桥接器仍走豆包合成，但该组设置不显示，只能用桥接器配置里的值——README 的豆包小节把这一点写明了。
+
 #### 12.45.6 检查
 
-`scripts/check-config.mjs`：空选择与 `xiaoai` / `doubao` 三种 `tts_provider` 写法、豆包四值按需写入、渲染结果不含 `access_key`、`stream` 与 `tts_speed` 的默认值也出现在稀疏文件里、子进程环境里没有 `DOUBAO_ACCESS_KEY`（由调用方加）、真 Python 加载后 `dsh_tts_provider` 与 `dsh_tts_speed` 是渲染的值；「未触碰分区不写进生成文件」那条的样本从 `tts.doubao` 换成 `tts.openai`（豆包段现在总有值可写）。`scripts/check-client.mjs`：标签清单与分区标题、折叠 8、开关 8、段 4 两处选项文案的逐字断言。`bridge/tests/test_tts_router.py` 新增 `DoubaoCredentialSourceTest` 三个用例（环境变量优先、配置值兜底、缺凭据先抛错）。`npm run check` 九条绿；`bridge` 的 `pytest -q` 由 127 升到 `130 passed, 19 subtests`（新增三个用例）。
+`scripts/check-config.mjs`：空选择与 `xiaoai` / `doubao` 三种 `tts_provider` 写法、豆包四值按需写入、渲染结果不含 `access_key`、`stream` 与 `tts_speed` 的默认值也出现在稀疏文件里、子进程环境里没有 `DOUBAO_ACCESS_KEY`（由调用方加）、真 Python 加载后 `dsh_tts_provider` 与 `dsh_tts_speed` 是渲染的值；「未触碰分区不写进生成文件」那条的样本从 `tts.doubao` 换成 `tts.openai`（豆包段现在总有值可写）。`scripts/check-client.mjs`：标签清单与分区标题、折叠 8、开关 8、段 4 两处选项文案的逐字断言；另加一条内容断言——默认视图（「跟随音色」）里豆包分区必须带 `xiaoai_hidden`，门控被摘掉就会失败。`bridge/tests/test_tts_router.py` 新增 `DoubaoCredentialSourceTest` 三个用例（环境变量优先、配置值兜底、缺凭据先抛错）。`npm run check` 九条绿；`bridge` 的 `pytest -q` 由 127 升到 `130 passed, 19 subtests`（新增三个用例）。
 
 #### 12.45.7 生效方式
 

@@ -253,7 +253,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 ### 豆包语音合成
 
-只有在想要豆包音色（固定音色、复刻音色、统一语速）时才要配这一组；用「跟随音色」加 `ttsSpeaker = xiaoai` 的话整组留空即可。
+这一组只在「语音合成方式」选「豆包」时显示，其余两种选择下整组隐藏（值还留着，切回「豆包」就原样回来）。只有在想要豆包音色（固定音色、复刻音色、统一语速）时才要配；用「跟随音色」加 `ttsSpeaker = xiaoai` 的话整组留空即可。注意「跟随音色」配上豆包音色 ID 也会走豆包合成，但这一组不显示，那时用的是桥接器配置里的值——所以要用豆包音色，直接选「豆包」最清楚。
 
 去哪拿：在火山引擎控制台开通豆包语音合成、创建应用，拿到 App ID 与 Access Token（App ID 与 Access Token 的位置见控制台使用 FAQ https://www.volcengine.com/docs/6561/196768 ，可选音色见音色列表 https://www.volcengine.com/docs/6561/1257544 ）。Access Token 存成 DSH 凭据，设置页只填凭据名。
 
