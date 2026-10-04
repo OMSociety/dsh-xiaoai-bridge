@@ -11,6 +11,7 @@
  */
 import { createBridgeClient } from '../lib/bridge.js';
 import { createDiagnostics, DEFAULT_LIMIT, DIAGNOSTIC_CODES } from '../lib/diagnostics.js';
+import { tokenHintApplies } from '../lib/index.js';
 
 let failures = 0;
 
@@ -168,6 +169,17 @@ function spyLogger() {
       return false;
     }
   })());
+}
+
+// 6. `token-not-applied` promises that a restart applies the API token, so it
+//    may only be recorded while that promise is keepable. A credential store
+//    can report a token it never hands over, and then the bridge stays
+//    loopback-only through any number of restarts.
+{
+  check('a loopback-only bridge with a passable token gets the restart hint', tokenHintApplies('loopback-only', true, true) === true);
+  check('a bridge already honouring its token never gets the hint', tokenHintApplies('bearer', true, true) === false);
+  check('a token the store only claims is not enough for the hint', tokenHintApplies('loopback-only', true, false) === false);
+  check('a bridge is not hinted when the store holds nothing at all', tokenHintApplies('loopback-only', false, false) === false);
 }
 
 if (failures > 0) {

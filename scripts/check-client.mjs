@@ -560,6 +560,69 @@ if (captured !== null) {
               `lib/diagnostics.js reports ${JSON.stringify(code)} but the page has no wording for it`,
             );
           }
+
+          // 10. The save path's conflict handling and the config read's failure
+          //     branch. Neither can be reached from the rendered snapshot (the
+          //     harness never answers /config or /health), but both decide what
+          //     the user still has on screen afterwards, so assert the branches
+          //     that keep the draft and the snapshot alive.
+          check(
+            source.includes('if (keepDraft !== true) applySnapshot(out.body.descriptor);'),
+            'a conflict reload must refresh the revision without re-seeding the draft',
+          );
+          check(
+            source.includes('loadConfig(true);'),
+            'the 409 branch must keep the draft so the same ops can be saved again',
+          );
+          check(
+            (source.match(/snapshot: null/g) ?? []).length === 1,
+            'only the initial state may start without a snapshot',
+          );
+          check(
+            (source.match(/status: "error", snapshot: prev\.snapshot/g) ?? []).length === 2,
+            'both config-read failure paths must keep the last usable snapshot',
+          );
+
+          // 11. The catalogue's degraded states: a failed read disables the
+          //     picker (the list on screen is not a list of what can be picked)
+          //     while the idle/loading state stays selectable, and a read that
+          //     lost a provider says so instead of looking merely short.
+          check(
+            source.includes('var routeDisabled = catalog.status === "error" || catalog.status === "unavailable";')
+              && source.includes('disabled: routeDisabled,'),
+            'a failed catalogue read must disable the route picker',
+          );
+          check(
+            source.includes('catalog.failures.length > 0') && source.includes('"route.partial"'),
+            'a catalogue read that lost a provider group must say so in the picker',
+          );
+          check(
+            routePicker?.disabled === false,
+            'the route picker must stay selectable while the catalogue is idle or loading',
+          );
+
+          // 12. Copy parity and the dead-hint guard. Every user-visible string
+          //     lives in the two inline dictionaries, and a key that only one
+          //     language carries (or that no control ever shows) is invisible
+          //     until someone reads the page in that language.
+          const copy = dictionaries.get('plugin.xiaoai');
+          const zhKeys = Object.keys(copy?.zh ?? {}).sort();
+          const enKeys = Object.keys(copy?.en ?? {}).sort();
+          check(zhKeys.length > 0, 'the bundle must register its zh dictionary');
+          check(
+            JSON.stringify(zhKeys) === JSON.stringify(enKeys),
+            'the zh and en dictionaries must carry the same keys',
+          );
+          const deadHints = [...new Set([...source.matchAll(/"hint\.([A-Za-z0-9]+)":/g)].map((match) => match[1]))]
+            .filter((key) => source.split(`"hint.${key}"`).length - 1 <= 2);
+          check(deadHints.length === 0, `settings wording exists but no control shows it: ${JSON.stringify(deadHints)}`);
+          // translate() falls back to the key itself when the zh dictionary has
+          // no wording for it, so a raw "hint." on the page means a control is
+          // showing a key instead of an explanation.
+          check(!page.includes('hint.') && !summary.includes('hint.'), 'a control shows a hint key instead of its wording');
+          for (const key of zhKeys) {
+            check(String(copy.en[key] ?? '').length > 0, `the en dictionary is missing wording for ${JSON.stringify(key)}`);
+          }
         } catch (err) {
           failures.push('component render threw: ' + String(err?.message ?? err));
         }

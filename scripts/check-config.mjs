@@ -348,6 +348,27 @@ eq(
 );
 eq(sanitizeConfig({ ...DEFAULTS }).repairs.length, 0, 'a usable section reports no repairs');
 
+// The keys above carry hand-written rules because their usable values are
+// narrower than their type. Every other key is checked against the type of its
+// `DEFAULTS` entry, so a value of the wrong shape in a file, a patch or a
+// composition base still cannot reach the runtime.
+const typed = sanitizeConfig({ ...DEFAULTS, deviceHost: { host: 'x' }, enabled: 'yes', sessionKey: 42 });
+eq(typed.value.deviceHost, DEFAULTS.deviceHost, 'a non-string device host falls back to the default');
+eq(typed.value.enabled, DEFAULTS.enabled, 'a non-boolean switch falls back to the default');
+eq(typed.value.sessionKey, DEFAULTS.sessionKey, 'a non-string session key falls back to the default');
+eq(
+  typed.repairs.map((repair) => repair.key).sort(),
+  ['deviceHost', 'enabled', 'sessionKey'],
+  'the derived type rules report by name too',
+);
+// An emptied field means "keep the built-in default" for the keys documented
+// that way, so the type rule must not turn one into a repair.
+eq(
+  sanitizeConfig({ ...DEFAULTS, sessionCwd: '', agentPreset: '' }).repairs.length,
+  0,
+  'an emptied keep-the-default field is still not a repair',
+);
+
 /** @param {object} patch @returns {boolean} whether the strict check refused it */
 function refused(patch) {
   try {
@@ -360,6 +381,10 @@ function refused(patch) {
 ok(refused({ wakeupTimeout: 20.5 }), 'a fractional wakeupTimeout is refused by the strict check');
 ok(refused({ apiServerPort: 70000 }), 'an out-of-range port is refused by the strict check');
 ok(refused({ apiServerHost: '' }), 'a blank host is refused by the strict check');
+// The strict path is also what a type-ruled key meets: the repair above must not
+// have moved the write side onto a looser rule.
+ok(refused({ deviceHost: {} }), 'the strict check refuses a non-string device host as well');
+ok(!refused({ wakeupTimeout: 600 }), 'the top of the timeout range is still accepted');
 ok(!refused({}), 'a usable section passes the strict check');
 
 console.log(failures === 0 ? '\nconfig check OK' : `\nconfig check FAILED (${failures})`);

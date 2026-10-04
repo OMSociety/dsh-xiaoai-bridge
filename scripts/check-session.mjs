@@ -412,13 +412,13 @@ check('the scope hook ran for the model-less host', () => {
 // context, so this is unit-tested with a plugin context and an agent context
 // that both record what they are asked to register.
 console.log('case 10: exposure manager');
-function exposureHarness({ speakFromAnySession = false, seam = true, failRegister = false } = {}) {
+function exposureHarness({ speakFromAnySession = false, seam = true, failRegister = false, failGlobalSkill = false } = {}) {
   const globals = [];
   const env = { scoped: [], notes: [], warnings: [] };
   let config = { speakFromAnySession };
-  const sink = (target) => ({
+  const sink = (target, { fail = false } = {}) => ({
     register: (definition) => {
-      if (failRegister) throw new Error('registry refused');
+      if (failRegister || fail) throw new Error('registry refused');
       const entry = { name: definition.name };
       target.push(entry);
       return () => {
@@ -428,7 +428,9 @@ function exposureHarness({ speakFromAnySession = false, seam = true, failRegiste
     },
   });
   const exposure = createExposure({
-    ctx: { tools: sink(globals), skills: sink(globals) },
+    // The global skills registry can be made to refuse while the tools one
+    // accepts: that is the half-registration the rollback has to undo.
+    ctx: { tools: sink(globals), skills: sink(globals, { fail: failGlobalSkill }) },
     getConfig: () => config,
     logger: { info: () => {}, warn: (line) => { env.warnings.push(String(line)); } },
     diagnostics: { note: (entry) => { env.notes.push(entry); } },
@@ -525,6 +527,34 @@ e6.exposure.syncGlobal();
 check('only an explicit true opens the escape hatch', () => {
   assert.deepEqual(e6.globals, []);
   assert.equal(e6.exposure.state().mode, 'scoped');
+});
+
+const e7 = exposureHarness({ speakFromAnySession: true, failGlobalSkill: true });
+e7.exposure.syncGlobal();
+check('a global layer that fails halfway is unwound, not left half-open', () => {
+  assert.deepEqual(e7.globals, []);
+  assert.deepEqual(e7.codes(), [SCOPE_FAILED_CODE]);
+  assert.equal(e7.exposure.state().mode, 'scoped');
+});
+e7.exposure.syncGlobal();
+e7.exposure.dispose();
+check('a retry after the failed layer never adopts a stray entry', () => {
+  assert.deepEqual(e7.globals, []);
+  assert.equal(e7.exposure.state().mode, 'scoped');
+});
+
+const e8 = exposureHarness({ seam: false });
+e8.exposure.attach(e8.agentCtx);
+e8.setConfig({ speakFromAnySession: true });
+e8.exposure.syncGlobal();
+e8.setConfig({ speakFromAnySession: false });
+e8.exposure.syncGlobal();
+e8.exposure.attach(e8.otherCtx);
+check('a registration that succeeds resets the missing-seam latch', () => {
+  assert.deepEqual(e8.globals, []);
+  assert.deepEqual(e8.codes(), [SCOPE_UNAVAILABLE_CODE, SCOPE_UNAVAILABLE_CODE]);
+  assert.equal(e8.exposure.state().mode, 'unavailable');
+  assert.equal(e8.exposure.state().scopeSeam, false);
 });
 
 // --- case 11: the Agent preset ----------------------------------------------
