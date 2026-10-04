@@ -33,17 +33,25 @@ class WakeupSessionManager:
         - mphelper pause: stop non-blocking TTS (mibrain text_to_speech via mediaplayer)
         - stop_playing: kill aplay (our PCM channel)
         - start_playing / start_recording: restart audio streams
+
+        播放全停之后还要重置半双工闸门：被打断/被抢断的那一路留下的设备占用
+        （`hold_until_device_stops` 的登记）否则会把麦克风通路继续关着，用户
+        下一句进不来。重置必须排在设备命令之后，否则麦克风会在音箱还在响的
+        时候就恢复收音（自问自答）。
         """
         speaker = get_speaker()
         if speaker:
             await speaker.stop_device_audio()
+        else:
             import dsh_xiaoai_server
-            await dsh_xiaoai_server.start_recording()
-            return
+            await dsh_xiaoai_server.stop_playing()
 
         import dsh_xiaoai_server
-        await dsh_xiaoai_server.stop_playing()
         await dsh_xiaoai_server.start_recording()
+
+        from core.utils.playback_gate import PlaybackGate
+
+        PlaybackGate.reset()
 
     def on_interrupt(self):
         logger.info("[Wakeup] XiaoAI wakeup — interrupting active sessions")
@@ -60,6 +68,13 @@ class WakeupSessionManager:
         if self._dsh_task and not self._dsh_task.done():
             loop.call_soon_threadsafe(self._dsh_task.cancel)
 
+        # API Server 的播报队列也要一起打断：只停设备上的当前一路，早先排队的
+        # 话会在闸门放行后接着念。队列任务住在 app 循环里，这里通常在别的线程
+        # 上，所以走 call_soon_threadsafe（闸门由 _stop_device_playback 重置）。
+        from core.services.api_server import cancel_pending_plays
+
+        loop.call_soon_threadsafe(cancel_pending_plays)
+
         asyncio.run_coroutine_threadsafe(self._stop_device_playback(), loop)
 
         from core.xiaoai import XiaoAI
@@ -72,6 +87,18 @@ class WakeupSessionManager:
     def on_silence(self):
         """Called by VAD when silence is detected."""
         pass
+
+    @staticmethod
+    def is_playback_active() -> bool:
+        """播报期间（半双工闸门关着）为 True。
+
+        `consume_xiaoai_asr_result` 在闸门关着时丢弃结果并返回 False，调用方
+        （`XiaoAI.on_event`）无法据此区分"没有活动会话、可以继续走"和"这是播报
+        期的回声、必须到此为止"，所以另开这一个只读查询。
+        """
+        from core.utils.playback_gate import PlaybackGate
+
+        return PlaybackGate.closed
 
     def consume_xiaoai_asr_result(
         self,
@@ -122,14 +149,19 @@ class WakeupSessionManager:
 
         if kws:
             kws.pause()
-        should_wakeup = await before_wakeup(
-            get_speaker(),
-            text,
-            source,
-            get_app(),
-        )
-        if kws:
-            kws.resume()
+        try:
+            should_wakeup = await before_wakeup(
+                get_speaker(),
+                text,
+                source,
+                get_app(),
+            )
+        finally:
+            # 与 pause 配对：`before_wakeup` 是用户可改的配置函数（bridge/config.py
+            # 渲染出来的），抛错或被取消时也必须恢复唤醒词检测，否则 KWS 永久
+            # paused、音箱再也叫不醒，只能重启桥接器。
+            if kws:
+                kws.resume()
         logger.info(f"[Wakeup] before_wakeup returned: {should_wakeup}")
         if should_wakeup is not None:
             await self.reset_all_sessions()

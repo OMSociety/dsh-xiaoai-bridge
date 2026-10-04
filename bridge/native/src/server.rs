@@ -44,6 +44,68 @@ fn is_silent_start() -> bool {
     }
 }
 
+/// Token the speaker must present to be served, from `DSH_XIAOAI_TOKEN`.
+///
+/// The plugin hands the same value down that the API Server uses; empty means
+/// the plugin did not provide one and the handshake is not checked.
+fn expected_token() -> String {
+    env::var("DSH_XIAOAI_TOKEN").unwrap_or_default()
+}
+
+/// Percent-decode one query value. `+` is left alone: tokens are compared raw.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Pull `token` out of a request URI's query string (`/?token=...`).
+///
+/// The stock open-xiaoai client sends no headers at all — the coderzc fork can
+/// be told to with `OPEN_XIAOAI_TOKEN`, but the binary most speakers run cannot.
+/// Accepting the token in the dial URL lets those devices opt in by editing
+/// `/data/open-xiaoai/server.txt` alone, with no re-flash.
+fn query_token(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key == "token" {
+                return Some(percent_decode(value));
+            }
+        }
+    }
+    None
+}
+
+/// Compare two tokens without a data-dependent early exit: every byte of the
+/// common length is always folded in, so a wrong guess leaks no timing about
+/// *where* it first differs. A length mismatch still returns immediately -- the
+/// lengths are fixed token strings, not secret material.
+fn tokens_match(presented: &str, expected: &str) -> bool {
+    let (a, b) = (presented.as_bytes(), expected.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 async fn test() -> Result<(), AppError> {
     if !is_silent_start() {
         SpeakerManager::play_text("已连接").await?;
@@ -75,16 +137,27 @@ async fn test() -> Result<(), AppError> {
 
 impl AppServer {
     pub async fn connect(stream: TcpStream) -> Result<WsStream, AppError> {
-        let expected_token = std::env::var("DSH_XIAOAI_TOKEN").unwrap_or_default();
-        if !expected_token.is_empty() {
+        let expected = expected_token();
+        if !expected.is_empty() {
             use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
             let ws_stream = accept_hdr_async(stream, move |req: &Request, response: Response| {
-                let auth = req
+                // Either a `Bearer` header (the fork's client, or any other
+                // client that can set one) or `?token=` in the dial URL, which
+                // the stock client passes through untouched from server.txt.
+                let header = req
                     .headers()
                     .get("Authorization")
                     .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                if auth != format!("Bearer {}", expected_token) {
+                    .and_then(|v| v.strip_prefix("Bearer "))
+                    // A `Bearer ` with an empty value must not shadow a valid
+                    // `?token=`: `or_else` below is only evaluated while this is
+                    // `None`, and an empty value can never match a non-empty
+                    // expected token anyway.
+                    .filter(|value| !value.is_empty());
+                let presented = header
+                    .map(str::to_string)
+                    .or_else(|| req.uri().query().and_then(query_token));
+                if presented.as_deref().map(|value| tokens_match(value, &expected)) != Some(true) {
                     let error: ErrorResponse = tokio_tungstenite::tungstenite::http::Response::builder()
                         .status(401)
                         .body(Some("Unauthorized".to_string()))
@@ -107,9 +180,35 @@ impl AppServer {
             .await
             .expect(format!("[AppServer] ❌ 绑定地址失败: {}", &addr).as_str());
         crate::pylog!("[AppServer] ✅ 已启动: {:?}", addr);
-        while let Ok((stream, addr)) = listener.accept().await {
-            // 同一时刻只处理一个连接
-            AppServer::handle_connection(stream, addr).await;
+        if expected_token().is_empty() {
+            crate::pylog!(
+                "[AppServer] ⚠️ DSH_XIAOAI_TOKEN 为空，4399 的握手不做鉴权（设置里「音箱连接鉴权」关闭，或拿不到访问令牌）；\
+如需鉴权请打开该开关或给插件配一枚令牌。"
+            );
+        }
+        // A failing accept (a full descriptor table is the realistic one) used to
+        // end the loop for good and leave 4399 dead until the next restart. Retry
+        // forever, but back off while it keeps failing: ten attempts per second
+        // would otherwise write ten log lines per second for the rest of the run.
+        let mut failures: u32 = 0;
+        loop {
+            match listener.accept().await {
+                // 同一时刻只处理一个连接
+                Ok((stream, addr)) => {
+                    failures = 0;
+                    AppServer::handle_connection(stream, addr).await
+                }
+                Err(e) => {
+                    let delay_ms = 100u64.saturating_mul(1u64 << failures.min(6));
+                    crate::pylog!(
+                        "[AppServer] ❌ 接受连接失败: {}（{} 毫秒后继续监听）",
+                        e,
+                        delay_ms
+                    );
+                    failures = failures.saturating_add(1);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+            }
         }
     }
 
@@ -119,7 +218,12 @@ impl AppServer {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("401") || msg.contains("Unauthorized") {
-                    crate::pylog!("[AppServer] ❌ 鉴权失败: {}", addr);
+                    crate::pylog!(
+                        "[AppServer] ❌ 鉴权失败: {}（音箱要带上与「访问令牌凭据名」相同的令牌：\
+支持令牌的客户端在设备上加 OPEN_XIAOAI_TOKEN，其它客户端把 /data/open-xiaoai/server.txt \
+写成 ws://<电脑IP>:4399?token=<令牌>；不要这层就在设置里关掉「音箱连接鉴权」）",
+                        addr
+                    );
                 } else {
                     crate::pylog!("[AppServer] ❌ 连接异常: {} ({})", addr, msg);
                 }

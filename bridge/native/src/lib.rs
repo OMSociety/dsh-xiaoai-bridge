@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde_json::json;
 use server::AppServer;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 pub mod macros;
 pub mod opus;
@@ -13,9 +13,24 @@ pub mod python;
 pub mod server;
 pub mod tts;
 
+/// The remote aplay is not known to be running; the next frame starts it.
+pub(crate) const PLAYER_IDLE: u8 = 0;
+/// A `start_play` RPC is in flight; other frames must not send a second one.
+pub(crate) const PLAYER_STARTING: u8 = 1;
+/// The device accepted `start_play`; frames can be sent without another RPC.
+pub(crate) const PLAYER_READY: u8 = 2;
+
 /// Tracks whether the remote aplay process is known to be freshly started.
-/// Set to false by stop_playing; checked before sending audio data.
-static PLAYER_READY: AtomicBool = AtomicBool::new(false);
+///
+/// Three states, not a bool: the old code flipped a bool to "ready" *before*
+/// the RPC that actually starts aplay and dropped its result, so one failed
+/// `start_play` (device busy, socket gone) left the flag claiming a player that
+/// was never started -- every later frame was streamed into nothing and no
+/// caller ever retried until someone called `stop_playing`. Ready now means the
+/// device answered; a failed start falls back to idle so the next frame tries
+/// again. `tts::ensure_player_started` resets it the same way `stop_playing`
+/// does.
+pub(crate) static PLAYER_STATE: AtomicU8 = AtomicU8::new(PLAYER_IDLE);
 
 /// Default playback AudioConfig (24kHz, 200ms buffer).
 fn playback_config() -> AudioConfig {
@@ -29,14 +44,98 @@ fn playback_config() -> AudioConfig {
     }
 }
 
+/// Hands the "starting" latch back to idle if the `start_play` round trip never
+/// finishes.
+///
+/// `ensure_player_ready` awaits a Python-visible future: pyo3-async-runtimes
+/// drops the Rust future when the caller's `asyncio.Task` is cancelled, and a
+/// future dropped after it claimed `PLAYER_STARTING` would otherwise leave the
+/// player permanently "starting" -- every later frame skips the RPC and stays
+/// silently muted, with nothing in the log. Returning the latch on drop can cost
+/// one redundant `start_play` at worst; it can never hand the latch to two
+/// callers, because only the owner of `PLAYER_STARTING` can release it.
+struct PlayerStartGuard {
+    armed: bool,
+}
+
+impl PlayerStartGuard {
+    fn new() -> Self {
+        Self { armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PlayerStartGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = PLAYER_STATE.compare_exchange(
+                PLAYER_STARTING,
+                PLAYER_IDLE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+    }
+}
+
 /// Ensure the remote aplay is freshly started. Skips the RPC if already ready.
 pub async fn ensure_player_ready() {
-    if PLAYER_READY.swap(true, Ordering::SeqCst) {
-        return; // already ready
+    // Only an idle latch wins the right to send the RPC. "Ready" and "starting"
+    // both mean somebody already has this covered, which is what the old bool's
+    // swap did -- but a refused RPC now returns the latch to idle instead of
+    // leaving it stuck at ready.
+    if PLAYER_STATE
+        .compare_exchange(
+            PLAYER_IDLE,
+            PLAYER_STARTING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
     }
-    let _ = RPC::instance()
+    let mut guard = PlayerStartGuard::new();
+    match RPC::instance()
         .call_remote("start_play", Some(json!(playback_config())), None)
-        .await;
+        .await
+    {
+        Ok(_) => {
+            // Only the call that still owns `PLAYER_STARTING` may claim ready.
+            // An unconditional store here would race `stop_playing` (or the
+            // reset `ensure_player_started` performs): a stop landing while the
+            // RPC is in flight has already sent `stop_play`, so storing ready
+            // afterwards leaves every later frame streaming into a player that
+            // was told to stop -- silent until the next explicit restart.
+            guard.disarm();
+            match PLAYER_STATE.compare_exchange(
+                PLAYER_STARTING,
+                PLAYER_READY,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {}
+                // Another start claimed it while this one was in flight; ready
+                // is the state we wanted anyway, so stay quiet.
+                Err(PLAYER_READY) => {}
+                Err(_) => {
+                    crate::pylog!(
+                        "[Audio] ⚠️ start_play 返回前播放已被停止，这次就绪状态作废（下一次播放会重新启动）"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            // The guard already returned the latch to idle on the way out.
+            crate::pylog!(
+                "[Audio] ❌ 启动远端播放器失败: {}（下一次播放会重试）",
+                e
+            );
+        }
+    }
 }
 
 #[pyfunction]
@@ -80,7 +179,7 @@ fn run_shell(py: Python, script: String, timeout_millis: f64) -> PyResult<Bound<
 /// Stop the remote aplay process (interrupts PCM audio playback immediately).
 #[pyfunction]
 fn stop_playing(py: Python) -> PyResult<Bound<PyAny>> {
-    PLAYER_READY.store(false, Ordering::SeqCst);
+    PLAYER_STATE.store(PLAYER_IDLE, Ordering::SeqCst);
     pyo3_async_runtimes::tokio::future_into_py(py, async {
         let _ = RPC::instance()
             .call_remote("stop_play", None, None)
@@ -92,7 +191,7 @@ fn stop_playing(py: Python) -> PyResult<Bound<PyAny>> {
 /// Restart the remote aplay process for audio playback.
 #[pyfunction]
 fn start_playing(py: Python) -> PyResult<Bound<PyAny>> {
-    PLAYER_READY.store(false, Ordering::SeqCst);
+    PLAYER_STATE.store(PLAYER_IDLE, Ordering::SeqCst);
     pyo3_async_runtimes::tokio::future_into_py(py, async {
         ensure_player_ready().await;
         Ok(())

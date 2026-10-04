@@ -17,13 +17,18 @@ Supported backends (set via APP_CONFIG["asr"]["model"]):
 
 选了一个没装模型的后端也别把音箱弄哑（防呆，三层）：
   1. 名字不认识 → 退回当前在用的后端（首次启动退回 DEFAULT_BACKEND），只警告一次；
-  2. 名字认识但装不上 → 继续用已经装好的那个 recognizer，只警告一次，
-     并把原因记进 `_last_error`（`/api/health` 会报给插件侧提示用户）；
+  2. 名字认识但装不上 → 继续用已经装好的那个 recognizer，警告一次，
+     并把原因记进 `_last_error`（`/api/health` 会报给插件侧提示用户）。
+     失败签名带冷却（`_FAILED_RETRY_COOLDOWN_SECONDS`）而不是终身拒绝：
+     冷却过后允许再试，模型文件事后补齐时更是立刻放行——所以"先切到
+     没装模型的后端、之后把模型装上、继续说话"能自动恢复，不必重启进程
+     或来回切换后端；
   3. 真的一个都装不上，才抛异常（这时的正确状态是让上层知道 ASR 不可用）。
 """
 
 import os
 import threading
+import time
 
 import numpy as np
 
@@ -68,6 +73,14 @@ _BACKENDS = {
     },
 }
 
+# 装载失败后的冷却时间（秒）：失败记下 `(载荷签名, 失败时刻)`，冷却期内认了，
+# 冷却过后放行再试一次。旧实现把失败签名记成"终身拒绝"（`_failed_key` 只在
+# 成功装载时清空），于是"先切到没装模型的后端 → 事后把模型装上 → 继续说话"
+# 这条最自然的恢复路径永远是死的：装上的模型再也不会被装载，`/api/health`
+# 还会一直报那条过期的 error。冷却窗口既给了自动恢复的机会，又保留了原来的
+# 防呆目的——不让每一句话都等一次注定失败的装载（一次失败 1~3 秒）。
+_FAILED_RETRY_COOLDOWN_SECONDS = 60.0
+
 
 class _SherpaASR:
     """Wrapper around sherpa_onnx.OfflineRecognizer with configurable backend."""
@@ -76,8 +89,14 @@ class _SherpaASR:
         self._recognizer = None
         # 生效的载荷签名 (backend, use_int8, model_dir)：只有它变了才重建。
         self._loaded_key: tuple | None = None
-        # 已经报过"装不上"的请求签名：免得每一句话都重试一次失败的加载。
+        # 已经报过"装不上"的请求签名，以及那次失败的时刻：冷却期内不再重试
+        # （见 `_failed_retry_allowed()`），免得每一句话都等一次失败的加载。
         self._failed_key: tuple | None = None
+        self._failed_at: float = 0.0
+        # 失败当刻"模型文件是否已经齐全"：False 说明是缺文件（模型没装），
+        # 之后文件一补上就立刻放行重试，不必干等冷却；True 说明文件在但装载
+        # 仍失败（多半是依赖问题），这种失败只能等冷却。
+        self._failed_files_ready: bool = False
         # 建一个 recognizer 要 1~3 秒（本机实测），预热线程、重载线程和用户
         # 说的第一句话可能同时进来，没有锁会建出两个（内存和时间都翻倍）。
         self._load_lock = threading.Lock()
@@ -162,6 +181,25 @@ class _SherpaASR:
             f"{', '.join(required_files.values())}."
         )
 
+    def _model_files_ready(self, backend: str, model_dir_name: str) -> bool:
+        """按 `_build()` 的口径查文件：这个后端现在装得上吗（只查文件，不建模型）。
+
+        与 `available_backends()` 的区别是它跟着 `asr.model_dir` 的显式点名走：
+        配置点名了一个错目录时，不该因为"别处碰巧有个同名模型目录"就判定成
+        文件已补齐，否则会退化成每一句话都重试一次注定失败的装载。
+        """
+        spec = _BACKENDS.get(backend)
+        if spec is None:
+            return False
+        try:
+            required_files = self._get_required_model_files(backend)
+            model_dir = self._find_model_dir(
+                spec["dir_keyword"], required_files, model_dir_name
+            )
+        except Exception:
+            return False
+        return os.path.isfile(os.path.join(model_dir, "tokens.txt"))
+
     def available_backends(self) -> list[str]:
         """本机装了模型的后端（给 `/api/health` 与设置页提示用，只查文件不建模型）。"""
         models_root = get_model_file_path("")
@@ -224,6 +262,23 @@ class _SherpaASR:
         )
         return recognizer
 
+    def _failed_retry_allowed(self, backend: str, model_dir: str) -> bool:
+        """刚失败过的载荷现在能不能再试一次（只在"确实失败过"这一支调用）。
+
+        两条放行条件，任一满足即放行：
+          1. 冷却（`_FAILED_RETRY_COOLDOWN_SECONDS`）已过——给"依赖层面"的
+             失败（模型文件没变，比如 onnxruntime 装好了）留一条自动恢复的路；
+          2. 上次失败时文件还没齐、现在齐了——"把模型装上 → 继续说话"这条
+             最自然的恢复路径应当当场生效，不必让用户干等冷却。
+        两条都不满足时保持原防呆：不让每一句话都等一次注定失败的装载。
+        """
+        if time.monotonic() - self._failed_at >= _FAILED_RETRY_COOLDOWN_SECONDS:
+            return True
+        if self._failed_files_ready:
+            # 文件上次就在，这次失败跟"模型没装"无关，只能等冷却。
+            return False
+        return self._model_files_ready(backend, model_dir)
+
     def _ensure_loaded(self):
         """装载（或热换）配置要的那个后端。
 
@@ -249,27 +304,51 @@ class _SherpaASR:
         with self._load_lock:
             if self._recognizer is not None and self._loaded_key == key:
                 return
-            if self._failed_key == key:
-                # 这个配置已经报过装不上：别再让每一句话都等一次失败的加载。
+            retrying = self._failed_key == key
+            if retrying and not self._failed_retry_allowed(backend, model_dir):
+                # 这个配置刚报过装不上：冷却期内别再让每一句话都等一次失败的
+                # 加载。冷却过后（或模型文件补上后）会走到下面重试。
                 return
             previous = self._loaded_key
             try:
                 recognizer = self._build(backend, model_dir)
             except Exception as exc:
                 self._failed_key = key
+                self._failed_at = time.monotonic()
+                # 记下失败当刻文件齐不齐：缺文件的那种失败，文件补上就立刻重试。
+                self._failed_files_ready = self._model_files_ready(backend, model_dir)
                 self._handle_build_failure(backend, previous, exc)
                 return
             self._recognizer = recognizer
             self._loaded_key = key
             self._failed_key = None
+            self._failed_at = 0.0
+            self._failed_files_ready = False
             self._last_error = None
-            if previous is not None and previous[0] != backend:
-                logger.asr_event(
-                    "语音识别服务热重载", f"{previous[0]} → {backend}"
+            if retrying:
+                # 这次成功是"失败过又重试"来的：单独记一条，排错时可以按它
+                # 对照 `/api/health` 的 `asr.error`（此时已经清空）。
+                detail = (
+                    f"{previous[0]} → {backend}（上次装载失败，重试成功）"
+                    if previous is not None and previous[0] != backend
+                    else f"{backend} 重试装载成功"
                 )
+                logger.asr_event("语音识别服务恢复", detail)
+            elif previous is not None and previous[0] != backend:
+                logger.asr_event("语音识别服务热重载", f"{previous[0]} → {backend}")
 
     def _handle_build_failure(self, backend: str, previous, exc: Exception):
-        """(防呆 2) 装不上时说清楚，并尽量留住还能用的那个 recognizer。"""
+        """(防呆 2) 装不上时说清楚，并尽量留住还能用的那个 recognizer。
+
+        恢复路径（`_last_error` 与 `/api/health` 的 `asr.error` 会一直报这条
+        原因，直到下面任一条把它清掉；旧实现里它们直到进程重启都不会清）：
+          - 把模型文件补上：文件名/目录对得上之后，**继续说话**或下一次配置
+            重载就会立刻重试（`/api/health` 轮询本身不会触发装载）；
+          - 文件没变（缺的是依赖）时等冷却：`_FAILED_RETRY_COOLDOWN_SECONDS`
+            过后允许再试一次；
+          - 或者切到一个能装上的后端再切回来：那次成功装载会清空失败记录，
+            切回来就立即重试。重存同一个值没有用（签名没变，仍受冷却约束）。
+        """
         self._last_error = str(exc)
         if self._recognizer is not None:
             logger.warning(
@@ -321,7 +400,13 @@ class _SherpaASR:
         if backend is None:
             return
         key = self._load_key(backend, model_dir)
-        if self._loaded_key == key or self._failed_key == key:
+        if self._loaded_key == key:
+            return
+        if self._failed_key == key and not self._failed_retry_allowed(
+            backend, model_dir
+        ):
+            # 冷却内（且文件没补齐）不重复起线程；冷却过后或模型补上后放行，
+            # 让"把模型装上"不必等到用户开口说话才生效。
             return
         threading.Thread(target=self._reload, name="asr-reload", daemon=True).start()
 
@@ -338,7 +423,13 @@ class _SherpaASR:
         logger.warning(f"[ASR] {message}", module="ASR")
 
     def status(self) -> dict:
-        """给 `/api/health` 与设置页看的实况：要什么、在跑什么、哪些装得上。"""
+        """给 `/api/health` 与设置页看的实况：要什么、在跑什么、哪些装得上。
+
+        `error` 是**最近一次**装载失败的原因，不再是"一次失败就报一辈子"：
+        下一次重试成功（冷却到期后的第一句话、或模型文件补上后的第一句话 /
+        第一次配置重载）就会把它清空；`active` 同理可能在设置没变的情况下
+        被自动恢复改写。这里只查文件、不建模型，也不会触发装载。
+        """
         requested, backend, _model_dir = self._request()
         return {
             "requested": requested,

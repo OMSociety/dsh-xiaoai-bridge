@@ -3,8 +3,9 @@
 为什么值得盯着：桥接器每秒轮询配置文件，`ConfigManager` 重载完会回调
 ASR；如果这里只会"第一次装好就不再看配置"，用户切了后端就只能重启进程
 （这正是修复前的情况），而选一个没装模型的后端时，日志和界面都不会说
-一句。断言锁三件事：载荷没变不重建、载荷变了重建、装不上时留着旧的那个
-并只警告一次。
+一句。断言锁这些事：载荷没变不重建、载荷变了重建、装不上时留着旧的那个
+并只警告一次，以及**装不上的签名不能记成终身拒绝**——失败要带冷却，
+模型文件事后补齐时更要立刻放行重试（旧实现里"把模型装上再说话"是死路）。
 
 全程用假的模型目录与假的 `sherpa_onnx.OfflineRecognizer`，不加载真模型。
 """
@@ -23,6 +24,7 @@ from core.services.audio.asr import sherpa
 
 SENSE_VOICE_DIR = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 PARAFORMER_DIR = "sherpa-onnx-paraformer-trilingual-zh-cantonese-en"
+FIRE_RED_DIR = "sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16"
 
 
 class _FakeConfig:
@@ -317,3 +319,192 @@ def test_asr_decodes_with_the_recognizer_it_checked(bench):
 
     assert text == "你好 地球"
     assert asr._recognizer.decoded == 1
+
+
+# ---- R4-1：装载失败是"带冷却的失败"，不是终身拒绝 --------------------
+
+
+def test_installing_the_model_after_a_failure_retries_on_the_next_sentence(bench):
+    """修复前这里是死路：模型装上后继续说话也永远不会生效。
+
+    失败当刻文件不齐（`_failed_files_ready is False`），所以文件一补齐就
+    立刻放行，不必干等冷却——这是最自然的恢复路径。
+    """
+    bench.install(SENSE_VOICE_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    bench.set_backend("fire_red_asr")  # 本机没装
+    asr._ensure_loaded()
+
+    assert asr._failed_key[0] == "fire_red_asr"
+    assert asr._failed_at > 0.0
+    assert asr._failed_files_ready is False
+    assert asr.status()["known"] is True
+    assert asr.status()["active"] == "sense_voice"
+    assert asr.status()["error"]
+    assert "fire_red_asr" not in asr.status()["available"]
+    assert len(bench.logger.warnings()) == 1
+
+    bench.install(
+        FIRE_RED_DIR, files=("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")
+    )
+    asr._ensure_loaded()  # 不等冷却：文件补齐就是放行条件
+
+    assert bench.built() == ["from_sense_voice", "from_fire_red_asr"]
+    assert asr.status()["active"] == "fire_red_asr"
+    assert "fire_red_asr" in asr.status()["available"]
+    assert asr.status()["error"] is None
+    assert asr._last_error is None
+    assert asr._failed_key is None
+    assert asr._failed_at == 0.0
+    assert len(bench.logger.warnings()) == 1  # 失败那条不重复
+    assert any("恢复" in message for message in bench.events("event"))
+
+
+def test_a_missing_tokens_file_is_retried_once_it_appears(bench):
+    """缺 tokens.txt 与缺整个模型目录一样是"补上就当场恢复"。"""
+    bench.install(SENSE_VOICE_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    bench.install(PARAFORMER_DIR, files=("model.int8.onnx",))  # 缺 tokens.txt
+    bench.set_backend("paraformer")
+    asr._ensure_loaded()
+
+    assert "tokens.txt" in asr.status()["error"]
+    assert asr._failed_files_ready is False
+    assert asr.status()["active"] == "sense_voice"
+
+    (bench.models_root / PARAFORMER_DIR / "tokens.txt").write_bytes(b"")
+    asr._ensure_loaded()
+
+    assert bench.built() == ["from_sense_voice", "from_paraformer"]
+    assert asr.status()["active"] == "paraformer"
+    assert asr.status()["error"] is None
+
+
+def test_a_dependency_failure_retries_only_once_per_cooldown(bench, monkeypatch):
+    """文件都在时的失败（依赖层面）只能等冷却，且每次重试都重新计时。
+
+    这就是原来那条防呆要守住的东西：不能让每一句话都等一次注定失败的装载。
+    """
+    bench.install(SENSE_VOICE_DIR)
+    bench.install(PARAFORMER_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    def broken_build(backend, model_dir):
+        attempts.append(backend)
+        raise RuntimeError("onnxruntime 装不上")
+
+    attempts = []
+    monkeypatch.setattr(asr, "_build", broken_build)
+    bench.set_backend("paraformer")
+    asr._ensure_loaded()
+
+    assert attempts == ["paraformer"]
+    assert asr._failed_key[0] == "paraformer"
+    assert asr._failed_files_ready is True  # 缺的不是模型文件
+    assert asr.status()["active"] == "sense_voice"
+    assert "onnxruntime" in asr.status()["error"]
+
+    asr._ensure_loaded()
+    asr._ensure_loaded()  # 冷却内：文件齐也不重试
+    assert attempts == ["paraformer"]
+    assert bench.built() == ["from_sense_voice"]
+    assert len(bench.logger.warnings()) == 1
+
+    fresh = asr._failed_at
+    asr._failed_at = fresh - sherpa._FAILED_RETRY_COOLDOWN_SECONDS - 1.0
+    asr._ensure_loaded()  # 冷却过后放行一次；依赖还是坏的，于是又失败
+    assert attempts == ["paraformer", "paraformer"]
+    # 冷却按"最近一次失败"重新计时，不是每一句话都重试一次。
+    assert asr._failed_at > fresh - sherpa._FAILED_RETRY_COOLDOWN_SECONDS
+    assert bench.built() == ["from_sense_voice"]
+    assert len(bench.logger.warnings()) == 2  # 新一轮失败各自警告一次
+
+    asr._ensure_loaded()  # 新的冷却窗口内，仍然不重试
+    assert attempts == ["paraformer", "paraformer"]
+    assert bench.built() == ["from_sense_voice"]
+
+
+def test_the_cooldown_expiry_retries_a_dependency_failure(bench, monkeypatch):
+    """依赖修好后不必重启、也不必切走再切回：冷却到点自动恢复。"""
+    bench.install(SENSE_VOICE_DIR)
+    bench.install(PARAFORMER_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    real_build = asr._build
+
+    def broken_build(backend, model_dir):
+        raise RuntimeError("依赖坏了")
+
+    monkeypatch.setattr(asr, "_build", broken_build)
+    bench.set_backend("paraformer")
+    asr._ensure_loaded()
+    assert asr.status()["error"]
+
+    monkeypatch.setattr(asr, "_build", real_build)  # 依赖修好了
+    asr._failed_at -= sherpa._FAILED_RETRY_COOLDOWN_SECONDS + 1.0  # 冷却已过
+
+    asr._ensure_loaded()
+
+    assert bench.built() == ["from_sense_voice", "from_paraformer"]
+    assert asr.status()["active"] == "paraformer"
+    assert asr.status()["error"] is None
+    assert asr._failed_key is None
+    assert asr._failed_at == 0.0
+    assert any("恢复" in message for message in bench.events("event"))
+
+
+def test_the_config_watcher_can_recover_after_the_model_appears(bench):
+    """监听器那一侧的短路同样要松开：补上模型后下一次配置重载就恢复。"""
+    bench.install(SENSE_VOICE_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    bench.set_backend("paraformer")
+    asr._ensure_loaded()  # 失败，写进 `_failed_key`
+    assert asr._failed_key[0] == "paraformer"
+
+    asr._on_config_reload({}, {})  # 冷却内 + 文件没补齐：不该重建
+    assert bench.built() == ["from_sense_voice"]
+
+    bench.install(PARAFORMER_DIR)
+    asr._on_config_reload({}, {})
+
+    assert _wait_for(lambda: asr.status()["active"] == "paraformer"), bench.factory.calls
+    assert asr.status()["error"] is None
+
+
+def test_switching_away_and_back_clears_the_failure_record(bench):
+    """另一条恢复路径：切到能装的后端（成功装载清空失败记录）再切回来。"""
+    bench.install(SENSE_VOICE_DIR)
+    bench.install(PARAFORMER_DIR)
+    asr = bench.new_asr()
+    asr._ensure_loaded()
+
+    bench.set_backend("fire_red_asr")  # 没装
+    asr._ensure_loaded()
+    assert asr._failed_key is not None
+
+    bench.set_backend("paraformer")  # 能装：这次成功装载把失败记录清空
+    asr._ensure_loaded()
+    assert asr._failed_key is None
+    assert asr.status()["error"] is None
+
+    bench.install(
+        FIRE_RED_DIR, files=("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")
+    )
+    bench.set_backend("fire_red_asr")
+    asr._ensure_loaded()
+
+    assert bench.built() == [
+        "from_sense_voice",
+        "from_paraformer",
+        "from_fire_red_asr",
+    ]
+    assert asr.status()["active"] == "fire_red_asr"
+    assert asr.status()["error"] is None

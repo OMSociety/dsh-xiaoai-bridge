@@ -273,7 +273,11 @@ class OpenAIManager:
         try:
             response_text = await cls._request_chat_completion(text)
             if response_text:
-                cls._response_texts[run_id] = response_text
+                # 只有等待方还在时才回填：`_wait_response` 超时后的 finally 已经把
+                # events/texts 两条登记都 pop 掉了，这时再写进去就是一条永远没人
+                # 取的残留（run_id 是 uuid，不会有谁回来清它）。
+                if cls._response_events.get(run_id) is not None:
+                    cls._response_texts[run_id] = response_text
                 logger.ai_response(response_text, module=f"OpenAI({cls._session_key})")
         except Exception as exc:
             cls.last_error = f"{type(exc).__name__}: {exc}"

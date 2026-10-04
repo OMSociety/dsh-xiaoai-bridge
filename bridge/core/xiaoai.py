@@ -218,7 +218,17 @@ class XiaoAI:
                                 f"Bridge 接管原生 ASR",
                             )
                         return
-                    
+
+                    # 闸门关着 = 我们正在播报，这段结果多半是音箱听到的自己（回声，
+                    # 可能带「让小黑」这类唤醒词）。带文本的结果一律丢弃：再往下走会被
+                    # 当成真指令去切后端（R7-2）。唯一的例外是音箱本机识别到的唤醒
+                    # （无文本 + is_vad_begin=False），那是用户在喊唤醒词要打断播报，
+                    # 放行给下面的唤醒分支；其余（带文本、监听超时形状）都到此为止。
+                    if EventManager.is_playback_active() and (
+                        bool(text) or is_vad_begin is not False
+                    ):
+                        return
+
                     # 只有明确的 is_vad_begin=False 且没有文本时才触发唤醒
                     # 避免重复触发
                     if not text and is_vad_begin is False:

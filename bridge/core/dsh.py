@@ -397,9 +397,13 @@ class DshManager:
             # knows the utterance never arrived.
             await cls._play_fallback()
         finally:
-            if reply:
-                cls._response_texts[run_id] = reply
-                logger.ai_response(reply, module=f"DSH({cls._session_key})")
             waiter = cls._response_events.get(run_id)
+            if reply:
+                # 只有等待方还在时才回填：`_wait_response` 超时后的 finally 已经把
+                # events/texts 两条登记都 pop 掉了，这时再写进去就是一条永远没人
+                # 取的残留（run_id 是 uuid，不会有谁回来清它）。
+                if waiter is not None:
+                    cls._response_texts[run_id] = reply
+                logger.ai_response(reply, module=f"DSH({cls._session_key})")
             if waiter and not waiter.done():
                 waiter.get_loop().call_soon_threadsafe(waiter.set_result, None)

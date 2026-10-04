@@ -172,17 +172,48 @@ impl StreamingDecoder {
     }
 
     /// Decode all accumulated audio data and return only the newly available PCM.
-    pub fn decode_all(&mut self) -> Result<Vec<u8>, String> {
+    ///
+    /// The decode is CPU-bound and synchronous (the whole accumulated buffer is
+    /// re-decoded on every call), so it is moved onto the blocking thread pool:
+    /// running it inline would stall this task's Tokio worker and delay the
+    /// fetch/playback tasks it shares the runtime with. The accumulated buffer is
+    /// moved into the blocking task and moved back afterwards, so the decoder
+    /// keeps its state and the already-emitted prefix is still dropped below.
+    pub async fn decode_all(&mut self) -> Result<Vec<u8>, String> {
         if self.buffer.is_empty() {
             return Ok(Vec::new());
         }
 
-        let pcm = decode_audio_to_pcm(&self.buffer, &self.format, self.target_sample_rate)?;
-        if pcm.len() <= self.emitted_pcm_bytes {
+        // Shared, not moved: a panicking blocking task unwinds its closure and
+        // takes everything the closure owned with it, so a plain `Vec` moved in
+        // would leave the decoder with an empty buffer while `emitted_pcm_bytes`
+        // still claimed a full prefix had been emitted -- the rest of that stream
+        // would then be dropped silently by the `pcm.len() <= emitted` check.
+        let buffer = std::sync::Arc::new(std::mem::take(&mut self.buffer));
+        let format = self.format.clone();
+        let target_sample_rate = self.target_sample_rate;
+        let emitted_pcm_bytes = self.emitted_pcm_bytes;
+
+        let decoded = tokio::task::spawn_blocking({
+            let buffer = std::sync::Arc::clone(&buffer);
+            move || decode_audio_to_pcm(&buffer[..], &format, target_sample_rate)
+        })
+        .await;
+
+        // The task (and with it the only other handle) is gone either way by now,
+        // so this normally unwraps; falling back to a copy keeps the data rather
+        // than pretending it was never there.
+        self.buffer = std::sync::Arc::try_unwrap(buffer).unwrap_or_else(|shared| (*shared).clone());
+
+        let pcm = match decoded {
+            Ok(pcm) => pcm?,
+            Err(err) => return Err(format!("decode task failed: {}", err)),
+        };
+        if pcm.len() <= emitted_pcm_bytes {
             return Ok(Vec::new());
         }
 
-        let new_pcm = pcm[self.emitted_pcm_bytes..].to_vec();
+        let new_pcm = pcm[emitted_pcm_bytes..].to_vec();
         self.emitted_pcm_bytes = pcm.len();
         Ok(new_pcm)
     }

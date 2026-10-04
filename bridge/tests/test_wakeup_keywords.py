@@ -100,6 +100,11 @@ class XiaoAIWakeupKeywordTest(unittest.TestCase):
                 return False
 
             @staticmethod
+            def is_playback_active():
+                # 真实 EventManager 在闸门关着时也返回 True（播报期回声丢弃）。
+                return False
+
+            @staticmethod
             async def wakeup(text, source):
                 calls.append((text, source))
 

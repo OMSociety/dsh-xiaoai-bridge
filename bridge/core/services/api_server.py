@@ -26,6 +26,13 @@ from core.utils.playback_gate import PlaybackGate, estimate_speech_seconds
 # `/api/play/text`；两路 ubus TTS 撞在一起就是叠音。桥接器是唯一能兜住的地方：
 # 同一时刻只允许一路真正出声，其余在锁上排队。队列有界，满了立刻回明确的
 # 503（调用方拿到 ok:false 会记一条警告），不无限堆积。
+#
+# 只有 `/api/play/text`（含它的 `blocking` 模式）走这条队列，这是**有意**的：
+# `/api/play/url` 与 `/api/play/file` 是上游遗留端点（插件侧零调用，见各自
+# docstring），`/api/tts/doubao` 是处理器内联合成并播放、`lib/**` 也零调用。
+# 把它们塞进同一条队列会改掉这些端点既有的 HTTP 时序（立刻返回 / 立刻 503），
+# 而它们没有任何已知调用方；混用它们与 `/api/play/text` 的调用方自己承担叠音
+# 风险。三者都仍然受 `PlaybackGate` 保护，自问自答不会发生。
 MAX_PENDING_PLAYS = 8
 _pending_plays = 0
 # asyncio.Lock 首次 await 后会绑定当时的事件循环，跨循环复用会抛
@@ -76,8 +83,56 @@ async def _play_text_serially(speaker, text: str, timeout: int) -> None:
             await PlaybackGate.wait_until_open(timeout=max(timeout, 0) / 1000)
     except Exception as exc:
         logger.error(f"[APIServer] Background text playback failed: {exc}")
-    finally:
-        _release_play_slot()
+    # 名额不在这里归还：见 _finalize_play_task（协程可能还没跑第一步就被取消）。
+
+
+# 在飞 / 还在锁上排队的播报任务。打断（POST /api/interrupt 与原生唤醒打断）
+# 要能把它们一次全取消，否则早先排好队的话会在闸门放行后接着念。
+_play_tasks: "set[asyncio.Task]" = set()
+
+
+def _finalize_play_task(task: asyncio.Task) -> None:
+    """播报任务收尾：归还队列名额并摘掉登记。
+
+    归还放在 done 回调而不是协程的 `finally` 里：打断会对在飞任务调
+    `Task.cancel()`，如果这一刻协程还没跑第一步，协程体（连同 `finally`）根本
+    不会执行，名额就永久漏掉一个 —— 攒够 `MAX_PENDING_PLAYS` 之后所有播报都
+    被判成"队列满"回 503。done 回调对取消 / 异常 / 正常结束三种结局都只跑一次。
+    """
+    _release_play_slot()
+    _play_tasks.discard(task)
+
+
+def _spawn_play_task(speaker, text: str, timeout: int) -> asyncio.Task:
+    """起一条串行播报任务，并登记进 `_play_tasks` 以便被打断取消。"""
+    task = spawn_background(
+        _play_text_serially(speaker, text, timeout),
+        name="api-play-text",
+    )
+    _play_tasks.add(task)
+    task.add_done_callback(_finalize_play_task)
+    return task
+
+
+def cancel_pending_plays() -> int:
+    """取消所有在飞 / 排队的播报任务，返回取消掉的条数。
+
+    打断必须**穿透播报队列**：只停设备上正在放的那一路，早先排队的话会在闸门
+    放行后接着念 —— 用户听到的是"喊停了还在说"。名额不需要在这里动：每条任务
+    的收尾回调（`_finalize_play_task`）都会归还一次，包括"还没跑第一步就被取消"
+    那种。
+
+    必须在**持有这些任务的事件循环**里调用（`Task.cancel()` 不是线程安全的），
+    跨线程的调用方用 `loop.call_soon_threadsafe(cancel_pending_plays)`。
+    闸门**不**在这里重置：调用方要先停掉设备音频、再 `PlaybackGate.reset()`，
+    反过来的话麦克风会在音箱还在响的时候恢复收音（自问自答）。
+    """
+    cancelled = 0
+    for task in list(_play_tasks):
+        if not task.done():
+            task.cancel()
+            cancelled += 1
+    return cancelled
 
 
 class APIServer:
@@ -149,6 +204,12 @@ class APIServer:
         播报是**桥接器侧串行**的：同一时刻只有一路真正出声，其余排队。非阻塞
         请求在入队后立刻返回（响应里 `queued`/`serialized` 说明这一点），真正
         的 TTS 在后台任务里持锁完成；队列满则回 503 + `queued: false`。
+
+        `blocking=true` 是有意保留的另一条通道，不是漏掉队列的旁路：它占住
+        同一个串行名额、持同一把锁等 `tts_play.sh` 整个跑完（最长 `timeout`，
+        默认 600 秒），期间后面的话只能排队 —— 这正是"同步播报"的语义，等待
+        上限（`timeout`）就是它自己的保护。插件侧恒发 `blocking:false`
+        （lib/bridge.js），所以这条路径只服务于手动调用。
         """
         try:
             data = await request.json()
@@ -198,11 +259,22 @@ class APIServer:
                         status=503,
                     )
                 # 持强引用的后台任务：这条协程可能被 GC 回收（见 utils/background.py），
-                # 而且要串行到设备真的放完才让出锁。
-                spawn_background(
-                    _play_text_serially(speaker, text, timeout),
-                    name="api-play-text",
-                )
+                # 而且要串行到设备真的放完才让出锁。任务同时被登记，供打断取消。
+                try:
+                    _spawn_play_task(speaker, text, timeout)
+                except Exception as exc:  # noqa: BLE001 - 名额必须归还
+                    # 建任务失败时名额没有 done 回调去归还，留着它就等于把这个
+                    # 进程的队列永久占满（之后每次播放都是 503）。
+                    _release_play_slot()
+                    logger.error(f"[API] 创建后台播报任务失败: {exc}")
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "error": "Could not queue playback",
+                            "queued": False,
+                        },
+                        status=503,
+                    )
                 return web.json_response({
                     "success": True,
                     "message": "Playing text in background",
@@ -231,6 +303,8 @@ class APIServer:
         `lib/**` 里 grep `playUrl` 零命中），保留是为了不破坏上游 API 兼容。
         它对应的 `speaker.play(url=..., blocking=False)` 已不再按文本估时长关
         闸门，而是等设备上报的播放结束事件（见 utils/playback_gate.py）。
+        它**有意**不走 `/api/play/text` 的串行队列（理由见模块顶部「播报串行化」
+        注释）：本插件无调用方，入队只会改掉"命令发出即返回"的既有时序。
 
         Request body:
             {
@@ -292,6 +366,10 @@ class APIServer:
         Query params:
             - blocking: true/false (optional, default false)
             - sample_rate: target sample rate in Hz (optional, default 24000, can be 48000, 44100, etc.)
+
+        它**有意**不走 `/api/play/text` 的串行队列（理由见模块顶部「播报串行化」
+        注释）：插件侧零调用，且 `blocking:false` 的既有语义是"立刻回 200、
+        上传的文件在后台放"，入队会把它变成可能回 503 的排队请求。
 
         Response:
             {
@@ -452,6 +530,19 @@ class APIServer:
         """
         POST /api/interrupt
         Interrupt current playback
+
+        打断必须**穿透播报队列**：`/api/play/text` 的串行队列里可能还压着几路
+        待播文本（多段回复、定时提醒与会话回复撞车）。只调 `stop_device_audio()`
+        停掉正在放的那一路，排队的话会在闸门放行后接着念 —— 用户听到的是
+        "喊停了还在说"。所以按顺序做三件事：
+
+        1. 取消在飞 / 排队的播报任务（`cancel_pending_plays`）；
+        2. 停掉设备上的当前音频、结束连续对话；
+        3. `PlaybackGate.reset()` 重置半双工闸门。
+
+        第 3 步不能省：被打断那一路留下的设备占用（`hold_until_device_stops`）
+        否则会把麦克风通路继续关着，用户下一句进不来。顺序也不能换 —— 先开闸
+        会让麦克风在音箱还在响的时候恢复收音。
         """
         try:
             speaker = get_speaker()
@@ -462,10 +553,16 @@ class APIServer:
                     status=503
                 )
 
+            cancelled = cancel_pending_plays()
+            logger.info(
+                f"[APIServer] Interrupt: cancelled {cancelled} pending playback(s)"
+            )
             await speaker.stop_device_audio()
             # 停止连续对话
             if xiaoai:
                 xiaoai.stop_conversation()
+            # 设备已经停了才开闸（理由见 docstring）。
+            PlaybackGate.reset()
 
             return web.json_response({"success": True})
 
@@ -504,6 +601,11 @@ class APIServer:
         """
         POST /api/tts/doubao
         Synthesize text using Doubao (ByteDance Volcano) TTS and play it
+
+        它**有意**不走 `/api/play/text` 的串行队列（理由见模块顶部「播报串行化」
+        注释）：插件侧零调用，合成与播放都在本处理器内联完成，并自带
+        `PlaybackGate` 占用；但 `blocking:false` 的响应是"整段放完之后"才回的，
+        入队只会让等待变得更长。
 
         Request body:
             {

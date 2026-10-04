@@ -76,8 +76,18 @@ async fn throttle_if_needed(
 /// Forces a fresh aplay so its buffer is clean, then marks it ready
 /// so that subsequent send_pcm calls (and on_output_data) skip the RPC.
 async fn ensure_player_started() {
-    crate::PLAYER_READY.store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::PLAYER_STATE.store(crate::PLAYER_IDLE, std::sync::atomic::Ordering::SeqCst);
     crate::ensure_player_ready().await;
+}
+
+/// True when a stream that ended without a fetch error produced nothing playable.
+///
+/// `total_pcm_bytes` alone is not enough: the final decode feeds the playback
+/// buffer without adding to it, so a short non-pcm synthesis can play audio and
+/// still leave the counter at zero. Nothing reaching the playback buffer (no
+/// first-chunk mark) is what makes this a silent, empty synthesis.
+fn stream_produced_no_audio(total_pcm_bytes: usize, playback_started_ms: Option<u128>) -> bool {
+    total_pcm_bytes == 0 && playback_started_ms.is_none()
 }
 
 /// Send PCM data to device, auto-chunking if larger than PLAY_CHUNK_SIZE.
@@ -323,7 +333,7 @@ pub fn tts_stream_play(
             decoder.feed(&chunk);
 
             if accumulated_size >= STREAM_BUFFER_THRESHOLD {
-                match decoder.decode_all() {
+                match decoder.decode_all().await {
                     Ok(pcm) if !pcm.is_empty() => {
                         total_pcm_bytes += pcm.len();
                         playback_buffer.push(&pcm);
@@ -362,7 +372,7 @@ pub fn tts_stream_play(
             }
         }
 
-        match decoder.decode_all() {
+        match decoder.decode_all().await {
             Ok(pcm) if !pcm.is_empty() => {
                 if !is_pcm_passthrough {
                     playback_buffer.push(&pcm);
@@ -436,6 +446,16 @@ pub fn tts_stream_play(
                 total_pcm_bytes,
                 err_msg
             );
+        } else if stream_produced_no_audio(total_pcm_bytes, playback_started_ms) {
+            crate::pylog_error!(
+                "[TTS] Stream produced no audio: format={}, encoded={} bytes",
+                format,
+                total_encoded_bytes
+            );
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "TTS synthesis returned no audio (format={}, encoded={} bytes)",
+                format, total_encoded_bytes
+            )));
         }
 
         sleep_until_playback_finishes(remaining_ms, playback_token).await;
@@ -547,7 +567,7 @@ pub fn tts_stream_play_background(
                 decoder.feed(&chunk);
 
                 if accumulated_size >= STREAM_BUFFER_THRESHOLD {
-                    match decoder.decode_all() {
+                    match decoder.decode_all().await {
                         Ok(pcm) if !pcm.is_empty() => {
                             total_pcm_bytes += pcm.len();
                             playback_buffer.push(&pcm);
@@ -586,7 +606,7 @@ pub fn tts_stream_play_background(
                 }
             }
 
-            match decoder.decode_all() {
+            match decoder.decode_all().await {
                 Ok(pcm) if !pcm.is_empty() => {
                     if !is_pcm_passthrough {
                         playback_buffer.push(&pcm);
@@ -654,7 +674,23 @@ pub fn tts_stream_play_background(
                         total_pcm_bytes,
                         err_msg
                     );
+                } else {
+                    crate::pylog_error!(
+                        "[TTS] Background stream fetch failed with no audio produced: format={}, encoded={} bytes, error={}",
+                        format,
+                        total_encoded_bytes,
+                        err_msg
+                    );
                 }
+            } else if stream_produced_no_audio(total_pcm_bytes, playback_started_ms) {
+                // Same condition the foreground path turns into an error, but the
+                // caller was already told the request was accepted, so the log is
+                // the only place left to report an empty synthesis.
+                crate::pylog_error!(
+                    "[TTS] Background stream produced no audio: format={}, encoded={} bytes",
+                    format,
+                    total_encoded_bytes
+                );
             }
 
             sleep_until_playback_finishes(remaining_ms, playback_token).await;
@@ -700,8 +736,17 @@ pub fn tts_play(
 
         let fetch_completed_ms = started_at.elapsed().as_millis();
 
-        let pcm = decode_audio_to_pcm(&encoded_audio, &format, sample_rate)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        // Same reason as `StreamingDecoder::decode_all`: decoding a whole
+        // utterance is CPU-bound and would otherwise stall a Tokio worker.
+        let format_for_decode = format.clone();
+        let pcm = tokio::task::spawn_blocking(move || {
+            decode_audio_to_pcm(&encoded_audio, &format_for_decode, sample_rate)
+        })
+        .await
+        .map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("decode task failed: {}", e))
+        })?
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         let pcm_len = pcm.len();
         let pcm_ready_ms = started_at.elapsed().as_millis();
 
@@ -914,7 +959,7 @@ pub fn tts_stream_collect(
             decoder.feed(&chunk);
 
             if accumulated_size >= STREAM_BUFFER_THRESHOLD {
-                match decoder.decode_all() {
+                match decoder.decode_all().await {
                     Ok(pcm) if !pcm.is_empty() => {
                         if first_pcm_ms.is_none() {
                             first_pcm_ms = Some(started_at.elapsed().as_millis());
@@ -934,7 +979,7 @@ pub fn tts_stream_collect(
             }
         }
 
-        match decoder.decode_all() {
+        match decoder.decode_all().await {
             Ok(pcm) if !pcm.is_empty() => {
                 if is_pcm_passthrough {
                     return Ok(json!({

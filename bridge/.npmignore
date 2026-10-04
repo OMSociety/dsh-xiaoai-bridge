@@ -1,0 +1,21 @@
+# Ignore file for the bridge half of the package.  The root .npmignore is not
+# enough here: `files` in package.json whitelists the plugin and lists `bridge/`
+# as one directory entry, and npm lets that entry override the root ignore file.
+# An ignore file inside the directory itself still applies, so the entries below
+# keep the locally generated build products out of a packed tarball (measured
+# 2026-10-04: without this file the walk produces 3990 files / ~1422 MB, of
+# which `target/` alone is 3731 files; .venv, the models and the caches are the
+# rest).  Nothing ignored here is tracked by git, and a local (`link:`) or git
+# install is unaffected either way.
+target/
+.venv/
+**/__pycache__/
+**/*.pyc
+core/models/
+.pytest_cache/
+config.py.rendered
+**/device.json
+**/devices.json
+*.token
+token.txt
+credentials.json

@@ -142,6 +142,38 @@ class PlaybackSerializationTest(unittest.TestCase):
         self.assertEqual(["占住队列"], self.speaker.texts)
         self.assertEqual(0, self.api_module._pending_plays)
 
+    def test_spawn_failure_releases_the_slot(self):
+        """建后台任务失败时必须立刻归还名额，否则队列会被永久判满。"""
+
+        async def scenario():
+            async with TestServer(self.server.app) as server:
+                async with TestClient(server) as client:
+                    with mock.patch.object(
+                        self.api_module,
+                        "_spawn_play_task",
+                        side_effect=RuntimeError("spawn refused"),
+                    ):
+                        failed = await client.post(
+                            "/api/play/text", json={"text": "起不来"}
+                        )
+                        body = await failed.json()
+                        status = failed.status
+                        pending_after_failure = self.api_module._pending_plays
+                    recovered = await client.post(
+                        "/api/play/text", json={"text": "还能放"}
+                    )
+                    await self._drain()
+                    return status, body, pending_after_failure, recovered.status
+
+        status, body, pending_after_failure, recovered_status = asyncio.run(scenario())
+
+        self.assertEqual(503, status)
+        self.assertFalse(body["success"])
+        self.assertFalse(body["queued"])
+        self.assertEqual(0, pending_after_failure)
+        self.assertEqual(200, recovered_status)
+        self.assertEqual(["还能放"], self.speaker.texts)
+
     def test_slot_is_released_after_the_playback_ends(self):
         async def scenario():
             async with TestServer(self.server.app) as server:
