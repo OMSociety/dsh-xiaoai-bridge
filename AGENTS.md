@@ -6,11 +6,12 @@
 ## 项目概览
 
 - 一句话定位：把小米小爱音箱接入 DeepSeek Harness 的插件——宿主侧托管一个本地 Python 桥接器进程，跑通「唤醒词 → 说话 → DSH 会话 → 音箱播报」，全部配置走 DSH 官方插件设置页。
-- 技术栈：Node >= 20（ESM，**无构建步骤**）；DSH 插件 = 宿主半 `lib/index.js` + 浏览器半 `lib/client.js`；Python >= 3.12 的桥接器在 `bridge/`（uv 管理，含 maturin/PyO3 编译的 Rust 扩展）；测试 = `scripts/check-*.mjs` 九个 node 脚本 + `bridge/` 的 pytest。
+- 技术栈：Node >= 20（ESM，**无构建步骤**）；DSH 插件 = 宿主半 `lib/index.js` + 浏览器半 `lib/client.js`；Python >= 3.12 的桥接器在 `bridge/`（uv 管理，含 maturin/PyO3 编译的 Rust 扩展）；测试 = `scripts/check-*.mjs` 九个 node 脚本 + `bridge/` 的 pytest（`tools/` 下有按需用的辅助工具，不在验收口径内）。
 - 桥接器运行时：Rust 扩展在 TCP `4399` 上收设备音频，Python 侧做 VAD、唤醒词与 ASR，把一句话交给会话后端（DSH / OpenAI 兼容 / 小爱原生），再把回复经 TTS 播回音箱，播放期间半双工闸门关掉麦克风通路；本地推理用 `sherpa-onnx` + `onnxruntime`（配 `numpy` / `scipy` / `soundfile`），HTTP 用 `aiohttp`，设备侧命令面是 `mphelper` / `miplayer` / `tts_play.sh`。依赖与 Rust 扩展编译都走 `uv` + `maturin`。
 - 文档索引：
   - 用法、配置项、排错表：[README.md](./README.md)
   - 环境要求、提交前要跑什么、写作约定：[CONTRIBUTING.md](./CONTRIBUTING.md)
+  - 维护期工具清单与用法、侦察笔记：[tools/README.md](./tools/README.md)（`tools/` 与 `docs/notes/` 都不随包发布）
   - 变更历史（中英双语，`bridge/` 的改动也记在这里）：[CHANGELOG.md](./CHANGELOG.md)
   - 桥接器 API Server 的端点、请求体与错误码：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)；豆包语音合成与声音复刻的上游接口参考：[bridge/docs/doubao-tts-api.md](./bridge/docs/doubao-tts-api.md)、[bridge/docs/doubao-clone-api.md](./bridge/docs/doubao-clone-api.md)
   - 许可与免责：[DISCLAIMER.md](./DISCLAIMER.md)
@@ -25,6 +26,10 @@
 | 看 profile 里装了什么、什么版本 | `dsh plugin --profile desktop list` |
 | 跑全部离线检查（九个，聚合入口） | `npm run check`（= `node scripts\check-all.mjs`） |
 | 跑单个离线检查 | `node scripts\check-config.mjs` |
+| 文档 QA（emoji / `---` / 表格列数 / README 锚点） | `node tools\doc-check.mjs` |
+| CHANGELOG 结构 QA（标题日期、中英类别与条目 1:1） | `node tools\changelog-check.mjs` |
+| 宿主侧端到端冒烟（假 cordis 上下文驱动 `/plugin/xiaoai`） | `node tools\plugin-smoke.mjs` |
+| 客户端半离线驱动（跑「用户手势之后」的流程） | `node tools\drive-client.mjs` |
 | 装桥接器依赖（Rust 扩展现场编译，首次约十几分钟） | 在 `bridge/` 里：`uv sync --no-install-project`，再 `uv sync` |
 | 跑桥接器测试 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q` |
 | 跑单个测试文件 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q tests/test_tts_router.py` |
@@ -154,7 +159,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 仓库**没有 CI**（仓库根没有 `.github/`，`bridge/` 下那两个 workflow 文件 GitHub 也不会读取，本轮已删），上面这些只能在本地跑；改动只碰文档时，第 1、2 条仍要跑一遍。
 
-仓库外还有一个未入库的宿主侧端到端冒烟脚本（覆盖 `/asr` 鉴权、`/config` 冲突与 `POST /data/wipe`）。它有用，可以顺手当回归跑，但**不在版本库内、不算既有 CI**——别在文档里当既成事实引用，需要就向维护者要。
+宿主侧端到端冒烟脚本已经在仓库里：`tools/plugin-smoke.mjs`（用假 cordis 上下文加载 `lib/index.js`，再直接驱动挂上的 `/plugin/xiaoai` handler，覆盖 `/asr` 鉴权、`/config` revision 冲突与 `POST /data/wipe` 的拒绝路径）。可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不算 CI**。同目录的 `tools/drive-client.mjs` 是同一类东西：**它的断言写于客户端半上一轮返工之前**，对着现在的工作树跑会报若干 `FAILED`，那不代表当前代码有问题（见 [tools/README.md](./tools/README.md) 的「已知状态」）。
 
 ## 已知风险区
 
@@ -265,6 +270,6 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 ## 维护
 
-本文件与代码同 PR 更新。改动以下内容时必须同步本文件：验收命令（`scripts/check-*.mjs` 的增删）、模块边界与端口、
+本文件与代码同 PR 更新。改动以下内容时必须同步本文件：验收命令（`scripts/check-*.mjs` 的增删）、`tools/` 下工具的增删（同步 [tools/README.md](./tools/README.md)）、模块边界与端口、
 `.gitignore` 的禁区、profile 的安装方式。发现内容与代码不符时，先改本文件再继续改代码。
 `bridge/` 侧的规则也在本文件里（上面各节的桥接器条目与末尾那一节）；文档索引里没有 `bridge/` 单独的 README / AGENTS / CHANGELOG——桥接器的改动逐条记在根 [CHANGELOG.md](./CHANGELOG.md)，进本仓库之前的上游历史在上游仓库里。

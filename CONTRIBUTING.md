@@ -36,6 +36,15 @@ Set-Location bridge
 
 动了插件行为就补对应的 checker，动了桥接器就补 `bridge/tests/`；两边都改就都跑。`npm run check` 全绿加上 `pytest` 全绿是提交前的底线。
 
+改了对外文档或 CHANGELOG 时再跑这两条（在 `tools/` 下，不属于那九条检查）：
+
+```powershell
+node tools\doc-check.mjs        # emoji、--- 分隔线、表格列数、README 锚点
+node tools\changelog-check.mjs  # 版本标题日期、中英文类别与条目 1:1
+```
+
+其余的工具（客户端半离线驱动、宿主侧冒烟、asar 与会话 dump、历史探针）见 [tools/README.md](tools/README.md)。
+
 ## 代码放在哪
 
 ```
@@ -49,6 +58,8 @@ lib/client.js       设置页与运行状态卡（客户端 bundle）
 skills/xiaoai-speak/  模型用的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
 scripts/            自检脚本（九个 check-*.mjs + 聚合入口 check-all.mjs）
+tools/              维护期工具（文档与 CHANGELOG 检查、客户端离线驱动、宿主侧冒烟、asar 与会话 dump、历史探针；见 tools/README.md）
+docs/notes/         侦察笔记（不进包）
 ```
 
 ## 约定
