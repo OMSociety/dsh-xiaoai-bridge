@@ -412,7 +412,13 @@ check('the scope hook ran for the model-less host', () => {
 // context, so this is unit-tested with a plugin context and an agent context
 // that both record what they are asked to register.
 console.log('case 10: exposure manager');
-function exposureHarness({ speakFromAnySession = false, seam = true, failRegister = false, failGlobalSkill = false } = {}) {
+function exposureHarness({
+  speakFromAnySession = false,
+  seam = true,
+  failRegister = false,
+  failGlobalSkill = false,
+  failScopedSkill = false,
+} = {}) {
   const globals = [];
   const env = { scoped: [], notes: [], warnings: [] };
   let config = { speakFromAnySession };
@@ -439,8 +445,16 @@ function exposureHarness({ speakFromAnySession = false, seam = true, failRegiste
   });
   env.exposure = exposure;
   env.globals = globals;
-  env.agentCtx = seam ? { tools: sink(env.scoped), skills: sink(env.scoped) } : { on: () => () => {} };
+  // A scoped skills registry that refuses is the same half-registration as
+  // `failGlobalSkill`, one layer down: the tools entry lands, the skills one
+  // throws, and the rollback has to take the first one back out.
+  env.agentCtx = seam
+    ? { tools: sink(env.scoped), skills: sink(env.scoped, { fail: failScopedSkill }) }
+    : { on: () => () => {} };
   env.otherCtx = seam ? { tools: sink(env.scoped), skills: sink(env.scoped) } : { on: () => () => {} };
+  // A fresh context *with* a working seam, for cases that need both kinds in
+  // one run (the harness's own two are both whatever `seam` asked for).
+  env.seamedCtx = () => ({ tools: sink(env.scoped), skills: sink(env.scoped) });
   env.setConfig = (next) => { config = next; };
   env.codes = () => env.notes.map((entry) => entry.code);
   env.names = () => env.scoped.map((row) => row.name).sort();
@@ -513,6 +527,30 @@ check('with the hatch open a missing seam is not reported', () => {
   assert.equal(e4.globals.length, 2);
   assert.deepEqual(e4.notes, []);
   assert.deepEqual(e4.warnings, []);
+  // "Not reported" is about the notice only. The seam is still missing, and
+  // `state()` has to keep saying so: the hatch says nothing about the seam.
+  assert.equal(e4.exposure.state().mode, 'global');
+  assert.equal(e4.exposure.state().scopeSeam, false);
+});
+e4.setConfig({ speakFromAnySession: false });
+e4.exposure.syncGlobal();
+check('closing the hatch over a host with no seam reports the seam as missing', () => {
+  assert.deepEqual(e4.globals, []);
+  assert.equal(e4.exposure.state().mode, 'unavailable');
+  assert.equal(e4.exposure.state().scopeSeam, false);
+});
+
+// The same two facts in the other order: the host reports its missing seam
+// first, and only then does the hatch open. The global registration succeeding
+// re-arms the notice, but it must not rewrite the fact.
+const e4b = exposureHarness({ seam: false });
+e4b.exposure.attach(e4b.agentCtx);
+e4b.setConfig({ speakFromAnySession: true });
+e4b.exposure.syncGlobal();
+check('opening the hatch does not turn a missing seam into a present one', () => {
+  assert.equal(e4b.globals.length, 2);
+  assert.equal(e4b.exposure.state().mode, 'global');
+  assert.equal(e4b.exposure.state().scopeSeam, false);
 });
 
 const e5 = exposureHarness({ failRegister: true });
@@ -550,11 +588,49 @@ e8.exposure.syncGlobal();
 e8.setConfig({ speakFromAnySession: false });
 e8.exposure.syncGlobal();
 e8.exposure.attach(e8.otherCtx);
-check('a registration that succeeds resets the missing-seam latch', () => {
+check('the global layer succeeding re-arms the missing-seam notice', () => {
   assert.deepEqual(e8.globals, []);
   assert.deepEqual(e8.codes(), [SCOPE_UNAVAILABLE_CODE, SCOPE_UNAVAILABLE_CODE]);
   assert.equal(e8.exposure.state().mode, 'unavailable');
   assert.equal(e8.exposure.state().scopeSeam, false);
+});
+
+// The reset on the *scoped* success path, which e8's host never reaches: one
+// no-seam session, then a session that really registers, then a no-seam one
+// again. The third session is worth a new row only because the successful one
+// re-armed the notice — and `state()` has to follow the seam, not that notice.
+const e9 = exposureHarness({ seam: false });
+e9.exposure.attach(e9.agentCtx);
+e9.exposure.attach(e9.seamedCtx());
+check('a scoped registration that succeeds clears the missing seam', () => {
+  assert.equal(e9.exposure.state().scoped, 1);
+  assert.deepEqual(e9.names(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.equal(e9.exposure.state().mode, 'scoped');
+  assert.equal(e9.exposure.state().scopeSeam, true);
+});
+e9.exposure.attach(e9.otherCtx);
+check('the scoped success re-arms the notice for the next session without a seam', () => {
+  assert.deepEqual(e9.codes(), [SCOPE_UNAVAILABLE_CODE, SCOPE_UNAVAILABLE_CODE]);
+  assert.equal(e9.exposure.state().scoped, 1);
+  assert.deepEqual(e9.names(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.equal(e9.exposure.state().mode, 'unavailable');
+  assert.equal(e9.exposure.state().scopeSeam, false);
+});
+
+// The scoped half-registration, the same shape e7 covers one layer up: the
+// tools entry lands in the agent's scope, the skills registry refuses, and the
+// first entry has to be unwound instead of staying behind with its disposer
+// thrown away. e5 cannot see this — it fails on the *first* register, so the
+// rollback has nothing to do.
+const e10 = exposureHarness({ failScopedSkill: true });
+e10.exposure.attach(e10.agentCtx);
+check('a scoped layer that fails halfway is unwound, not left half-open', () => {
+  assert.deepEqual(e10.scoped, []);
+  assert.deepEqual(e10.globals, []);
+  assert.deepEqual(e10.codes(), [SCOPE_FAILED_CODE]);
+  assert.equal(e10.exposure.state().scoped, 0);
+  assert.equal(e10.exposure.state().mode, 'scoped');
+  assert.equal(e10.exposure.state().scopeSeam, true);
 });
 
 // --- case 11: the Agent preset ----------------------------------------------

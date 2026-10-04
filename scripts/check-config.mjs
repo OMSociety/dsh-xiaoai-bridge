@@ -362,12 +362,14 @@ eq(
   'the derived type rules report by name too',
 );
 // An emptied field means "keep the built-in default" for the keys documented
-// that way, so the type rule must not turn one into a repair.
-eq(
-  sanitizeConfig({ ...DEFAULTS, sessionCwd: '', agentPreset: '' }).repairs.length,
-  0,
-  'an emptied keep-the-default field is still not a repair',
-);
+// that way, so the type rule must not turn one into a repair — and it must hand
+// the empty string through untouched, because the empty string *is* the value
+// those fields read as "unset" (a rewrite to `null` or a default would change
+// what the runtime sees).
+const emptied = sanitizeConfig({ ...DEFAULTS, sessionCwd: '', agentPreset: '' });
+eq(emptied.repairs.length, 0, 'an emptied keep-the-default field is still not a repair');
+eq(emptied.value.sessionCwd, '', 'an emptied sessionCwd reaches the runtime as the empty string');
+eq(emptied.value.agentPreset, '', 'an emptied agentPreset reaches the runtime as the empty string');
 
 /** @param {object} patch @returns {boolean} whether the strict check refused it */
 function refused(patch) {

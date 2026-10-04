@@ -570,9 +570,33 @@ if (captured !== null) {
             source.includes('if (keepDraft !== true) applySnapshot(out.body.descriptor);'),
             'a conflict reload must refresh the revision without re-seeding the draft',
           );
+          // The bare `loadConfig();` re-seeds the form while `loadConfig(true)`
+          // keeps the draft, so each call site is pinned to its own branch. A
+          // swap (the conflict drops the draft, the successful save keeps it)
+          // would still contain every one of those strings somewhere.
+          const conflictAt = source.indexOf('out.status === 409');
+          const beforeConflict = conflictAt < 0 ? '' : source.slice(0, conflictAt);
+          const afterConflict = conflictAt < 0 ? '' : source.slice(conflictAt);
+          check(conflictAt >= 0, 'the save path must still handle a host revision conflict');
           check(
-            source.includes('loadConfig(true);'),
+            /loadConfig\(true\);/.test(afterConflict.slice(0, 900)),
             'the 409 branch must keep the draft so the same ops can be saved again',
+          );
+          check(
+            !/loadConfig\(true\);/.test(beforeConflict),
+            'no branch that runs before the conflict may hold the draft: a successful save re-seeds',
+          );
+          check(
+            (beforeConflict.match(/loadConfig\(\);/g) ?? []).length === 1,
+            'the successful save must re-seed the form from the host snapshot exactly once',
+          );
+          check(
+            (afterConflict.match(/loadConfig\(\);/g) ?? []).length === 0,
+            'no call site after the conflict handling may re-seed the form; only the successful save does',
+          );
+          check(
+            (source.match(/loadConfig\(dirty\);/g) ?? []).length === 2,
+            'mounting and the toolbar refresh must pass the draft flag so neither re-seeds over unsaved edits',
           );
           check(
             (source.match(/snapshot: null/g) ?? []).length === 1,
@@ -585,17 +609,67 @@ if (captured !== null) {
 
           // 11. The catalogue's degraded states: a failed read disables the
           //     picker (the list on screen is not a list of what can be picked)
-          //     while the idle/loading state stays selectable, and a read that
-          //     lost a provider says so instead of looking merely short.
+          //     while the idle/loading state stays selectable, and the line
+          //     under it is picked by the bundle's own `routeHintFor`, driven
+          //     here with stand-in catalogues so every branch is exercised
+          //     rather than grepped for.
+          const copy = dictionaries.get('plugin.xiaoai');
           check(
             source.includes('var routeDisabled = catalog.status === "error" || catalog.status === "unavailable";')
               && source.includes('disabled: routeDisabled,'),
             'a failed catalogue read must disable the route picker',
           );
           check(
-            source.includes('catalog.failures.length > 0') && source.includes('"route.partial"'),
-            'a catalogue read that lost a provider group must say so in the picker',
+            source.includes('var routeHint = routeHintFor(catalog, hint);'),
+            'the route row must draw the line routeHintFor picks',
           );
+          check(
+            typeof seam?.routeHintFor === 'function',
+            'the bundle must expose its catalogue hint selector to this check',
+          );
+          if (typeof seam?.routeHintFor === 'function') {
+            const zh = copy?.zh ?? {};
+            check(
+              ['route.loading', 'route.failed', 'route.empty', 'route.partial'].every(
+                (key) => typeof zh[key] === 'string' && zh[key].length > 0,
+              ),
+              'the zh dictionary must carry every catalogue wording this check drives',
+            );
+            const hintFor = (catalog) => seam.routeHintFor(catalog, 'FIELD-HINT');
+            const ready = (groups, failures) => ({ status: 'ready', groups: groups, failures: failures, error: null });
+            check(
+              hintFor(ready([{ models: [{ id: 'm' }] }], [])) === 'FIELD-HINT',
+              'a healthy catalogue must leave the field hint alone',
+            );
+            check(
+              hintFor(ready([{ models: [{ id: 'm' }] }], ['openai'])) === zh['route.partial'],
+              'a catalogue read that lost a provider group must say so in the picker',
+            );
+            check(
+              hintFor(ready([], [])) === zh['route.empty'],
+              'a catalogue with no models at all must say so',
+            );
+            check(
+              hintFor(ready([], ['openai'])) === zh['route.empty'],
+              'an empty catalogue must say there is no model even when a provider also failed, not merely that the list may be incomplete',
+            );
+            check(
+              hintFor({ status: 'loading', groups: [], failures: [], error: null }) === zh['route.loading'],
+              'a catalogue still loading must say so',
+            );
+            check(
+              hintFor({ status: 'error', groups: [], failures: [], error: 'boom' }) === zh['route.failed'] + 'boom',
+              'a failed read must append its error text to the failed wording',
+            );
+            check(
+              hintFor({ status: 'error', groups: [], failures: [], error: '' }) === 'FIELD-HINT',
+              'a failed read with no error text must not render the failed wording with nothing after the colon',
+            );
+            check(
+              hintFor({ status: 'unavailable', groups: [], failures: [], error: null }) === 'FIELD-HINT',
+              'an unavailable catalogue with no error text must keep the field hint',
+            );
+          }
           check(
             routePicker?.disabled === false,
             'the route picker must stay selectable while the catalogue is idle or loading',
@@ -605,7 +679,6 @@ if (captured !== null) {
           //     lives in the two inline dictionaries, and a key that only one
           //     language carries (or that no control ever shows) is invisible
           //     until someone reads the page in that language.
-          const copy = dictionaries.get('plugin.xiaoai');
           const zhKeys = Object.keys(copy?.zh ?? {}).sort();
           const enKeys = Object.keys(copy?.en ?? {}).sort();
           check(zhKeys.length > 0, 'the bundle must register its zh dictionary');
@@ -613,9 +686,47 @@ if (captured !== null) {
             JSON.stringify(zhKeys) === JSON.stringify(enKeys),
             'the zh and en dictionaries must carry the same keys',
           );
-          const deadHints = [...new Set([...source.matchAll(/"hint\.([A-Za-z0-9]+)":/g)].map((match) => match[1]))]
-            .filter((key) => source.split(`"hint.${key}"`).length - 1 <= 2);
-          check(deadHints.length === 0, `settings wording exists but no control shows it: ${JSON.stringify(deadHints)}`);
+          // Structural rather than counted: `fields` is the bundle's own FIELDS
+          // table, so a hint whose only reference moved behind `render: false`
+          // (or was deleted outright) shows up here even though the rendered
+          // snapshot never mentions the field. A hint key is live when a drawn
+          // field asks for it, or when a component translates it by name: the
+          // Doubao token row lives in a `hidden: true` entry and the empty-field
+          // fallback is rendered from code, so both are reached that way.
+          const fieldSpecs = Array.isArray(seam?.fields) ? seam.fields : [];
+          check(fieldSpecs.length > 0, 'the bundle must expose its field table to this check');
+          const drawnHints = new Set(
+            fieldSpecs
+              .filter((spec) => spec.render !== false && typeof spec.hint === 'string')
+              .map((spec) => spec.hint),
+          );
+          const translatedHints = new Set(
+            [...source.matchAll(/translate\("(hint\.[A-Za-z0-9]+)"\)/g)].map((match) => match[1]),
+          );
+          const deadHints = zhKeys.filter(
+            (key) => key.startsWith('hint.') && !drawnHints.has(key) && !translatedHints.has(key),
+          );
+          check(
+            deadHints.length === 0,
+            `settings wording exists but no drawn control can show it: ${JSON.stringify(deadHints)}`,
+          );
+          const missingHints = [
+            ...new Set(fieldSpecs.filter((spec) => typeof spec.hint === 'string').map((spec) => spec.hint)),
+          ].filter((key) => !zhKeys.includes(key) || !enKeys.includes(key));
+          check(
+            missingHints.length === 0,
+            `a control asks for wording the dictionaries do not carry: ${JSON.stringify(missingHints)}`,
+          );
+          // The autoSpeak hint has to stay true to what that switch silences.
+          // lib/auto-speak.js speaks the approval line even with autoSpeak off
+          // (the switch only suppresses the assistant's own reply), and
+          // scripts/check-speak.mjs pins that behaviour, so a hint promising a
+          // silent speaker would be contradicted by the same release.
+          check(
+            /审批/.test(String(copy?.zh?.['hint.autoSpeak'] ?? ''))
+              && /approval/i.test(String(copy?.en?.['hint.autoSpeak'] ?? '')),
+            'the autoSpeak hint must say that the approval line is spoken whether the switch is on or off',
+          );
           // translate() falls back to the key itself when the zh dictionary has
           // no wording for it, so a raw "hint." on the page means a control is
           // showing a key instead of an explanation.

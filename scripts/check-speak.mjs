@@ -120,6 +120,17 @@ await check('a cut that would split an emoji pair is pulled back instead', () =>
 await check('a boundary that already ends on a whole pair is left alone', () => {
   assert.equal(truncateSpokenText('ab🙂cd', 4), 'ab🙂…');
 });
+await check('a limit landing on the second half of a pair drops the pair, not half of it', () => {
+  // A limit of 2 used to pull the boundary *forward* to 2 -- past the pair that
+  // starts at index 1 -- which left the lone high surrogate the pull-back is
+  // there to prevent. The pull-back moves it to 1, where the pair is dropped
+  // whole and the first character survives.
+  const out = truncateSpokenText('a🙂bc', 2);
+  assert.equal(out, 'a…');
+  assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), false, 'a lone high surrogate leaked into the spoken line');
+  // The same string at a limit that covers the whole pair keeps it.
+  assert.equal(truncateSpokenText('a🙂bc', 3), 'a🙂…');
+});
 await check('a one-character limit keeps one whole character, not just the ellipsis', () => {
   // A limit of 1 in front of a pair used to pull the boundary back to 0, which
   // left the spoken line as the bare ellipsis.
@@ -524,6 +535,29 @@ await check('zero turns of history means the reply generator sees no transcript'
   assert.deepEqual(h9b.calls[0].history, []);
 });
 
+// A reply whose stream ended with `aborted` after the text already read as
+// finished is spoken anyway (`replyer.js`), so the log has to say so: otherwise
+// "the model call broke but the line happened to be complete" is
+// indistinguishable from a clean line when reading spoken.jsonl afterwards.
+const h11 = harness({}, {
+  generate: async () => ({ ok: true, text: '这句已经说完了。', provider: 'p', model: 'm', degraded: 'aborted' }),
+});
+h11.autoSpeak.onUtterance({ sessionId: 'session-speak-11', deviceKey: 'dev-11', text: '你好' });
+h11.autoSpeak.onAssistantText('session-speak-11', '正文');
+h11.autoSpeak.onTurnEnd('session-speak-11');
+await until(() => h11.records.length === 1, 'the degraded line');
+await check('a line spoken from a degraded stream is marked as degraded in the log', () => {
+  assert.deepEqual(h11.bridge.spoken, ['这句已经说完了。']);
+  assert.equal(h11.records[0].degraded, 'aborted');
+});
+await check('an ordinary line carries no degraded field at all', () => {
+  // The record shape of every ordinary line is unchanged: the field is added
+  // only when the replyer reported one (the deepEqual above the harness's first
+  // case pins the rest of the shape).
+  assert.equal('degraded' in h1.records[0], false);
+  assert.equal(h11.records[0].source, 'replyer');
+});
+
 const h10 = harness();
 h10.autoSpeak.onUtterance({ sessionId: 'session-speak-10', deviceKey: 'dev-10', text: '你好' });
 h10.autoSpeak.dispose();
@@ -659,10 +693,12 @@ await check('a repeated call in one turn is refused, not spoken over', () => {
   assert.notEqual(r2.isError, true, 'being ignored is not a tool error to recover from');
 });
 
-// The claim is taken before playback is attempted, so a line that never made a
-// sound has to hand the turn back: otherwise one 503 costs the user the turn,
-// and the tool cannot be used again until the next utterance.
-console.log('xiaoai_speak: a failed line hands the turn back');
+// The claim is taken before playback is attempted, so a line the bridge refused
+// outright has to hand the turn back: otherwise one 503 costs the user the turn,
+// and the tool cannot be used again until the next utterance. A failure with no
+// status (timeout, unreachable) is the other side of that line: it keeps the
+// turn, because nothing proves the speaker stayed silent.
+console.log('xiaoai_speak: a refused line hands the turn back');
 const f1 = harness();
 const F1 = 'session-tool-503';
 f1.autoSpeak.onUtterance({ sessionId: F1, deviceKey: 'dev-f1', text: '你好' });
@@ -704,10 +740,11 @@ const f2 = harness();
 const F2 = 'session-tool-throw';
 f2.autoSpeak.onUtterance({ sessionId: F2, deviceKey: 'dev-f2', text: '你好' });
 let f2Attempts = 0;
-f2.bridge.playText = async () => {
+const f2RealPlay = f2.bridge.playText;
+f2.bridge.playText = async (text) => {
   f2Attempts += 1;
-  if (f2Attempts === 1) throw new Error('socket hang up');
-  return { ok: true };
+  await f2RealPlay(text);
+  throw new Error('socket hang up');
 };
 const f2Tool = createSpeakTool({
   getConfig: () => ({ enabled: true, apiServerEnabled: true }),
@@ -719,14 +756,93 @@ const f2Tool = createSpeakTool({
   autoSpeak: f2.autoSpeak,
   logger: quiet,
 });
-await check('a thrown playback failure hands the turn back too', async () => {
+await check('a thrown playback failure keeps the turn, like a timeout', async () => {
+  // A throw is an answer-less failure: the bridge never said it refused the
+  // line, so nothing proves the speaker stayed silent and the turn is not
+  // handed back. Only an answered HTTP error does that (the 503 case above).
   await assert.rejects(
     () => f2Tool.execute({ text: '念这句' }, { agent: { session: { id: F2 } } }),
     /socket hang up/,
   );
   const again = await f2Tool.execute({ text: '再念一次' }, { agent: { session: { id: F2 } } });
-  assert.notEqual(again.isError, true, again.text);
-  assert.equal(f2Attempts, 2);
+  assert.match(again.text, /忽略/, 'an unanswered line still owns the turn');
+  assert.equal(f2Attempts, 1, 'the refused repeat never reached the bridge');
+  f2.autoSpeak.onAssistantText(F2, '这句不该被念第二遍');
+  f2.autoSpeak.onTurnEnd(F2);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(f2.bridge.spoken, ['念这句'], 'the turn stays with the unanswered line');
+  assert.deepEqual(f2.records, []);
+});
+
+// A timeout answers nothing either -- the request may have been accepted and
+// played -- so it keeps the turn exactly like a throw, and the auto-speak at
+// `turn/end` must not add a second line to the turn.
+const f3 = harness();
+const F3 = 'session-tool-timeout';
+f3.autoSpeak.onUtterance({ sessionId: F3, deviceKey: 'dev-f3', text: '你好' });
+let f3Attempts = 0;
+f3.bridge.playText = async () => {
+  f3Attempts += 1;
+  return { ok: false, error: '请求超时（15000 ms）' };
+};
+const f3Tool = createSpeakTool({
+  getConfig: () => ({ enabled: true, apiServerEnabled: true }),
+  bridge: f3.bridge,
+  sessions: {
+    deviceForSession: () => ({ key: 'dev-f3', host: '192.168.1.191', name: '小爱音箱' }),
+    primaryDevice: () => null,
+  },
+  autoSpeak: f3.autoSpeak,
+  logger: quiet,
+});
+const f3First = await f3Tool.execute({ text: '念这句' }, { agent: { session: { id: F3 } } });
+await check('a timeout has no status, so it keeps the turn instead of risking a second line', async () => {
+  assert.equal(f3First.isError, true);
+  assert.match(f3First.text, /超时/);
+  const again = await f3Tool.execute({ text: '再念一次' }, { agent: { session: { id: F3 } } });
+  assert.match(again.text, /忽略/);
+  assert.equal(f3Attempts, 1, 'the refused repeat never reached the bridge');
+  f3.autoSpeak.onAssistantText(F3, '超时之后又写了一句');
+  f3.autoSpeak.onTurnEnd(F3);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(f3.bridge.spoken, [], 'no second line is spoken into the same turn');
+  assert.deepEqual(f3.records, [], 'nothing is logged as spoken');
+});
+
+// A refusal that happens before the claim is still a `tool/call` on the turn:
+// `onToolCall` already dropped the draft and marked the turn as one the tool
+// spoke, so the refusal has to unmark it. Without that the turn goes silent even
+// though it never made a sound.
+console.log('xiaoai_speak: a refusal before the claim does not eat the turn');
+async function refusedCallStillSpeaks({ label, args = { text: '念这句' }, cfg = {}, speaker = true }) {
+  const h = harness();
+  const sessionId = `session-refused-${label}`;
+  h.autoSpeak.onUtterance({ sessionId, deviceKey: 'dev-r', text: '你好' });
+  // The host fires `tool/call` before the tool body runs.
+  h.autoSpeak.onToolCall(sessionId, SPEAK_TOOL_NAME);
+  const tool = createSpeakTool({
+    getConfig: () => ({ enabled: true, apiServerEnabled: true, ...cfg }),
+    bridge: h.bridge,
+    sessions: {
+      deviceForSession: () => (speaker ? { key: 'dev-r', host: '192.168.1.191', name: '小爱音箱' } : null),
+      primaryDevice: () => null,
+    },
+    autoSpeak: h.autoSpeak,
+    logger: quiet,
+  });
+  const refused = await tool.execute(args, { agent: { session: { id: sessionId } } });
+  assert.equal(refused.isError, true, `${label}: the call is refused`);
+  assert.deepEqual(h.bridge.spoken, [], `${label}: the refusal itself plays nothing`);
+  h.autoSpeak.onAssistantText(sessionId, '这才是这一轮要说的话');
+  h.autoSpeak.onTurnEnd(sessionId);
+  await until(() => h.records.length === 1, `${label}: the turn still speaks`);
+  assert.equal(h.records[0].spoken, '说：这才是这一轮要说的话');
+}
+await check('every refusal before the claim leaves the turn able to speak', async () => {
+  await refusedCallStillSpeaks({ label: 'empty', args: { text: '   ' } });
+  await refusedCallStillSpeaks({ label: 'plugin-off', cfg: { enabled: false } });
+  await refusedCallStillSpeaks({ label: 'api-off', cfg: { apiServerEnabled: false } });
+  await refusedCallStillSpeaks({ label: 'foreign-session', speaker: false });
 });
 
 const t3 = toolHarness();

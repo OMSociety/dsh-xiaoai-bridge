@@ -5,7 +5,7 @@
   <p>桥接器是本地 Python 服务（源码在 <code>bridge/</code>），由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.8-4f6ef7" alt="version"></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.0.0-4f6ef7" alt="version"></a>
     <a href="https://github.com/deepseek-ai/dsh"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-4f6ef7" alt="DSH"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4f6ef7" alt="license"></a>
     <a href="https://github.com/OMSociety/dsh-xiaoai-bridge/stargazers"><img src="https://img.shields.io/github/stars/OMSociety/dsh-xiaoai-bridge?color=4f6ef7" alt="stars"></a>
@@ -283,14 +283,14 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 
 ### 播报与回复器
 
-音箱念出来的话不是模型的原始回复，而是先经过一次「回复器」调用做口语化润色（关掉「自动念出回复」之后，这一组只有前两项还有意义）。回复器是一次独立的模型调用，默认跟随该会话的模型路由。
+音箱念出来的话不是模型的原始回复，而是先经过一次「回复器」调用做口语化润色（关掉「自动念出回复」之后，这一组里只有「任何会话都能让小爱说话」与「审批等待提示语」还有意义）。回复器是一次独立的模型调用，默认跟随该会话的模型路由。
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| **自动念出回复** `autoSpeak` | 布尔 | 开 | 模型这一轮没调 `xiaoai_speak` 时，把回复正文交给回复器润色后念出来。关掉后只有模型主动调工具才出声，回复器那一组选项会收起来（值保留）。 |
+| **自动念出回复** `autoSpeak` | 布尔 | 开 | 模型这一轮没调 `xiaoai_speak` 时，把回复正文交给回复器润色后念出来。关掉后只有模型主动调工具才出声，回复器那一组选项会收起来（值保留）。**审批等待提示语不受这个开关影响**：审批是工具卡在屏幕上等人处理，这一句照念（见下一行）。 |
 | **任何会话都能让小爱说话** `speakFromAnySession` | 布尔 | 关 | 关：`xiaoai_speak` 只在音箱发起的会话里可用，工具与技能也只注册在那一层。开：桌面与网页会话也能调它。 |
 | **播报字数上限** `spokenMaxChars` | 整数 40-2000 | `300` | 一条播报最多多少字；超了先让回复器精简一次，仍然超就截断。 |
-| **审批等待提示语** `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具卡在宿主审批流上时念的固定一句。审批请求的正文永远不会被念出来。 |
+| **审批等待提示语** `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具卡在宿主审批流上时念的固定一句，**关掉「自动念出回复」也照念**（审批意味着有工具正等你到电脑上点一下）。审批请求的正文永远不会被念出来。 |
 | **回复器模型** `replyerProvider` / `replyerModel` | 下拉（DSH 模型目录） | 跟随会话默认模型 | 从这台 DSH 已配置的模型里挑一个给回复器用；选项按 provider 分组，选中后写成「provider/model」两个键。选「跟随会话默认模型」等于把两项留空、不指定路由。选项直接读 DSH 的模型目录（读不到、目录为空、当前值已不在目录里，卡片都会写明并给「重试」）。切换只对回复器即时生效——语音会话的 agent 路由在会话创建时就定了，要重启 DSH 才换。 |
 | **回复器参考轮数** `replyerHistoryTurns` | 整数 0-50 | `6` | 回复器能看到最近多少轮对话（只用于润色，不影响主会话的上下文）。 |
 | **回复器失败提示语** `replyerFailureText` | 文本 | `回复器调用失败` | 回复器连续失败时改念这一句，免得把没润色的原文念出去。 |
@@ -485,7 +485,7 @@ scripts/             自检脚本（九个 check-*.mjs 与聚合入口）
 
 ## 更新日志
 
-逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：插件自 `0.1.0` 起记录，当前版本 `0.2.8`（仓库里的 tag 都属于上游桥接器，插件版本号没有单独打 tag）。
+逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：当前版本 `1.0.0`，`CHANGELOG.md` 现在只有文件头，`1.0.0` 的条目与日期在打 tag 那天补（仓库里的 tag 都属于上游桥接器，插件版本号没有单独打 tag）。
 
 ## 支持与致谢
 
