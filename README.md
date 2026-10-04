@@ -172,7 +172,7 @@ uv sync
 dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 ```
 
-本仓库不发布 npm 包（`package.json` 里是 `private: true`），也没有插件市场条目，安装就是这一条命令。也可以从 GitHub 装（`dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#main"`），但那样没有 `bridge/` 的虚拟环境与模型包，需要自己补一份并把设置页的「桥接器目录」指过去。
+插件也发布在 npm 上（包名就是插件名 `dsh-xiaoai-bridge`），装法三选一：本机 checkout 用上面的绝对路径（进 profile 是 `link:`，改代码即时生效）、npm 用 `dsh plugin --profile desktop add dsh-xiaoai-bridge`、或从 GitHub 用 `dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#1.0.0"`（换成 `#main` 即跟随开发分支）。npm 与 GitHub 两条都只带源码资产，没有 `bridge/` 的虚拟环境与模型包，需要自己补一份并把设置页的「桥接器目录」指过去。
 
 5. 音箱侧（属于上游）：刷机、打客户端补丁，并确认设备侧的拨号地址。
 

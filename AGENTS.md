@@ -12,7 +12,6 @@
   - 用法、配置项、排错表：[README.md](./README.md)
   - 环境要求、提交前要跑什么、写作约定：[CONTRIBUTING.md](./CONTRIBUTING.md)
   - 变更历史（中英双语，`bridge/` 的改动也记在这里）：[CHANGELOG.md](./CHANGELOG.md)
-  - 发布前待办（维护者清单，同样不随包发布）：[仓库根待办清单](./TODO.md)
   - 桥接器 API Server 的端点、请求体与错误码：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)；豆包语音合成与声音复刻的上游接口参考：[bridge/docs/doubao-tts-api.md](./bridge/docs/doubao-tts-api.md)、[bridge/docs/doubao-clone-api.md](./bridge/docs/doubao-clone-api.md)
   - 许可与免责：[DISCLAIMER.md](./DISCLAIMER.md)
 
@@ -121,7 +120,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 - 改 `bridge/native/src/*.rs`：Rust 扩展要重编译才生效，且**必须先让桥接器停下来**（否则 `.pyd` 被占用，`uv sync` 报 `failed to remove file …dsh_xiaoai_server.pyd: 拒绝访问 (os error 5)`）——`POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop`（该路由不要凭据）→ 在 `bridge/` 里 `uv sync` → 确认 `bridge\.venv\Lib\site-packages\dsh_xiaoai_server\dsh_xiaoai_server.pyd` 的修改时间就是刚才 → `POST …/bridge/start`。`bridge/pyproject.toml` 的 `tool.uv.cache-keys` 已声明触发路径。
 - 改 PyO3 模块名（现在叫 `dsh_xiaoai_server`）：一次要改 `bridge/native/Cargo.toml` 的 `[package] name` 与 `[lib] name`、`bridge/native/src/lib.rs` 的 `#[pymodule] fn`、所有 Python 侧的 `import` 与 `sys.modules.setdefault` 测试桩、以及文档里的导入示例；site-packages 里的包装包目录名与 `bridge/Cargo.lock` 的包名跟着变，改完必须停桥接器 → `uv sync` → `import dsh_xiaoai_server` 验证。
 - 改版本号：**先报备用户**（仓库既有纪律，见 [CONTRIBUTING.md](./CONTRIBUTING.md)）。
-- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](./CHANGELOG.md) 的版本条目（当前是 `1.0.0`：文件只剩文件头，条目的标题与日期在打 tag 那天补），不要写进 README 或提交信息。
+- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](./CHANGELOG.md) 的版本条目（当前是 `## [1.0.0] - 2026-10-04`），不要写进 README 或提交信息。
 - 一次改动跨了上面多条（例如既加配置项又改界面）：相关检查**全跑**（配置项 + 界面 = `check-config` + `check-client`），这里只有并集，没有优先级。
 
 ## 禁止操作
@@ -182,7 +181,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 | 症状（可检索片段） | 处理 |
 |---|---|
-| 装 GitHub 版本时报 `no matching ref` | README 的安装命令用的是分支 `#main`——插件的版本从来没有打 tag；要按版本固定就先打 tag 再改那一行 |
+| 装 GitHub 版本时报 `no matching ref` | 写的 ref 不存在：插件从 `1.0.0` 起有 tag（`git tag -l` 看本地、`git ls-remote --tags origin` 看远端），`dsh plugin … add "github:OMSociety/dsh-xiaoai-bridge#1.0.0"` 按版本固定，`#main` 跟随开发分支 |
 | `config render failed: ENOENT` 且路径里有 `config.py.tmp` | 数据目录还没建（`autoStart` 关着，或在临时 `DSH_HOME` 里跑）——不是渲染器坏了 |
 | `No module named pytest` | `uv sync` 清掉了 dev 依赖：`uv pip install --python bridge\.venv\Scripts\python.exe pytest`；也可能是用了系统 Python，改用 `bridge/.venv` 的解释器 |
 | `failed to remove file …dsh_xiaoai_server.pyd: 拒绝访问 (os error 5)` | 桥接器正在跑，`.pyd` 被占用：先 `POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop` 再 `uv sync`，装完 `POST …/bridge/start` |
