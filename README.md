@@ -1,6 +1,6 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/OMSociety/dsh-xiaoai-bridge/main/docs/logo.png" alt="DSH XiaoAI Bridge" width="160">
-  <h1>DSH XiaoAI Bridge</h1>
+  <h1>小爱音箱桥接器 DSH XiaoAI Bridge</h1>
   <p>把小爱音箱接进 DeepSeek Harness：喊一声唤醒词，答案从音箱里念出来。</p>
   <p>桥接器是本地 Python 服务（源码在 <code>bridge/</code>），由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
@@ -31,13 +31,13 @@
 
 ## 这是什么
 
-小爱音箱刷成 open-xiaoai 客户端之后，就能在设备上跑自己的语音程序。这个仓库把它接进 DeepSeek Harness：
+小爱音箱刷成 open-xiaoai 客户端之后，就能在设备上跑自己的语音程序。这个项目把它接进 DeepSeek Harness：
 
 - 你说唤醒词，音箱开始收音；识别出来的文本被当成一句用户消息，送进 DSH 的一个会话。
 - 会话的回复正文会被念回音箱（念之前先做一次口语化润色，让它听起来像在说话）。
 - 模型也可以反过来主动开口：调 `xiaoai_speak`，让音箱念出指定的内容。
 
-仓库分两半：根目录是 **DSH 插件**（Node，`lib/`），`bridge/` 是 **Python 桥接器**。桥接器负责设备那一侧（TCP 音频、VAD、唤醒词、语音识别、语音合成、播放闸门），插件负责 DSH 这一侧（设置页、运行状态卡、进程托管与看门狗、接口鉴权、随包技能与预设）。插件拉起桥接器进程、渲染它的配置、看住它；桥接器也能脱离插件单独跑。
+仓库分两半：根目录是 **DSH 插件**（Node，`lib/`），`bridge/` 是 **桥接器**。桥接器负责设备那一侧（TCP 音频、VAD、唤醒词、语音识别、语音合成、播放闸门），插件负责 DSH 这一侧（设置页、运行状态卡、进程托管与看门狗、接口鉴权、随包技能与预设）。插件拉起桥接器进程、渲染它的配置、看住它；桥接器也能脱离插件单独跑。
 
 `bridge/` 的源码来自 [coderzc/open-xiaoai-bridge](https://github.com/coderzc/open-xiaoai-bridge)（MIT，其上游是 [Open-XiaoAI](https://github.com/idootop/open-xiaoai)），本仓库在它之上加了 DSH 后端、播报纪律、鉴权与生命周期管理。本仓库**独立演进**，不跟进上游。
 
