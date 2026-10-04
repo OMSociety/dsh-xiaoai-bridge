@@ -4,7 +4,7 @@
 
 ## 必须在发布前做完
 
-- [ ] **版本与 CHANGELOG 收口**：`package.json` 的 `version` 仍是 `0.2.8`，**改前先报备用户**；改完同步 README 徽章，并让 `CHANGELOG.md` 的 `Unreleased` 节落定（版本标题带日期、中英条目 1:1，跑 `changelog-check.mjs`）。
+- [ ] **打 tag 与 CHANGELOG 条目**：版本号已按用户签字收口到 `1.0.0`（`package.json` 与 README 徽章同步，`CHANGELOG.md` 保持只有文件头的初始状态）。打 `1.0.0` tag 那天再补 `## [1.0.0] - YYYY-MM-DD` 与条目，并跑仓库外的 `changelog-check.mjs`（它要求非 `Unreleased` 的版本标题带日期）。本仓库已有上游 tag `v1.0.0` … `v1.0.7`、`baseline`、`vad-kws-asr-models`，打 tag 前先 `git tag -l` 确认不撞名。条目要一并交代本轮审计留下的取舍（`xiaoai_speak` 只在桥接器明确答复时才交还发言权、`registerScoped` 的半注册回滚、`routeHintFor` 里 empty 优先于 partial），这些取舍目前只写在代码注释里。
 - [ ] **发布前全绿**：仓库根 `npm run check`（九条）、`bridge` 的 `pytest -q`（基线 `157 passed, 19 subtests`，只许升）、仓库外的 `doc-check.mjs` 与 `changelog-check.mjs`。`bridge` 的 `.venv` 里若没有 pytest，先 `uv pip install --python .venv\Scripts\python.exe pytest`（`uv sync` 会把它卸掉）。
 - [ ] **push 归用户**：提交只推 `origin`，`upstream` 只用来查看状态。
 

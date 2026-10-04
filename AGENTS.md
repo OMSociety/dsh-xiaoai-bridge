@@ -121,7 +121,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 - 改 `bridge/native/src/*.rs`：Rust 扩展要重编译才生效，且**必须先让桥接器停下来**（否则 `.pyd` 被占用，`uv sync` 报 `failed to remove file …dsh_xiaoai_server.pyd: 拒绝访问 (os error 5)`）——`POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop`（该路由不要凭据）→ 在 `bridge/` 里 `uv sync` → 确认 `bridge\.venv\Lib\site-packages\dsh_xiaoai_server\dsh_xiaoai_server.pyd` 的修改时间就是刚才 → `POST …/bridge/start`。`bridge/pyproject.toml` 的 `tool.uv.cache-keys` 已声明触发路径。
 - 改 PyO3 模块名（现在叫 `dsh_xiaoai_server`）：一次要改 `bridge/native/Cargo.toml` 的 `[package] name` 与 `[lib] name`、`bridge/native/src/lib.rs` 的 `#[pymodule] fn`、所有 Python 侧的 `import` 与 `sys.modules.setdefault` 测试桩、以及文档里的导入示例；site-packages 里的包装包目录名与 `bridge/Cargo.lock` 的包名跟着变，改完必须停桥接器 → `uv sync` → `import dsh_xiaoai_server` 验证。
 - 改版本号：**先报备用户**（仓库既有纪律，见 [CONTRIBUTING.md](./CONTRIBUTING.md)）。
-- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](./CHANGELOG.md) 的版本条目（`Unreleased` 一节），不要写进 README 或提交信息。
+- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](./CHANGELOG.md) 的版本条目（当前是 `1.0.0`：文件只剩文件头，条目的标题与日期在打 tag 那天补），不要写进 README 或提交信息。
 - 一次改动跨了上面多条（例如既加配置项又改界面）：相关检查**全跑**（配置项 + 界面 = `check-config` + `check-client`），这里只有并集，没有优先级。
 
 ## 禁止操作

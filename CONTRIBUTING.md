@@ -56,7 +56,7 @@ TODO.md             发布前待办（不随包发布）
 
 - **对外文档零 emoji**（箭头 `→`、`•`、`—` 这类符号不算），README 与 CHANGELOG 里不写 `---` 分隔线。
 - 交付物只写最终采用的客观状态：被否方案、中间尝试不写进 README / CHANGELOG / 提交信息。
-- **版本号变更先报备**：`package.json` 的 `version` 是唯一版本源，改完记得同步 README 徽章与 CHANGELOG。
+- **版本号变更先报备**：`package.json` 的 `version` 是唯一版本源，改完记得同步 README 徽章与 CHANGELOG（现在是 `1.0.0`：`CHANGELOG.md` 只剩文件头，1.0.0 的条目与日期在打 tag 那天补）。
 - 配置与凭据**绝不入库**：`bridge/config.py` 是桥接器的配置模板，必须保留，渲染产物 `config.py.rendered`、`device.json`、`devices.json`、`*.token`、`credentials.json` 都已在 `.gitignore` 里（凭据一旦进了历史就得轮换，删文件没用）。
 - `pnpm-lock.yaml` 也忽略，但**理由和凭据不同，别混为一谈**：它不是敏感文件，只是本插件用不上——消费者侧（DSH 用 pnpm 装包）从 `package.json` 解析依赖边，profile 里有自己的锁与闸门文件；`files` 白名单也不含它，装出来的副本里根本没有这份锁。入库的唯一收益是让贡献者复现插件侧那棵树，代价是锁文件长期在实际解析结果后面漂着。要复现就本地 `pnpm install --lockfile-only` 临时生成。对照：`bridge/uv.lock` 与 `bridge/Cargo.lock` 是**有意入库**的，因为桥接器就在这套源码上原地运行、依赖树必须可复现。
 - PowerShell 不支持 `<<<`：提交信息先写临时文件，再 `git commit -F <文件>`。
