@@ -23,13 +23,22 @@
  * the child (and never inherited from the host when there is none), and a start
  * that replaces an adopted bridge whose death the 5s poll has not seen yet.
  *
+ * Cases K-L cover the two ways the adoption check used to overreach: a *stop*
+ * that arrives after the adopted bridge already died (the poll was left armed and
+ * brought the bridge back), and a bare pid file whose command line merely
+ * *contains* the text `main.py` (adopted, then tree-killed, as if it were ours).
+ *
+ * Case M covers the shape a credential read may come back in: the seam declares
+ * `resolve()` as returning a `{value, source}` record, so a reader that only
+ * accepted a bare string left `DOUBAO_ACCESS_KEY` unset.
+ *
  *   node scripts/check-supervisor.mjs
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBridgeSupervisor } from '../lib/process.js';
+import { createBridgeSupervisor, credentialText } from '../lib/process.js';
 
 const HOUR_MS = 3600 * 1000;
 let failures = 0;
@@ -71,6 +80,39 @@ function startDummy() {
     child.once('spawn', () => resolve(child));
     child.once('error', reject);
   });
+}
+
+/**
+ * Start a long-lived process running a named script inside the bridge dir.
+ * @param {string} name script file name to run
+ * @returns {Promise<import('node:child_process').ChildProcess>} a long-lived dummy
+ */
+function startScript(name) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [name], {
+      cwd: bridgeDir,
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    child.once('spawn', () => resolve(child));
+    child.once('error', reject);
+  });
+}
+
+/**
+ * Kill a process (and its children) the way a crash would, best effort.
+ * @param {number} pid process id
+ */
+function killHard(pid) {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
 }
 
 /**
@@ -425,18 +467,46 @@ console.log('case I: the API token reaches the bridge process, and only when the
   writeFileSync(
     join(bridgeDir, 'main.py'),
     `require('node:fs').writeFileSync(${JSON.stringify(marker)}, `
-      + `JSON.stringify({ token: process.env.XIAOAI_API_TOKEN ?? null }));\n`
+      + `JSON.stringify({ token: process.env.XIAOAI_API_TOKEN ?? null, `
+      + `speakerToken: process.env.DSH_XIAOAI_TOKEN ?? null, `
+      + `doubaoKey: process.env.DOUBAO_ACCESS_KEY ?? null }));\n`
       + 'setInterval(() => {}, 1000);\n',
     'utf8',
   );
 
-  const withToken = makeSupervisor({ resolveToken: async () => 'probe-token-32-hex' });
+  // The credential store hands back a `{value, source}` record (that is what the
+  // seam declares); `DOUBAO_ACCESS_KEY` has to carry the text inside it, not a
+  // stringified object the Python side cannot use.
+  const withToken = makeSupervisor({
+    resolveToken: async () => 'probe-token-32-hex',
+    resolveDoubaoKey: async () => ({ value: 'doubao-record-token', source: 'file' }),
+  });
   const res = await withToken.start();
   check('a start with a configured token succeeds', res.ok === true);
   check('the bridge process reported its environment', await until(() => existsSync(marker), 10_000));
   const seen = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : {};
   check('XIAOAI_API_TOKEN is passed to the bridge', seen.token === 'probe-token-32-hex');
+  check('the speaker link is guarded by the same token by default', seen.speakerToken === 'probe-token-32-hex');
+  check('a credential record reaches the bridge as its value', seen.doubaoKey === 'doubao-record-token');
   await withToken.stop();
+
+  // 「音箱连接鉴权」 off: the token is still there for the API Server, but the
+  // port the speaker dials must be open -- and a value inherited from the host
+  // must not re-arm the check behind the user's back.
+  rmSync(marker, { force: true });
+  process.env.DSH_XIAOAI_TOKEN = 'leaked-from-the-host';
+  const authOff = makeSupervisor({
+    getConfig: () => ({ ...config, speakerAuth: false }),
+    resolveToken: async () => 'probe-token-32-hex',
+  });
+  const off = await authOff.start();
+  check('a start with the speaker check off succeeds', off.ok === true);
+  check('the unguarded bridge reported its environment', await until(() => existsSync(marker), 10_000));
+  const offSeen = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : {};
+  check('the API token still reaches the bridge', offSeen.token === 'probe-token-32-hex');
+  check('the speaker check is not armed when the setting is off', offSeen.speakerToken === null);
+  delete process.env.DSH_XIAOAI_TOKEN;
+  await authOff.stop();
 
   // The mirror image: with no token to pass, the host's own variable must not
   // leak into the child, or the bridge would demand a bearer nobody sends.
@@ -498,6 +568,86 @@ console.log('case J: a replacement start forgets the adopted bridge it outlived'
 
   await supervisor.stop();
   check('stop kills the replacement', await waitGone(fresh.pid, Date.now() + 10_000));
+}
+
+console.log('case K: a stop of an adopted bridge that already died does not restart it');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  stamp(join(bridgeDir, 'main.py'), Date.now() - HOUR_MS);
+  stamp(join(coreDir, 'dummy.py'), Date.now() - HOUR_MS);
+
+  const dummy = await startDummy();
+  writePidRecord(dummy.pid);
+  const supervisor = makeSupervisor();
+  const adopted = await supervisor.start();
+  check('the leftover bridge is adopted first', adopted.adopted === true && adopted.pid === dummy.pid);
+
+  // Kill it and stop in the same breath: the 5s poll has not looked yet, so the
+  // adopted pid is still on record while the process is already gone. The stop
+  // used to return early, leaving that watcher armed to call the death a crash
+  // and bring the bridge back up right after the user asked it to stop.
+  killHard(dummy.pid);
+  check('the adopted bridge is gone before the stop', await until(() => !isAlive(dummy.pid), 2_000));
+
+  const stopped = await supervisor.stop();
+  check('the stop reports nothing left to stop', stopped.ok === true && stopped.stopped === false);
+  check('the dead adoption is no longer reported', supervisor.state().adopted === false);
+  check('the dead adoption is noted, not called a crash', logText().includes('was already gone; clearing its record'));
+  check('no unexpected exit was reported', !logText().includes('exited unexpectedly'));
+
+  // Longer than one poll period plus the first restart delay: the old watcher
+  // would have started a bridge by now.
+  await sleep(7_000);
+  check('no bridge was brought back up', supervisor.state().running === false);
+  check('the watchdog was not woken', supervisor.state().restarts === 0);
+  check('no second bridge was ever started', startedPids().length === 0);
+}
+
+console.log('case L: a bare pid file whose command line merely contains main.py is refused');
+{
+  rmSync(pidPath, { force: true });
+  rmSync(logPath, { force: true });
+  stamp(join(bridgeDir, 'main.py'), Date.now() - HOUR_MS);
+  stamp(join(coreDir, 'dummy.py'), Date.now() - HOUR_MS);
+
+  // `xmain.pyz` contains the text "main.py" without running it. The legacy check
+  // (a bare pid plus `commandLine.includes('main.py')`) adopted this process as
+  // the bridge and the stop path then tree-killed it.
+  writeFileSync(join(bridgeDir, 'xmain.pyz'), 'setInterval(() => {}, 1000);\n', 'utf8');
+  const lookalike = await startScript('xmain.pyz');
+  writeFileSync(pidPath, `${lookalike.pid}\n`, 'utf8');
+
+  const supervisor = makeSupervisor();
+  const res = await supervisor.start();
+  check('the look-alike is not adopted', res.ok === true && res.adopted !== true && res.pid !== lookalike.pid);
+  check('the look-alike is left alone', isAlive(lookalike.pid));
+  check(
+    'the refusal is logged',
+    logText().includes('is alive but its command line is not our bridge'),
+  );
+
+  await supervisor.stop();
+  check('the stop did not kill the look-alike', isAlive(lookalike.pid));
+  killHard(lookalike.pid);
+  check('the look-alike is gone once the check is over', await until(() => !isAlive(lookalike.pid), 5_000));
+}
+
+console.log('case M: a credential read accepts both shapes the store may answer with');
+{
+  // DSH Credentials is a seam with one declared shape (`{value, source}`) and, in
+  // the field, providers that hand back the text directly. Anything else -- an
+  // empty slot, a record with no string value -- has to read as "nothing stored"
+  // rather than as a token made of `[object Object]`.
+  check('a bare string is the credential text', credentialText('token-abc') === 'token-abc');
+  check('a record is unwrapped to its value', credentialText({ value: 'token-abc', source: 'file' }) === 'token-abc');
+  check('an empty string is nothing', credentialText('') === null);
+  check('an empty record value is nothing', credentialText({ value: '' }) === null);
+  check('a missing slot is nothing', credentialText(undefined) === null);
+  check('a null slot is nothing', credentialText(null) === null);
+  check('a record without a value is nothing', credentialText({ source: 'env' }) === null);
+  check('a non-string value is nothing', credentialText({ value: 42 }) === null);
+  check('a number is nothing', credentialText(7) === null);
 }
 
 rmSync(root, { recursive: true, force: true });

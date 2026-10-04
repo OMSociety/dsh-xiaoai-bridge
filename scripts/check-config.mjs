@@ -119,6 +119,9 @@ eq(
   'the action rules are appended, not bundled into the voice rule',
 );
 eq(DEFAULTS.voiceRuleText.includes('行动准则'), false, 'the voice rule default is the channel note only');
+// The speaker link is guarded out of the box; only an explicit false turns the
+// check off, which is what lib/process.js implements (`!== false`).
+eq(DEFAULTS.speakerAuth, true, 'the speaker link is authenticated by default');
 eq(full.dsh.continuous_conversation, false, 'dsh.continuous_conversation follows the page default');
 eq(
   buildOverrides({ ...DEFAULTS, continuousConversation: true }).dsh.continuous_conversation,

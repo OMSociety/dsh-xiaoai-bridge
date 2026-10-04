@@ -53,7 +53,8 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-ui-plugin-manager"
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-api-remotes"
       ],
       "platform": "web"
     },
@@ -78,6 +79,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/dsh-agent": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-api-remotes": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1",

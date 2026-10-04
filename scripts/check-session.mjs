@@ -38,6 +38,10 @@ function harness({ withDefaultModel = true, workspacePath, presetRegistry, resum
   const agentCtxHandlers = [];
   const attached = [];
   const resumed = [];
+  // Which conversation's handle was disposed, in order. The session id is read
+  // when the handle is built, not when it is disposed: a rebound handle outlives
+  // the id the shared `agent` object carries by then.
+  const disposals = [];
   let live = null;
   let resumeCalls = 0;
 
@@ -53,13 +57,15 @@ function harness({ withDefaultModel = true, workspacePath, presetRegistry, resum
       if (!resumable) throw new Error('no persisted session');
       resumed.push(options);
       agent.session.id = options.resumeSessionId;
-      live = { agent, dispose: async () => {} };
+      const sessionId = options.resumeSessionId;
+      live = { agent, dispose: async () => { disposals.push(sessionId); } };
       return live;
     },
     create: async (options) => {
       created.push(options);
       agent.session.id = options.sessionId;
-      live = { agent, dispose: async () => {} };
+      const sessionId = options.sessionId;
+      live = { agent, dispose: async () => { disposals.push(sessionId); } };
       return live;
     },
   };
@@ -92,7 +98,7 @@ function harness({ withDefaultModel = true, workspacePath, presetRegistry, resum
     on: () => () => {},
   };
   return {
-    ctx, created, inbox, renames, agent, agentCtx, agentCtxHandlers, attached, resumed,
+    ctx, agents, created, inbox, renames, agent, agentCtx, agentCtxHandlers, attached, resumed, disposals,
     get live() { return live; },
     get resumeCalls() { return resumeCalls; },
   };
@@ -776,6 +782,81 @@ check('an unarchived conversation is still resumed', () => {
   assert.equal(h12b.created.length, 0);
 });
 
+// --- case 13: the handle a rebind leaves behind -----------------------------
+// R4-4: when a bound conversation is archived, the record is pointed at a new
+// conversation while the old handle is simply dropped from the map — nothing
+// gives it back to the host, so its loop stays registered (and the handle itself
+// unreachable) until the plugin is disposed. The leak only surfaces when the
+// same bridge both created the old conversation and then rebinds away from it,
+// which is why case 12 cannot see it: that bridge never tracked the archived
+// conversation in the first place.
+console.log('case 13: rebinding releases the old handle');
+const rebindDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-rebind-'));
+const archivedLive = [];
+const h13 = harness({ archivedSessionIds: archivedLive, resumable: true });
+const bridge13 = createSessionBridge({ ctx: h13.ctx, getConfig: () => ({}), dataDir: rebindDir, logger });
+const first13 = await bridge13.deliver({ host: '192.168.1.206', name: '小爱音箱', text: '你好' });
+// The user archives the conversation while the plugin is running. The harness
+// hands back the same array reference on every read, like the host's live getter.
+archivedLive.push(first13.sessionId);
+const second13 = await bridge13.deliver({ host: '192.168.1.206', name: '小爱音箱', text: '你好' });
+// `retire` disposes on a later microtask on purpose (a rebind is on the
+// utterance's critical path), so give it one turn before asserting.
+await new Promise((resolve) => { setTimeout(resolve, 0); });
+check('the rebound delivery is a new conversation', () => {
+  assert.equal(second13.ok, true);
+  assert.notEqual(second13.sessionId, first13.sessionId);
+  assert.equal(h13.created.length, 2);
+});
+check('the superseded handle was released exactly once', () => {
+  assert.deepEqual(h13.disposals, [first13.sessionId]);
+});
+await bridge13.dispose();
+check('teardown does not release the superseded handle a second time', () => {
+  assert.deepEqual(h13.disposals, [first13.sessionId, second13.sessionId]);
+});
+
+// --- case 14: a host failure is logged in full, never reflected -------------
+// R8-2-4: `deliver` used to answer `无法投递消息：<messageOf(err)>`, and /asr puts
+// that string straight into its 503 body, which the bridge client then writes
+// into bridge.log. The host message thus left this process twice (once as an
+// HTTP response, once as a bridge log line) and never stayed where it belongs.
+// These assertions pin the fixed wording and the log line that replaces it.
+console.log('case 14: host failures are not reflected');
+const hostDir = mkdtempSync(join(tmpdir(), 'xiaoai-session-hostfail-'));
+const hostMarker = 'ENOENT: C:\\Users\\Administrator\\secret\\model.onnx';
+const h14 = harness();
+h14.agents.create = async () => { throw new Error(hostMarker); };
+const bridge14 = createSessionBridge({ ctx: h14.ctx, getConfig: () => ({}), dataDir: hostDir, logger });
+const warningsBefore14 = warnings.length;
+const failedCreate = await bridge14.deliver({ host: '192.168.1.207', name: '小爱音箱', text: '你好' });
+check('a failed session creation answers fixed wording', () => {
+  assert.equal(failedCreate.ok, false);
+  assert.equal(failedCreate.error, 'unable to create a session');
+  assert.equal(failedCreate.error.includes(hostMarker), false);
+  assert.equal(/Administrator|model\.onnx/.test(failedCreate.error), false);
+});
+check('the host message lands in the plugin log instead', () => {
+  assert.ok(warnings.slice(warningsBefore14).some((line) => line.includes(hostMarker)), warnings.slice(warningsBefore14).join(' | '));
+});
+
+const h15 = harness();
+const bridge15 = createSessionBridge({ ctx: h15.ctx, getConfig: () => ({}), dataDir: hostDir, logger });
+const first15 = await bridge15.deliver({ host: '192.168.1.208', name: '小爱音箱', text: '你好' });
+const warningsBefore15 = warnings.length;
+h15.agent.followup = () => { throw new Error(hostMarker); };
+const failedDeliver = await bridge15.deliver({ host: '192.168.1.208', name: '小爱音箱', text: '你好' });
+check('a failed delivery answers a fixed refusal of its own', () => {
+  assert.equal(first15.ok, true);
+  assert.equal(failedDeliver.ok, false);
+  assert.equal(failedDeliver.error, 'unable to deliver the utterance');
+  assert.notEqual(failedDeliver.error, failedCreate.error);
+  assert.equal(/ENOENT|Administrator|model\.onnx/.test(failedDeliver.error), false);
+});
+check('the delivery failure is logged in full too', () => {
+  assert.ok(warnings.slice(warningsBefore15).some((line) => line.includes(hostMarker)), warnings.slice(warningsBefore15).join(' | '));
+});
+
 await bridge1.dispose();
 await bridge2.dispose();
 await bridge3.dispose();
@@ -793,12 +874,17 @@ await bridge11e.dispose();
 await bridge11f.dispose();
 await bridge12.dispose();
 await bridge12b.dispose();
+await bridge13.dispose();
+await bridge14.dispose();
+await bridge15.dispose();
 rmSync(dataDir, { recursive: true, force: true });
 rmSync(legacyDir, { recursive: true, force: true });
 rmSync(workspaceDir, { recursive: true, force: true });
 rmSync(configuredDir, { recursive: true, force: true });
 rmSync(presetDir, { recursive: true, force: true });
 rmSync(archivedDir, { recursive: true, force: true });
+rmSync(rebindDir, { recursive: true, force: true });
+rmSync(hostDir, { recursive: true, force: true });
 
 console.log(failures === 0 ? '\nsession check OK' : `\nsession check FAILED (${failures})`);
 process.exitCode = failures === 0 ? 0 : 1;

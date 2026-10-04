@@ -26,7 +26,11 @@
  */
 import http from 'node:http';
 import net from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { mountHttp } from '../lib/http.js';
+import { createSessionBridge } from '../lib/session.js';
 import { createBridgeClient } from '../lib/bridge.js';
 import { DEFAULTS } from '../lib/config.js';
 
@@ -376,6 +380,61 @@ async function main() {
     eq(delivery.status, 503, 'a failed delivery is reported as 503, not swallowed as 200');
   }
 
+  section('asr: a host failure inside the real session bridge is not reflected by the route');
+  {
+    // R8-2-4. /asr answers with whatever `sessions.deliver` produced, and the
+    // bridge client writes that body into bridge.log, so the session bridge's
+    // wording is the only thing between a host path and the bridge's log. This
+    // case mounts the REAL bridge (not a fake) behind the route with a host that
+    // fails, which is the shape the finding described: the response must carry the
+    // bridge's own refusal and none of the host text, which belongs in the log.
+    const echoed = 'ENOENT: C:\\Users\\Administrator\\secret\\model.onnx';
+    const bridgeLogs = [];
+    const bridgeLogger = {
+      info: () => {},
+      warn: (line) => bridgeLogs.push(String(line)),
+      error: () => {},
+      debug: () => {},
+    };
+    const sessionDir = mkdtempSync(join(tmpdir(), 'xiaoai-http-session-'));
+    let hostCreateCalls = 0;
+    const failingHost = {
+      get(name) {
+        if (name === 'agents') {
+          return {
+            get: () => null,
+            resume: async () => { throw new Error(echoed); },
+            create: async () => { hostCreateCalls += 1; throw new Error(echoed); },
+          };
+        }
+        return undefined;
+      },
+      on: () => () => {},
+    };
+    const sessionBridge = createSessionBridge({
+      ctx: failingHost,
+      getConfig: () => ({}),
+      dataDir: sessionDir,
+      logger: bridgeLogger,
+    });
+    handler = captureHandler(makeDeps({ sessions: sessionBridge }).deps, port).handler;
+
+    const response = await request(port, `${PREFIX}/asr`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret-token-abc123' },
+      body: JSON.stringify({ text: '把客厅的灯打开', device_host: 'host-1', device_name: '客厅' }),
+    });
+    eq(hostCreateCalls, 1, 'the real session bridge did try to open a conversation on the host');
+    eq(response.status, 503, 'a conversation that cannot be opened is 503, not a 200');
+    eq(response.json?.ok, false, 'the 503 is still a refusal shape');
+    eq(response.json?.error, 'unable to create a session', 'the 503 carries the bridge wording rather than the host message');
+    ok(!/ENOENT|Administrator|model\.onnx/.test(response.text), 'no fragment of the host message reaches the response body');
+    ok(bridgeLogs.some((line) => line.includes(echoed)), 'the host message is in the plugin log instead');
+
+    await sessionBridge.dispose();
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+
   section('asr: a credential lookup that throws is a 500, not a delivery');
   {
     const throwing = makeDeps({
@@ -527,6 +586,32 @@ async function main() {
     eq(legal.status, 200, 'a legal patch is still stored');
     eq(guarded.calls.update.length, 1, 'settings.update ran exactly once for the legal patch');
     eq(legal.json?.ok, true, 'the accepted write answers ok');
+
+    // R3-3: the settings seam deep-writes the path it is handed, so an element
+    // that is not a plain key (`__proto__`, a non-string, an unbounded string)
+    // is refused here instead of being passed down as a key shape. The wording is
+    // part of the assertion because the draft validator below would refuse some
+    // of these anyway, with its own message and without ever naming the path.
+    const proto = await write({ ops: [{ op: 'set', path: ['__proto__'], value: 'x' }] });
+    eq(proto.status, 400, 'a prototype-shaped path element is refused with 400');
+    ok(/path element/.test(String(proto.json?.error)), 'the refusal names the path-element rule, not the draft rule');
+
+    const nestedProto = await write({ ops: [{ op: 'set', path: ['sessionKey', '__proto__'], value: 'x' }] });
+    eq(nestedProto.status, 400, 'a prototype-shaped element is refused when it is not the first one either');
+
+    const nonString = await write({ ops: [{ op: 'set', path: [7], value: 'x' }] });
+    eq(nonString.status, 400, 'a non-string path element is refused with 400');
+    ok(/path element/.test(String(nonString.json?.error)), 'the non-string refusal names the path-element rule too');
+
+    const tooLong = await write({ ops: [{ op: 'set', path: ['k'.repeat(65)], value: 'x' }] });
+    eq(tooLong.status, 400, 'an over-long path element is refused with 400');
+
+    const dotted = await write({ ops: [{ op: 'set', path: ['a.b'], value: 'x' }] });
+    eq(dotted.status, 400, 'a dotted path element is refused with 400');
+
+    const missingPath = await write({ ops: [{ op: 'set', value: 'x' }] });
+    eq(missingPath.status, 400, 'an op with no path at all is still refused');
+    eq(guarded.calls.mutate.length, 1, 'settings.mutate saw none of the refused shapes');
   }
 
   // --------------------------------------------------------- error reflection
@@ -592,7 +677,9 @@ async function main() {
     );
   }
 
-  await close(server);
+  // The route server stays up for the credential section below: the bridge
+  // client section that follows brings up its own recorder on its own port.
+
   section('bridge client: the bearer only follows a vetted host:port');
   {
     const seen = [];
@@ -714,6 +801,110 @@ async function main() {
     }
 
     await close(recorder);
+  }
+
+  // ------------------------------------------------- /credential/doubao
+  section('credential: the token goes in one way, and only its state comes back');
+  {
+    const token = 'doubao-token-abc123-secret';
+    const admitted = [];
+    const credential = makeDeps({
+      describeDoubaoKey: async () => ({
+        ok: true,
+        credential: { ref: 'DOUBAO_ACCESS_KEY', configured: false, writable: true },
+      }),
+      writeDoubaoKey: async (value) => {
+        admitted.push(value);
+        return { ok: true, credential: { ref: 'DOUBAO_ACCESS_KEY', configured: true, writable: true } };
+      },
+      clearDoubaoKey: async () => ({
+        ok: true,
+        credential: { ref: 'DOUBAO_ACCESS_KEY', configured: false, writable: true },
+      }),
+    });
+    handler = captureHandler(credential.deps, port).handler;
+
+    const state = await request(port, `${PREFIX}/credential/doubao`);
+    eq(state.status, 200, 'GET /credential/doubao answers the credential state');
+    eq(state.json?.credential?.configured, false, 'the state says whether a value is stored');
+    eq(state.json?.credential?.ref, 'DOUBAO_ACCESS_KEY', 'the state names the reference, never the value');
+    ok(!JSON.stringify(state.json).includes(token), 'the state body carries no token');
+
+    const written = await request(port, `${PREFIX}/credential/doubao`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: token }),
+    });
+    eq(written.status, 200, 'POST with a value is accepted');
+    eq(admitted.length, 1, 'the store received exactly one write');
+    eq(admitted[0], token, 'the store received the token exactly as typed');
+    eq(written.json?.credential?.configured, true, 'the answer reports the new state');
+    ok(!JSON.stringify(written.json).includes(token), 'the write answer does not echo the token');
+    ok(!credential.calls.logs.some((line) => line.includes(token)), 'no log line carries the token');
+
+    const cleared = await request(port, `${PREFIX}/credential/doubao`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clear: true }),
+    });
+    eq(cleared.status, 200, 'POST {clear:true} is accepted');
+    eq(cleared.json?.credential?.configured, false, 'clearing turns the state back to unset');
+    eq(admitted.length, 1, 'clearing does not write a value through the store');
+
+    const blank = await request(port, `${PREFIX}/credential/doubao`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: '   ' }),
+    });
+    eq(blank.status, 400, 'a blank value is refused as a bad request');
+    eq(admitted.length, 1, 'a blank value never reaches the store');
+    ok(!String(blank.json?.error ?? '').includes(token), 'the refusal quotes no value');
+
+    const noValue = await request(port, `${PREFIX}/credential/doubao`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    eq(noValue.status, 400, 'a body without a value is refused rather than read as "clear"');
+    eq(admitted.length, 1, 'the store is still untouched');
+
+    const readOnly = makeDeps({
+      describeDoubaoKey: async () => ({
+        ok: true,
+        credential: { ref: 'DOUBAO_ACCESS_KEY', configured: true, writable: false },
+      }),
+      writeDoubaoKey: async () => ({ ok: false, error: 'credential is read-only' }),
+      clearDoubaoKey: async () => ({ ok: false, error: 'credential is read-only' }),
+    });
+    handler = captureHandler(readOnly.deps, port).handler;
+    const refused = await request(port, `${PREFIX}/credential/doubao`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: token }),
+    });
+    eq(refused.status, 403, 'a read-only source is refused with 403');
+    ok(String(refused.json?.error ?? '').includes('read-only'), 'the refusal explains itself in fixed wording');
+
+    const unmounted = makeDeps({
+      describeDoubaoKey: undefined,
+      writeDoubaoKey: undefined,
+      clearDoubaoKey: undefined,
+    });
+    handler = captureHandler(unmounted.deps, port).handler;
+    eq(
+      (await request(port, `${PREFIX}/credential/doubao`)).status,
+      503,
+      'an unmounted credential seam answers 503 rather than an empty state',
+    );
+    eq(
+      (await request(port, `${PREFIX}/credential/doubao`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: token }),
+      })).status,
+      503,
+      'an unmounted credential seam refuses a write too',
+    );
   }
 
   console.log(failures === 0 ? '\nhttp check OK' : `\nhttp check FAILED (${failures})`);
