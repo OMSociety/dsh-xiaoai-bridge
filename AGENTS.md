@@ -11,7 +11,7 @@
 - 文档索引：
   - 用法、配置项、排错表：[README.md](./README.md)
   - 环境要求、提交前要跑什么、写作约定：[CONTRIBUTING.md](./CONTRIBUTING.md)
-  - 维护期工具清单与用法、侦察笔记：[tools/README.md](./tools/README.md)（`tools/` 与 `docs/notes/` 都不随包发布）
+- 维护期工具索引：[tools/README.md](./tools/README.md)（`tools/` 与 `docs/agents/` 都不随包发布）
   - 变更历史（中英双语，`bridge/` 的改动也记在这里）：[CHANGELOG.md](./CHANGELOG.md)
   - 桥接器 API Server 的端点、请求体与错误码：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)；豆包语音合成与声音复刻的上游接口参考：[bridge/docs/doubao-tts-api.md](./bridge/docs/doubao-tts-api.md)、[bridge/docs/doubao-clone-api.md](./bridge/docs/doubao-clone-api.md)
   - 许可与免责：[DISCLAIMER.md](./DISCLAIMER.md)
@@ -29,7 +29,6 @@
 | 文档 QA（emoji / `---` / 表格列数 / README 锚点） | `node tools\doc-check.mjs` |
 | CHANGELOG 结构 QA（标题日期、中英类别与条目 1:1） | `node tools\changelog-check.mjs` |
 | 宿主侧端到端冒烟（假 cordis 上下文驱动 `/plugin/xiaoai`） | `node tools\plugin-smoke.mjs` |
-| 客户端半离线驱动（跑「用户手势之后」的流程） | `node tools\drive-client.mjs` |
 | 装桥接器依赖（Rust 扩展现场编译，首次约十几分钟） | 在 `bridge/` 里：`uv sync --no-install-project`，再 `uv sync` |
 | 跑桥接器测试 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q` |
 | 跑单个测试文件 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q tests/test_tts_router.py` |
@@ -159,7 +158,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 仓库**没有 CI**（仓库根没有 `.github/`，`bridge/` 下那两个 workflow 文件 GitHub 也不会读取，本轮已删），上面这些只能在本地跑；改动只碰文档时，第 1、2 条仍要跑一遍。
 
-宿主侧端到端冒烟脚本已经在仓库里：`tools/plugin-smoke.mjs`（用假 cordis 上下文加载 `lib/index.js`，再直接驱动挂上的 `/plugin/xiaoai` handler，覆盖 `/asr` 鉴权、`/config` revision 冲突与 `POST /data/wipe` 的拒绝路径）。可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不算 CI**。同目录的 `tools/drive-client.mjs` 是同一类东西：**它的断言写于客户端半上一轮返工之前**，对着现在的工作树跑会报若干 `FAILED`，那不代表当前代码有问题（见 [tools/README.md](./tools/README.md) 的「已知状态」）。
+宿主侧端到端冒烟脚本已经在仓库里：`tools/plugin-smoke.mjs`（用假 cordis 上下文加载 `lib/index.js`，再直接驱动挂上的 `/plugin/xiaoai` handler，覆盖 `/asr` 鉴权、`/config` revision 冲突与 `POST /data/wipe` 的拒绝路径）。可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不算 CI**。
 
 ## 已知风险区
 
