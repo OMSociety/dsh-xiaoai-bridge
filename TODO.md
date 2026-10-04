@@ -5,7 +5,7 @@
 ## 必须在发布前做完
 
 - [ ] **版本与 CHANGELOG 收口**：`package.json` 的 `version` 仍是 `0.2.8`，**改前先报备用户**；改完同步 README 徽章，并让 `CHANGELOG.md` 的 `Unreleased` 节落定（版本标题带日期、中英条目 1:1，跑 `changelog-check.mjs`）。
-- [ ] **发布前全绿**：仓库根 `npm run check`（九条）、`bridge` 的 `pytest -q`（基线 `130 passed, 19 subtests`，只许升）、仓库外的 `doc-check.mjs` 与 `changelog-check.mjs`。`bridge` 的 `.venv` 里若没有 pytest，先 `uv pip install --python .venv\Scripts\python.exe pytest`（`uv sync` 会把它卸掉）。
+- [ ] **发布前全绿**：仓库根 `npm run check`（九条）、`bridge` 的 `pytest -q`（基线 `157 passed, 19 subtests`，只许升）、仓库外的 `doc-check.mjs` 与 `changelog-check.mjs`。`bridge` 的 `.venv` 里若没有 pytest，先 `uv pip install --python .venv\Scripts\python.exe pytest`（`uv sync` 会把它卸掉）。
 - [ ] **push 归用户**：提交只推 `origin`，`upstream` 只用来查看状态。
 
 ## 可选（用户没点头就不动）
