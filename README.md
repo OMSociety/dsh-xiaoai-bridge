@@ -17,7 +17,7 @@
     <a href="#核心特性">核心特性</a> •
     <a href="#功能概览">功能概览</a> •
     <a href="#工作原理">工作原理</a> •
-    <a href="#快速开始">快速开始</a> •
+    <a href="#安装方式">安装方式</a> •
     <a href="#模型工具">模型工具</a> •
     <a href="#配置项说明">配置项说明</a> •
     <a href="#数据放在哪">数据放在哪</a> •
@@ -121,7 +121,7 @@ flowchart LR
 
 三个端口要分清：`4399` 是 Rust 扩展固定的音频端口，音箱侧要拨到它（默认要带令牌，见下面的「音箱连接鉴权」）；`9092` 是桥接器的 API Server；插件自己的路由挂在宿主 webServer 上，不额外占端口。
 
-## 快速开始
+## 安装方式
 
 ### 前置条件
 
@@ -137,7 +137,7 @@ flowchart LR
 
 ### 步骤
 
-1. 停掉正在运行的 DSH，把仓库取回来：
+1. 把仓库取回来：
 
 ```powershell
 git clone https://github.com/OMSociety/dsh-xiaoai-bridge.git
@@ -169,10 +169,11 @@ uv sync
 4. 装插件并重启 DSH：
 
 ```powershell
-dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
+# 先停掉正在运行的 DSH（运行中的服务会锁住依赖，装完再起）
+dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 ```
 
-插件也发布在 npm 上（包名就是插件名 `dsh-xiaoai-bridge`），装法三选一：本机 checkout 用上面的绝对路径（进 profile 是 `link:`，改代码即时生效）、npm 用 `dsh plugin --profile desktop add dsh-xiaoai-bridge`、或从 GitHub 用 `dsh plugin --profile desktop add "github:OMSociety/dsh-xiaoai-bridge#1.0.0"`（换成 `#main` 即跟随开发分支）。npm 与 GitHub 两条都只带源码资产，没有 `bridge/` 的虚拟环境与模型包，需要自己补一份并把设置页的「桥接器目录」指过去。
+包内只有源码资产，不含 `bridge/` 的虚拟环境与模型包，需要自行补一份并在设置页把「桥接器目录」指过去。
 
 5. 音箱侧（属于上游）：刷机、打客户端补丁，并确认设备侧的拨号地址。
 
@@ -374,7 +375,7 @@ dsh plugin --profile desktop add "D:\path\to\dsh-xiaoai-bridge"
 | 设备与会话映射 | `<数据目录>/devices.json` | 音箱设备到 DSH 会话的绑定；绑定的会话被归档后会自动重开一个 |
 | 桥接器设备标识 | `<数据目录>/device.json` | 桥接器自己持久化的设备 ID（`device_id`），写在配置文件同目录 |
 | 桥接器源码与虚拟环境 | 仓库的 `bridge/`（或「桥接器目录」指向的地方） | `.venv` 由 `uv sync` 生成，Rust 扩展的编译产物也在里面 |
-| 模型文件 | `bridge/core/models/` | 约 470 MB，不入库、不随插件走，按快速开始那一节下载 |
+| 模型文件 | `bridge/core/models/` | 约 470 MB，不入库、不随插件走，按安装方式那一节下载 |
 | 设置值与令牌真值 | DSH 的设置库与凭据库 | 设置值不在 `config.py` 里；令牌只以 DSH 凭据存在（`bridge/config.py.rendered`、`**/devices.json`、`**/device.json`、`*.token`、`credentials.json` 都在 `.gitignore` 里，绝不入库） |
 
 > **提示**：`bridge.log` 会逐字记下音箱这侧说的话与桥接器回的话（日志行前缀是 `我说：` 与 `DSH:`），把它贴出去排障前，先确认里面没有不想公开的内容；上一段日志在 `bridge.log.1` 里，同样含原文。
@@ -434,7 +435,7 @@ DSH 退出、插件重载与 `dsh plugin remove` 跑的是同一套清理，它�
 ### 卸载
 
 ```powershell
-dsh plugin --profile desktop remove dsh-xiaoai-bridge
+dsh plugin --profile <profile> remove dsh-xiaoai-bridge
 ```
 
 插件会先停掉桥接器子进程，再删掉可以重建的文件；`bridge.log`、`spoken.jsonl`、`devices.json`、`device.json` 会留在数据目录里，想一起清掉就按[数据放在哪](#数据放在哪)那一节的说明处理。

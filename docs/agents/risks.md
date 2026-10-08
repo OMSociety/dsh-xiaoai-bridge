@@ -29,7 +29,7 @@
 
 | 症状（可检索片段） | 处理 |
 |---|---|
-| 装 GitHub 版本时报 `no matching ref` | 写的 ref 不存在：插件从 `1.0.0` 起有 tag（`git tag -l` 看本地、`git ls-remote --tags origin` 看远端），`dsh plugin … add "github:OMSociety/dsh-xiaoai-bridge#1.0.0"` 按版本固定，`#main` 跟随开发分支 |
+| 装 GitHub 版本报 `no matching ref` | 写的 ref 不存在：本仓库已没有 tag（历史 tag 随 Release 删除，版本固定走 npm），`github:…#<tag>` 一律报错；GitHub 安装只能不带 ref 或 `#main`（跟随开发分支） |
 | `config render failed: ENOENT` 且路径里有 `config.py.tmp` | 数据目录还没建（`autoStart` 关着，或在临时 `DSH_HOME` 里跑），不是渲染器坏了 |
 | `No module named pytest` | `uv sync` 清掉了 dev 依赖：`uv pip install --python bridge\.venv\Scripts\python.exe pytest`；也可能是用了系统 Python，改用 `bridge/.venv` 的解释器 |
 | `failed to remove file …dsh_xiaoai_server.pyd: 拒绝访问 (os error 5)` | 桥接器正在跑，`.pyd` 被占用：先 `POST http://127.0.0.1:19387/plugin/xiaoai/bridge/stop` 再 `uv sync`，装完 `POST …/bridge/start` |

@@ -12,7 +12,7 @@
 | uv | 建桥接器虚拟环境；`uv sync` 会现场编译 Rust 扩展，需要 Rust 工具链 |
 | DSH | `0.2.x` 插件线；本机用 `dsh plugin --profile desktop add <仓库路径>` 装载 |
 
-模型包（VAD / KWS / ASR，约 470 MB）不随仓库走，按 [README 的快速开始](README.md#快速开始)下载到 `bridge/core/models/`。
+模型包（VAD / KWS / ASR，约 470 MB）不随仓库走，按 [README 的安装方式](README.md#安装方式)下载到 `bridge/core/models/`。
 
 ## 改动之后要跑什么
 
