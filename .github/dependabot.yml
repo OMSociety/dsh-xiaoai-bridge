@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # 插件本体：唯一的直接依赖是 @deepseek-ai/schemastery（宿主家族，版本随宿主走，
+  # 人工决策）；配置先就位，今后引入非宿主依赖即自动纳入月度巡检。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: '@deepseek-ai/*'
+
+  # 桥接器 Python 依赖（sherpa-onnx / onnxruntime / aiohttp 等）：真实安全面在这半边。
+  # 锁文件只由 uv 更新（AGENTS.md 禁止手改 uv.lock），dependabot 会连 manifest 带 lock 一起提。
+  - package-ecosystem: pip
+    directory: /bridge
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+
+  # Rust 扩展（PyO3 等）：同理，Cargo.lock 只由 cargo 更新。
+  - package-ecosystem: cargo
+    directory: /bridge/native
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
