@@ -5,7 +5,7 @@
   <p>桥接器是本地 Python 服务（源码在 <code>bridge/</code>），由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
   <p>
-    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.0.1-4f6ef7" alt="version"></a>
+    <a href="https://www.npmjs.com/package/dsh-xiaoai-bridge"><img src="https://img.shields.io/npm/v/dsh-xiaoai-bridge?label=version&color=4f6ef7" alt="version"></a>
     <a href="https://github.com/deepseek-ai/dsh"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-4f6ef7" alt="DSH"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4f6ef7" alt="license"></a>
     <a href="https://github.com/OMSociety/dsh-xiaoai-bridge/stargazers"><img src="https://img.shields.io/github/stars/OMSociety/dsh-xiaoai-bridge?color=4f6ef7" alt="stars"></a>
@@ -486,7 +486,7 @@ scripts/             自检脚本（九个 check-*.mjs 与聚合入口）
 
 ## 更新日志
 
-逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：当前版本 `1.0.1`。仓库里的 tag 都属于上游桥接器，插件版本号没有单独打 tag，版本以 `package.json` 为准。
+逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：当前版本 `1.0.1`。每次发版在含版本号的最终提交上钉 annotated tag `v<版本>`，与 npm 上的版本号一致；上游桥接器不跟版，它们的 tag 不进本仓库。
 
 ## 支持与致谢
 
