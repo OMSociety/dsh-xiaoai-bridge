@@ -143,5 +143,5 @@
 ## 改版本号与对外文档
 
 - 改版本号：**先报备用户**（仓库既有纪律，见 [CONTRIBUTING.md](../../CONTRIBUTING.md)）。
-- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](../../CHANGELOG.md) 的版本条目（当前是 `## [1.0.0] - 2026-10-04`），不要写进 README 或提交信息。
+- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](../../CHANGELOG.md) 的版本条目（当前是 `## [1.0.1] - 2026-11-01`），不要写进 README 或提交信息。
 - 文档改完跑 `node tools\doc-check.mjs` 与 `node tools\changelog-check.mjs`（这两个不属于那九条离线检查）。

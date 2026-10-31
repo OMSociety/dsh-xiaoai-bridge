@@ -8,6 +8,18 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-01
+
+### 修复
+
+- **`xiaoai_speak` 的作用域注册不随插件卸载撤销。** `lib/exposure.js` 把工具与技能注册进各会话 agent 自己的 ctx，disposer 只留在局部变量里，`dispose()` 仅关全局层；agent 作用域比插件活得久，禁用之后新会话仍带着这两个条目，重新启用会在同一作用域里再注册一份（同名注册二次抛错，事件监听静默双份）。现在注册包在 `agentCtx.effect` 里——宿主提供该座椅时条目随 agent 一起收回——同时把 unwinder 存进插件自己的 `scopedUnwinders`，`dispose()` 一并清空；两侧谁先跑都幂等，不会重复撤销。
+- **客户端样式表在插件停用后残留。** `lib/client.js` 的 `ensureStyles()` 直接往 `document.head` 插 `<style>`、不返回 disposer，`apply()` 又是裸调用，禁用后规则留在宿主页面上。现在返回移除该节点的 disposer，并由 `apply()` 交给 `ctx.effect`。
+
+### Fixed
+
+- **The scoped `xiaoai_speak` registration outlived a disabled plugin.** `lib/exposure.js` registered the tool and its skill into each speaker session's own agent context but kept the disposers in a local array, so `dispose()` only dropped the global layer. An agent scope outlives the plugin, so new sessions kept both entries after a disable, and re-enabling registered a second copy in the same scope (a duplicate named registration throws; event listeners just doubled). The registration now runs inside `agentCtx.effect` — with that seam the entries go away with the agent — and its unwinder is held in the plugin's own `scopedUnwinders`, which `dispose()` drains; whichever side runs first wins, and running twice is a no-op.
+- **The client stylesheet survived a disabled plugin.** `ensureStyles()` in `lib/client.js` inserted a `<style>` into `document.head` without returning a disposer, and `apply()` called it bare, leaving the rules on the host page after a disable. It now returns a disposer that removes the node, which `apply()` hands to `ctx.effect`.
+
 ## [1.0.0] - 2026-10-04
 
 ### 新增

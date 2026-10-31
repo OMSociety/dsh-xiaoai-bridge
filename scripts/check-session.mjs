@@ -519,6 +519,85 @@ e3.exposure.dispose();
 check('dispose leaves the global layer', () => {
   assert.deepEqual(e3.globals, []);
 });
+check('dispose takes the scoped entries back too', () => {
+  assert.deepEqual(e3.names(), []);
+});
+
+// An agent context that offers the host's effect seam. The entries have to go
+// in through that seam, so the agent unwinding and the plugin being disabled
+// both leave nothing behind, whichever of the two runs first.
+function effectHarness({ throwingEffect = false } = {}) {
+  const scoped = [];
+  const effects = [];
+  const sink = (target) => ({
+    register: (definition) => {
+      const entry = { name: definition.name };
+      target.push(entry);
+      return () => {
+        const at = target.indexOf(entry);
+        if (at >= 0) target.splice(at, 1);
+      };
+    },
+  });
+  const exposure = createExposure({
+    ctx: { tools: sink([]), skills: sink([]) },
+    getConfig: () => ({ speakFromAnySession: false }),
+    logger: { info: () => {}, warn: () => {} },
+    diagnostics: { note: () => {} },
+    tool: () => ({ name: 'xiaoai_speak' }),
+    skill: () => ({ name: 'xiaoai-speak' }),
+  });
+  const agentCtx = {
+    tools: sink(scoped),
+    skills: sink(scoped),
+    effect: (callback, label) => {
+      if (throwingEffect) throw new Error('no effect seat here');
+      const undo = callback();
+      const row = { label, dispose: () => undo() };
+      effects.push(row);
+      return row.dispose;
+    },
+  };
+  return { exposure, scoped, effects, agentCtx };
+}
+
+const s1 = effectHarness();
+s1.exposure.attach(s1.agentCtx);
+check('the scoped entries are registered inside the agent effect', () => {
+  assert.deepEqual(s1.scoped.map((row) => row.name).sort(), ['xiaoai-speak', 'xiaoai_speak']);
+  assert.equal(s1.effects.length, 1);
+  assert.ok(s1.effects[0].label.includes('xiaoai_speak'), s1.effects[0].label);
+});
+s1.exposure.dispose();
+check('disabling the plugin takes the scoped entries back out of the agent', () => {
+  assert.deepEqual(s1.scoped, []);
+});
+s1.effects[0].dispose();
+check('the agent unwinding after the plugin unwound is not a second undo', () => {
+  assert.deepEqual(s1.scoped, []);
+});
+
+const s2 = effectHarness();
+s2.exposure.attach(s2.agentCtx);
+s2.effects[0].dispose();
+check('an agent scope that unwinds takes its entries with it', () => {
+  assert.deepEqual(s2.scoped, []);
+});
+s2.exposure.dispose();
+check('disabling the plugin after the agent unwound changes nothing', () => {
+  assert.deepEqual(s2.scoped, []);
+});
+
+const s3 = effectHarness({ throwingEffect: true });
+s3.exposure.attach(s3.agentCtx);
+check('an effect seam that throws still gets the entries, owned by the plugin', () => {
+  assert.equal(s3.scoped.length, 2);
+  assert.deepEqual(s3.effects, []);
+});
+s3.exposure.dispose();
+check('and that fallback layer is unwound when the plugin is disabled', () => {
+  assert.deepEqual(s3.scoped, []);
+});
 
 const e4 = exposureHarness({ speakFromAnySession: true, seam: false });
 e4.exposure.syncGlobal();
