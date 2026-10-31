@@ -486,7 +486,7 @@ scripts/             自检脚本（九个 check-*.mjs 与聚合入口）
 
 ## 更新日志
 
-逐条变更记在 [CHANGELOG.md](CHANGELOG.md)：当前版本 `1.0.1`。每次发版在含版本号的最终提交上钉 annotated tag `v<版本>`，与 npm 上的版本号一致；上游桥接器不跟版，它们的 tag 不进本仓库。
+逐条变更记在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 支持与致谢
 
