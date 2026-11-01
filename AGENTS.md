@@ -123,7 +123,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 5. 改了宿主/客户端行为时，重启 DSH 后在真机上核对：插件在 profile 里是 `link:` 指向本仓库的 checkout，重启即载入当前工作树，不需要重新安装。
 6. 改过配置键、端点或 provider：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)（端点）与本文件同步更新。
 
-CI（`.github/workflows/ci.yml`）只覆盖不依赖本机环境的那半边：`ubuntu-latest` + node 22，装 npm 依赖后跑 `npm run check`（没有 `bridge/.venv` 与模型包，`check-config` / `check-keywords` 在那里跳过）。第 2 条的 pytest 与第 3–5 条的真机核对只能在本地做；改动只碰文档时，第 1、2 条仍要跑一遍。
+CI（`.github/workflows/ci.yml`）只覆盖不依赖本机环境的那半边：`ubuntu-latest` + node 22，装 npm 依赖后跑 `npm run check`。那里没有 `bridge/.venv` 与模型包，`check-config` / `check-keywords` 计为跳过；`check-supervisor` 的命令行身份断言只在 Windows 上跑（`lib/process.js` 只在 Windows 读命令行），Linux 上计为跳过并在结尾报数。所以 CI 绿不等于这些路径被覆盖过：第 2 条的 pytest 与第 3–5 条的真机核对只能在本地做，命令行身份相关的那几项也只在本地 Windows 上跑到；改动只碰文档时，第 1、2 条仍要跑一遍。
 
 `tools/plugin-smoke.mjs` 可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不在 CI 里跑**。
 
