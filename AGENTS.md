@@ -1,7 +1,6 @@
 # AGENTS.md — dsh-xiaoai-bridge
 
 适用范围：本仓库全部目录（含 `bridge/`）。本文件只放定位、命令、硬边界与验收口径；按主题拆出去的详版见「文档索引」。
-最后更新：2026-10-04
 
 ## 项目概览
 
@@ -33,15 +32,15 @@
 | 宿主侧端到端冒烟（假 cordis 上下文驱动 `/plugin/xiaoai`） | `node tools\plugin-smoke.mjs` |
 | 桥接器测试（提交前底线，基线 157 passed / 19 subtests） | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q` |
 | 跑单个测试文件 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -m pytest -q tests/test_tts_router.py` |
-| 把本机 checkout 装进 profile（软链） | `dsh plugin --profile desktop add <仓库绝对路径>` |
-| 装桥接器依赖（Rust 扩展现场编译，首次约十几分钟） | 在 `bridge/` 里：`uv sync --no-install-project`，再 `uv sync` |
+| 把本机 checkout 装进 profile（软链） | `dsh plugin --profile <profile> add <仓库绝对路径>` |
+| 装桥接器依赖（Rust 扩展现场编译，首次耗时取决于机器） | 在 `bridge/` 里：`uv sync --no-install-project`，再 `uv sync` |
 | 确认 Rust 扩展能导入 | 在 `bridge/` 里：`.\.venv\Scripts\python.exe -c "import dsh_xiaoai_server"` |
 | 给桥接器 venv 装 pytest（`uv sync` 会把它清掉） | `uv pip install --python bridge\.venv\Scripts\python.exe pytest` |
 | 单独起桥接器、只开 API Server、跑真设备手动脚本 | 见 [docs/agents/bridge.md](./docs/agents/bridge.md) |
 
-`npm run check` 依次 spawn 九个检查并透传输出，任一非 0 即整体非 0，工作目录都是仓库根（用相对路径，在别处跑会直接报找不到文件）：`check-client`、`check-config`、`check-keywords`、`check-session`、`check-supervisor`、`check-speak`、`check-diagnostics`、`check-http`、`check-cleanup`。跑完再进 `bridge/` 跑上表那条 pytest，两半都绿才算过。
+`npm run check` 依次 spawn 九个检查并透传输出，工作目录都是仓库根（用相对路径，在别处跑会直接报找不到文件）：`check-client`、`check-config`、`check-keywords`、`check-session`、`check-supervisor`、`check-speak`、`check-diagnostics`、`check-http`、`check-cleanup`。汇总按「通过 / 跳过 / 未通过」分开报数，只有未通过才整体非 0；缺前置（没建 `bridge/.venv`、没装模型包）的项记为跳过并打印补救命令。跑完再进 `bridge/` 跑上表那条 pytest，两半都绿才算过。
 
-profile 名以你的 DSH 安装为准（上表按 `desktop` 写）；`uv` 不在 PATH 时用它的绝对路径调用。没先 `uv sync` 就导入会报 `No module named 'dsh_xiaoai_server'`。
+profile 名以你的 DSH 安装为准；`uv` 不在 PATH 时用它的绝对路径调用。没先 `uv sync` 就导入会报 `No module named 'dsh_xiaoai_server'`。
 
 ## 架构边界
 
@@ -100,14 +99,14 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 - 禁止改名、移走或当生成物删掉 `bridge/config.py`。原因：它是桥接器模板，`lib/render-config.js` 靠它生成真正生效的配置，删了桥接器起不来、插件也渲染不出 `<dataDir>/config.py`。
 - 禁止提交 `bridge/config.py.rendered`、`**/device.json`、`**/devices.json`、`*.token`、`credentials.json`、`bridge/.venv/`、`bridge/core/models/`、`__pycache__`、`.pytest_cache/`。原因：`.gitignore` 已挡住这些运行时产物与凭据，`git add -f` 只会把凭据与大文件带进历史。
 - 禁止把 `bridge/core/models/` 的模型文件入库。原因：数百 MB，而 `bridge/` 在 npm 包白名单里，入库会把包与克隆一起撑爆。
-- 禁止用 `pnpm pack` / `npm publish` 的结果判断包干净不干净。原因：它不读 `.npmignore`，会把 `bridge/` 的 venv 与模型一起打进 tarball（实测到过数百 MB）；判断白名单用 `npm pack --dry-run` 看清单。
+- 禁止用 `pnpm pack` / `npm publish` 的结果判断包干净不干净。原因：它不读 `.npmignore`，会把 `bridge/` 的 venv 与模型一起打进 tarball（体积以模型包为准）；判断白名单用 `npm pack --dry-run` 看清单。
 - 禁止把服务名写进 `package.json` 的 `dsh.client.inject`。原因：那里声明的必须是包依赖边，服务依赖由客户端 bundle 导出的 `inject` 决定，写服务名会被静默忽略。
 - 禁止手改 profile 的 `node_modules`。原因：那里是指向本仓库的 `link:` 软链，改那边等于改一份没人维护的副本；装卸走 `dsh plugin --profile <name> add|remove`。
 - 禁止把提交推到 `origin` 之外的任何远端。原因：本仓库的提交只去 `origin`，另一个远端（`upstream`）是别人的项目，只读参考。
 - 禁止自行 bump `package.json` 的版本号。原因：版本是用户可见契约，改前先报备。
 - 禁止在 `bridge/core/external_conversation.py` 里调用 `speaker.abort_xiaoai()`。原因：会打断 FileMonitor 的唤醒通道（该文件顶部注释写明了这条），要停播用播放闸门或 `stop_playing`。
 - 禁止在桥接器业务代码里新增绕开 `bridge/core/services/speaker.py` 的设备命令。原因：打断语义集中在那里，散落会让某些路径打不断；`bridge/core/xiaoai.py` 里那份同内容副本是有意保留的既存状态。
-- 禁止在播报路径上跳过 `PlaybackGate`。原因：麦克风一直在流，闸门没关时桥接器会听见自己并自问自答，实机日志里出现过整段「我说：…」。
+- 禁止在播报路径上跳过 `PlaybackGate`。原因：麦克风一直在流，闸门没关时桥接器会听见自己并自问自答。
 - 禁止手改 `bridge/uv.lock` / `bridge/Cargo.lock`。原因：用 `uv` 更新它们，手改会与 `pyproject.toml` / `Cargo.toml` 漂移。
 - 禁止引入第二个日志级别环境变量（如 `LOG_LEVEL`）。原因：`bridge/core/utils/logger.py` 只读 `LOGLEVEL`，另一个名字看着生效其实是死键。
 - 禁止让需要真设备或真凭据的脚本进 pytest 收集。原因：pytest 只要导入模块就会连云端甚至让音箱出声；这类脚本放 `bridge/tests/test_tts*.py` 并登记到 `bridge/tests/conftest.py` 的 `collect_ignore`。
@@ -117,16 +116,16 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 改动完成 = 下列全部通过：
 
-1. 九个离线检查全绿：仓库根跑 `npm run check`，全部 exit 0。
+1. 九个离线检查没有未通过项：仓库根跑 `npm run check`，汇总里「未通过」为 0 且 exit 0；缺 `bridge/.venv` 或模型包时相关项记为跳过，补齐前置后应无跳过项。
 2. 桥接器测试：在 `bridge/` 里跑 `.\.venv\Scripts\python.exe -m pytest -q`，当前基线 **157 passed, 19 subtests**。基线只许升：数字变大是新增测试，变小说明有测试被删或被跳过，要查清再提交。
 3. 改过桥接器的 `.py`：桥接器真的起得来，停掉旧进程、起 `main.py`、日志里没有 `Traceback`。
 4. 改过 `bridge/native/src/**/*.rs`：`uv sync` 编译通过，且 `import dsh_xiaoai_server` 成功。
 5. 改了宿主/客户端行为时，重启 DSH 后在真机上核对：插件在 profile 里是 `link:` 指向本仓库的 checkout，重启即载入当前工作树，不需要重新安装。
 6. 改过配置键、端点或 provider：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)（端点）与本文件同步更新。
 
-仓库**没有 CI**（仓库根没有 `.github/`），上面这些只能在本地跑；改动只碰文档时，第 1、2 条仍要跑一遍。
+CI（`.github/workflows/ci.yml`）只覆盖不依赖本机环境的那半边：`ubuntu-latest` + node 22，装 npm 依赖后跑 `npm run check`。那里没有 `bridge/.venv` 与模型包，`check-config` / `check-keywords` 计为跳过；`check-supervisor` 的命令行身份断言只在 Windows 上跑（`lib/process.js` 只在 Windows 读命令行），Linux 上计为跳过并在结尾报数。所以 CI 绿不等于这些路径被覆盖过：第 2 条的 pytest 与第 3–5 条的真机核对只能在本地做，命令行身份相关的那几项也只在本地 Windows 上跑到；改动只碰文档时，第 1、2 条仍要跑一遍。
 
-`tools/plugin-smoke.mjs` 可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不算 CI**。
+`tools/plugin-smoke.mjs` 可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不在 CI 里跑**。
 
 ## 开工前必看
 
@@ -138,6 +137,6 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 ## 维护
 
-本文件与代码同 PR 更新。改动以下内容时必须同步本文件：验收命令（`scripts/check-*.mjs` 的增删）、`tools/` 下工具的增删（同步 [tools/README.md](./tools/README.md)：`doc-check.mjs`、`changelog-check.mjs`、`render-outline.mjs`、`plugin-smoke.mjs`）、模块边界与端口、`.gitignore` 的禁区、profile 的安装方式。拆出去的详版（[change-contract.md](./docs/agents/change-contract.md)、[risks.md](./docs/agents/risks.md)、[bridge.md](./docs/agents/bridge.md)）也要跟着改，别让两边说法不一致。
+本文件与代码同 PR 更新。改动以下内容时必须同步本文件：验收命令（`scripts/check-*.mjs` 的增删）、`tools/` 下工具的增删（同步 [tools/README.md](./tools/README.md)：`doc-check.mjs`、`changelog-check.mjs`、`render-outline.mjs`、`plugin-smoke.mjs`）、模块边界与端口、`.gitignore` 的禁区、profile 的安装方式、CI 跑的检查。拆出去的详版（[change-contract.md](./docs/agents/change-contract.md)、[risks.md](./docs/agents/risks.md)、[bridge.md](./docs/agents/bridge.md)）也要跟着改，别让两边说法不一致。
 
 发现内容与代码不符时，先改本文件再继续改代码。`bridge/` 侧的规则也在本文件与上述详版里；文档索引里没有 `bridge/` 单独的 README / AGENTS / CHANGELOG，桥接器的改动逐条记在根 [CHANGELOG.md](./CHANGELOG.md)，进本仓库之前的上游历史在上游仓库里。

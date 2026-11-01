@@ -10,6 +10,10 @@
  * trees. This script drives those decisions against a throwaway tree, so "I
  * fixed it and nothing changed" cannot happen quietly again.
  *
+ * The assertions that read a process command line only run on Windows:
+ * `lib/process.js` implements `commandLineOf` there and nowhere else, so on other
+ * platforms those assertions print as skipped instead of failing.
+ *
  * Cases C-E cover the other half of "the API Server is always up": what happens
  * when the bridge dies *by itself*. The watchdog restarts it on a widening
  * schedule, a deliberate stop cancels a restart that was already queued, and a
@@ -42,6 +46,17 @@ import { createBridgeSupervisor, credentialText } from '../lib/process.js';
 
 const HOUR_MS = 3600 * 1000;
 let failures = 0;
+let skipped = 0;
+
+/**
+ * Whether the pid-file identity half of these cases can run at all. It reads the
+ * recorded process's command line, and `lib/process.js` only manages that on
+ * Windows: elsewhere `commandLineOf` answers null, the supervisor adopts the pid
+ * without verifying it, and the refusal paths below never happen. The assertions
+ * that depend on those paths are reported as skipped instead of failing, so a run
+ * on another platform says what it did not cover rather than calling it a bug.
+ */
+const IDENTITY_SUPPORTED = process.platform === 'win32';
 
 /**
  * @param {string} label assertion name
@@ -54,6 +69,21 @@ function check(label, ok) {
     failures += 1;
     console.log(`  FAIL ${label}`);
   }
+}
+
+/**
+ * Like {@link check}, for an assertion that only means something where process
+ * command lines are readable. Off Windows it is counted and printed as skipped.
+ * @param {string} label assertion name
+ * @param {boolean} ok result, evaluated on every platform but only used on Windows
+ */
+function checkIdentity(label, ok) {
+  if (!IDENTITY_SUPPORTED) {
+    skipped += 1;
+    console.log(`  skip ${label} (reads the process command line, Windows only)`);
+    return;
+  }
+  check(label, ok);
 }
 
 /**
@@ -263,7 +293,7 @@ console.log('case A: leftover bridge whose recorded identity matches is adopted'
   check('start reports adoption', res.ok === true && res.adopted === true);
   check('adopted pid is the leftover one', res.pid === dummy.pid);
   check('the leftover process is left running', isAlive(dummy.pid));
-  check(
+  checkIdentity(
     'the identity check matched interpreter and script',
     logText().includes('command line matches the recorded interpreter and script'),
   );
@@ -286,7 +316,7 @@ console.log('case A2: a pid file from an older version (bare number) is still ad
   const supervisor = makeSupervisor();
   const res = await supervisor.start();
   check('the legacy pid file is adopted', res.ok === true && res.adopted === true && res.pid === dummy.pid);
-  check('the log says which check was used', logText().includes('command line still runs main.py (legacy pid file)'));
+  checkIdentity('the log says which check was used', logText().includes('command line still runs main.py (legacy pid file)'));
 
   await supervisor.stop();
   check('stop kills the adopted legacy process', await waitGone(dummy.pid, Date.now() + 10_000));
@@ -328,15 +358,15 @@ console.log('case F: a pid file naming a process that is not the bridge is refus
 
   const supervisor = makeSupervisor();
   const res = await supervisor.start();
-  check(
+  checkIdentity(
     'start does not adopt the stranger',
     res.ok === true && res.adopted !== true && res.pid !== stranger.pid,
   );
-  check('the stranger process is left alone', isAlive(stranger.pid));
-  check('the refusal is recorded in the log', logText().includes(`not adopting pid=${stranger.pid}`));
+  checkIdentity('the stranger process is left alone', isAlive(stranger.pid));
+  checkIdentity('the refusal is recorded in the log', logText().includes(`not adopting pid=${stranger.pid}`));
 
   await supervisor.stop();
-  check('stop does not kill the stranger', isAlive(stranger.pid));
+  checkIdentity('stop does not kill the stranger', isAlive(stranger.pid));
   check('stop kills the bridge that was actually started', await waitGone(res.pid, Date.now() + 10_000));
   try { process.kill(stranger.pid); } catch { /* already gone */ }
 }
@@ -620,15 +650,15 @@ console.log('case L: a bare pid file whose command line merely contains main.py 
 
   const supervisor = makeSupervisor();
   const res = await supervisor.start();
-  check('the look-alike is not adopted', res.ok === true && res.adopted !== true && res.pid !== lookalike.pid);
-  check('the look-alike is left alone', isAlive(lookalike.pid));
-  check(
+  checkIdentity('the look-alike is not adopted', res.ok === true && res.adopted !== true && res.pid !== lookalike.pid);
+  checkIdentity('the look-alike is left alone', isAlive(lookalike.pid));
+  checkIdentity(
     'the refusal is logged',
     logText().includes('is alive but its command line is not our bridge'),
   );
 
   await supervisor.stop();
-  check('the stop did not kill the look-alike', isAlive(lookalike.pid));
+  checkIdentity('the stop did not kill the look-alike', isAlive(lookalike.pid));
   killHard(lookalike.pid);
   check('the look-alike is gone once the check is over', await until(() => !isAlive(lookalike.pid), 5_000));
 }
@@ -656,4 +686,8 @@ if (failures > 0) {
   console.log(`supervisor check FAILED (${failures})`);
   process.exit(1);
 }
-console.log('supervisor check OK');
+if (skipped > 0) {
+  console.log(`supervisor check OK (${skipped} assertions skipped: pid identity needs Windows process command lines)`);
+} else {
+  console.log('supervisor check OK');
+}

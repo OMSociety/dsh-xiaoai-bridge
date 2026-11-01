@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-checks:
+    name: offline checks (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # package-lock.json is gitignored, so there is no lockfile to install from.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # Covers the checks that need neither the bridge venv nor the model bundle;
+      # those two report themselves as skipped (exit 0) on a fresh checkout.
+      - name: Run offline checks
+        run: node scripts/check-all.mjs

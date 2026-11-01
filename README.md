@@ -127,7 +127,7 @@ flowchart LR
 
 | 需要 | 版本 / 说明 |
 | --- | --- |
-| DSH | `0.2.0-rc.1` 或更新（插件的 peer 依赖就是这条插件线） |
+| DSH | `0.2.0-rc.2` 至 `0.3.0` 之前（含各补丁线的预发布形态） |
 | Node | 20 或更新 |
 | pnpm | 装插件依赖用（只有一个运行依赖 `@deepseek-ai/schemastery`） |
 | Python | 3.12 |
@@ -443,7 +443,8 @@ dsh plugin --profile <profile> remove dsh-xiaoai-bridge
 ## 开发
 
 ```powershell
-# 插件侧（仓库根）：九个离线检查，全绿会打印 [check-all] 全部 9 个检查通过。
+# 插件侧（仓库根）：九个离线检查，汇总打印 通过 / 跳过 / 未通过；只有未通过才非 0。
+# 没建 bridge/.venv、没下模型包时相关项记为跳过并打印补救命令（补齐后应无跳过项）。
 npm run check
 
 # 也可以逐条跑
