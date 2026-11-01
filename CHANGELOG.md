@@ -8,6 +8,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 变更
+
+- **离线自检不再把缺前置报成失败。** 缺 `bridge/.venv` 或 `bridge/core/models/keywords.txt` 时，`npm run check` 曾以 ENOENT / file missing 计为未通过并退非零；现判为跳过，并在输出里给出补齐命令，末尾汇总分列通过 / 跳过 / 未通过。
+
+### Changed
+
+- **The offline checks no longer report missing prerequisites as failures.** With `bridge/.venv` or `bridge/core/models/keywords.txt` absent, `npm run check` counted ENOENT / file-missing as failures and exited non-zero; those checks now report as skipped with the command that provides the prerequisite, and the summary separates passed, skipped and failed.
+
 ## [1.0.1] - 2026-11-01
 
 ### 修复
