@@ -10,14 +10,14 @@
 | pnpm | 装依赖用（`@deepseek-ai/schemastery`） |
 | Python | 3.12（`bridge/` 里的 `.venv` 由 `uv sync` 生成） |
 | uv | 建桥接器虚拟环境；`uv sync` 会现场编译 Rust 扩展，需要 Rust 工具链 |
-| DSH | `0.2.x` 插件线；本机用 `dsh plugin --profile desktop add <仓库路径>` 装载 |
+| DSH | `0.2.x` 插件线；用 `dsh plugin --profile <profile> add <仓库路径>` 装载 |
 
 模型包（VAD / KWS / ASR，约 470 MB）不随仓库走，按 [README 的安装方式](README.md#安装方式)下载到 `bridge/core/models/`。
 
 ## 改动之后要跑什么
 
 ```powershell
-# 一次跑完九个（聚合入口，等价于下面逐条跑；任一非 0 即整体非 0）
+# 一次跑完九个（聚合入口，等价于下面逐条跑；汇总按 通过 / 跳过 / 未通过 分开报数，只有未通过才整体非 0）
 npm run check
 
 node scripts\check-client.mjs      # 客户端 bundle
@@ -57,7 +57,7 @@ lib/diagnostics.js  错误库
 lib/client.js       设置页与运行状态卡（客户端 bundle）
 skills/xiaoai-speak/  模型用的技能
 bridge/             Python 桥接器（DSH 后端在 core/dsh*.py）
-scripts/            自检脚本（九个 check-*.mjs + 聚合入口 check-all.mjs）
+scripts/            自检脚本（九个 check-*.mjs + 聚合入口 check-all.mjs + 共用的前置判定 prereq.mjs）
 tools/              维护期工具（文档与 CHANGELOG 检查、宿主侧冒烟、设置页大纲；见 tools/README.md）
 ```
 
