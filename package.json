@@ -62,7 +62,8 @@
   },
   "scripts": {
     "check": "node scripts/check-all.mjs",
-    "check:client": "node scripts/check-client.mjs"
+    "check:client": "node scripts/check-client.mjs",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "keywords": [
     "deepseek-harness",

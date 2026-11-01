@@ -33,3 +33,6 @@ jobs:
       # those two report themselves as skipped (exit 0) on a fresh checkout.
       - name: Run offline checks
         run: node scripts/check-all.mjs
+
+      - name: 发布物清单
+        run: npm run check:pack
