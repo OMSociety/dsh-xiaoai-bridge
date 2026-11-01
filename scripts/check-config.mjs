@@ -11,6 +11,10 @@
  * "the settings card is the single source of truth" is the mapping asserted
  * below against `bridgeChildEnv()`.
  *
+ * Without `bridge/.venv` the Python half cannot run; that is a fresh clone, not
+ * a defect, so the rendering assertions still run and the check ends as skipped
+ * with the command that installs the environment (see `scripts/prereq.mjs`).
+ *
  * Run: node scripts/check-config.mjs
  */
 import { execFileSync } from 'node:child_process';
@@ -30,10 +34,12 @@ import {
   splitList,
   writeConfig,
 } from '../lib/render-config.js';
+import { pythonPath, skip, venvCommand } from './prereq.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BRIDGE_DIR = join(PACKAGE_ROOT, 'bridge');
-const PYTHON = join(BRIDGE_DIR, '.venv', 'Scripts', 'python.exe');
+const PYTHON = pythonPath(BRIDGE_DIR);
+const pythonReady = existsSync(PYTHON);
 
 let failures = 0;
 /** @param {boolean} condition @param {string} label */
@@ -266,32 +272,36 @@ print(json.dumps({
     ),
 }, ensure_ascii=False))
 `;
-  const raw = execFileSync(PYTHON, ['-c', probe], {
-    cwd: BRIDGE_DIR,
-    env: { ...process.env, CONFIG_PATH: target, PYTHONIOENCODING: 'utf-8' },
-    encoding: 'utf8',
-  });
-  const loaded = JSON.parse(raw.trim().split(/\r?\n/).pop());
+  if (pythonReady) {
+    const raw = execFileSync(PYTHON, ['-c', probe], {
+      cwd: BRIDGE_DIR,
+      env: { ...process.env, CONFIG_PATH: target, PYTHONIOENCODING: 'utf-8' },
+      encoding: 'utf8',
+    });
+    const loaded = JSON.parse(raw.trim().split(/\r?\n/).pop());
 
-  console.log('render-config: what the bridge actually loads');
-  eq(loaded.wakeup_keywords, ['你好小智', '小爱小爱'], 'wakeup.keywords');
-  eq(loaded.dsh_wakeup_keywords, ['你好小智', '小爱小爱'], 'dsh.wakeup_keywords');
-  eq(loaded.dsh_exit_keywords, ['退出', '再见'], 'dsh.exit_keywords');
-  eq(loaded.wakeup_timeout, 33, 'wakeup.timeout');
-  eq(loaded.dsh_session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
-  eq(loaded.dsh_device_name, '客厅音箱', 'dsh.device_name');
-  eq(loaded.dsh_tts_speaker, 'xiaoai', 'the reading voice is the template default, no longer steered by the page');
-  eq(loaded.dsh_wakeup_reply, '在呢', 'dsh.wakeup_reply');
-  eq(loaded.dsh_exit_reply, '拜拜', 'dsh.exit_reply');
-  eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
-  eq(loaded.dsh_continuous_conversation, true, 'the switch reaches the bridge as a real boolean');
-  eq(loaded.dsh_tts_provider, 'xiaoai', 'the provider switch reaches the bridge as a string');
-  eq(loaded.dsh_tts_speed, DEFAULTS.ttsSpeed, 'the Doubao speed reaches the bridge as a number');
-  eq(loaded.tts_doubao_stream, true, 'the streaming switch reaches the bridge as a real boolean');
-  eq(loaded.asr_model, 'paraformer', 'asr.model');
-  eq(loaded.hooks, [true, true], 'both wake hooks survive the overlay');
-  eq(loaded.hook_globals_match, true, 'the hooks see the overridden values, not the template ones');
-  eq(loaded.untouched_default, 2.0, 'keys the plugin does not own keep the template default');
+    console.log('render-config: what the bridge actually loads');
+    eq(loaded.wakeup_keywords, ['你好小智', '小爱小爱'], 'wakeup.keywords');
+    eq(loaded.dsh_wakeup_keywords, ['你好小智', '小爱小爱'], 'dsh.wakeup_keywords');
+    eq(loaded.dsh_exit_keywords, ['退出', '再见'], 'dsh.exit_keywords');
+    eq(loaded.wakeup_timeout, 33, 'wakeup.timeout');
+    eq(loaded.dsh_session_key, 'agent:butler:dsh-xiaoai-bridge', 'dsh.session_key');
+    eq(loaded.dsh_device_name, '客厅音箱', 'dsh.device_name');
+    eq(loaded.dsh_tts_speaker, 'xiaoai', 'the reading voice is the template default, no longer steered by the page');
+    eq(loaded.dsh_wakeup_reply, '在呢', 'dsh.wakeup_reply');
+    eq(loaded.dsh_exit_reply, '拜拜', 'dsh.exit_reply');
+    eq(loaded.dsh_fallback_text, '电脑睡了', 'dsh.fallback_text');
+    eq(loaded.dsh_continuous_conversation, true, 'the switch reaches the bridge as a real boolean');
+    eq(loaded.dsh_tts_provider, 'xiaoai', 'the provider switch reaches the bridge as a string');
+    eq(loaded.dsh_tts_speed, DEFAULTS.ttsSpeed, 'the Doubao speed reaches the bridge as a number');
+    eq(loaded.tts_doubao_stream, true, 'the streaming switch reaches the bridge as a real boolean');
+    eq(loaded.asr_model, 'paraformer', 'asr.model');
+    eq(loaded.hooks, [true, true], 'both wake hooks survive the overlay');
+    eq(loaded.hook_globals_match, true, 'the hooks see the overridden values, not the template ones');
+    eq(loaded.untouched_default, 2.0, 'keys the plugin does not own keep the template default');
+  } else {
+    console.log('  skip   no bridge interpreter, so the rendered config was not loaded by the bridge');
+  }
 
   // A field the plugin does not own must not be written at all, or an upstream
   // default change would be silently pinned by this plugin.
@@ -389,5 +399,16 @@ ok(refused({ deviceHost: {} }), 'the strict check refuses a non-string device ho
 ok(!refused({ wakeupTimeout: 600 }), 'the top of the timeout range is still accepted');
 ok(!refused({}), 'a usable section passes the strict check');
 
-console.log(failures === 0 ? '\nconfig check OK' : `\nconfig check FAILED (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+if (failures > 0) {
+  console.log(`\nconfig check FAILED (${failures})`);
+  process.exit(1);
+}
+if (!pythonReady) {
+  skip([
+    {
+      problem: `bridge/.venv is missing (${PYTHON}), so the bridge half of this check did not run`,
+      fixes: [venvCommand()],
+    },
+  ]);
+}
+console.log('\nconfig check OK');

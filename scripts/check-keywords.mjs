@@ -12,6 +12,11 @@
  * up here and restored, so running this never leaves the repository in a state
  * that disagrees with the checked-in template.
  *
+ * The check drives the bridge's own interpreter and rewrites the real keyword
+ * file, so it needs `bridge/.venv` and the model bundle; on a fresh clone that
+ * is a skip with the commands that install them (see `scripts/prereq.mjs`), not
+ * a failure.
+ *
  * Run: node scripts/check-keywords.mjs
  */
 import { execFileSync } from 'node:child_process';
@@ -22,11 +27,16 @@ import { fileURLToPath } from 'node:url';
 
 import { DEFAULTS } from '../lib/config.js';
 import { writeConfig } from '../lib/render-config.js';
+import { keywordGeneratorCommand, pythonPath, skip, venvCommand } from './prereq.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const BRIDGE_DIR = join(PACKAGE_ROOT, 'bridge');
-const PYTHON = join(BRIDGE_DIR, '.venv', 'Scripts', 'python.exe');
-const KEYWORDS_FILE = join(BRIDGE_DIR, 'core', 'models', 'keywords.txt');
+const PYTHON = pythonPath(BRIDGE_DIR);
+const MODELS_DIR = join(BRIDGE_DIR, 'core', 'models');
+const KEYWORDS_FILE = join(MODELS_DIR, 'keywords.txt');
+/** Tokenizer the encoder reads before it can write `keywords.txt`. */
+const TOKENS_FILE = join(MODELS_DIR, 'tokens.txt');
+const BPE_FILE = join(MODELS_DIR, 'bpe.model');
 
 let failures = 0;
 /** @param {boolean} condition @param {string} label */
@@ -39,14 +49,38 @@ function ok(condition, label) {
   }
 }
 
-if (!existsSync(KEYWORDS_FILE)) {
-  console.error(`keywords file missing: ${KEYWORDS_FILE}`);
-  process.exit(1);
+// Neither prerequisite comes from a clone: the interpreter appears after
+// `uv sync`, the model bundle after the README download. Report both, with the
+// command that fixes each, instead of letting execFileSync throw an ENOENT.
+/** @type {{problem: string, fixes: string[]}[]} */
+const missing = [];
+if (!existsSync(PYTHON)) {
+  missing.push({
+    problem: `bridge/.venv is missing (${PYTHON}), so the bridge interpreter cannot run`,
+    fixes: [venvCommand()],
+  });
+}
+const missingModels = [TOKENS_FILE, BPE_FILE, KEYWORDS_FILE]
+  .filter((file) => !existsSync(file))
+  .map((file) => `bridge/core/models/${file.slice(MODELS_DIR.length + 1)}`);
+if (missingModels.length > 0) {
+  const fixes = ['download models.zip and unpack it into bridge/core/models/ (README install steps, step 3)'];
+  if (existsSync(TOKENS_FILE) && existsSync(BPE_FILE)) {
+    // The encoder is in place, so the keyword file can be rebuilt on demand --
+    // this is the same entry point the bridge runs on startup.
+    fixes.push(`regenerate the keyword file from the wake words in bridge/config.py: ${keywordGeneratorCommand()}`);
+  }
+  missing.push({
+    problem: `the model bundle is incomplete, missing ${missingModels.join(', ')}`,
+    fixes,
+  });
 }
 
-const backup = readFileSync(KEYWORDS_FILE);
-const original = backup.toString('utf8');
 const workDir = mkdtempSync(join(tmpdir(), 'xiaoai-keywords-'));
+/** @type {Buffer|null} */
+let backup = null;
+/** @type {string} */
+let original = '';
 
 try {
   const configA = join(workDir, 'config-a.py');
@@ -60,6 +94,18 @@ try {
   writeConfig({ dataDir: workDir, templatePath: join(BRIDGE_DIR, 'config.py'), cfg: { ...DEFAULTS, wakeKeywords: '小爱小爱，小爱同学' }, path: configC });
   const renderedC = readFileSync(configC, 'utf8');
   ok(renderedC.includes('["小爱小爱", "小爱同学"]'), 'a full-width comma splits wake words in the rendered config');
+
+  if (missing.length > 0) {
+    if (failures > 0) {
+      console.log(`\nkeyword check FAILED (${failures})`);
+      process.exit(1);
+    }
+    rmSync(workDir, { recursive: true, force: true });
+    skip(missing);
+  }
+
+  backup = readFileSync(KEYWORDS_FILE);
+  original = backup.toString('utf8');
 
   const probe = `
 import json, os, shutil, sys
@@ -108,12 +154,15 @@ print(json.dumps({
   ok(!encoded.includes('@小爱小爱'), 'the replaced wake word is gone from the keyword file');
   ok(JSON.stringify(result.loaded_from) === JSON.stringify(['你好小智', '测试唤醒词']), 'the reload actually re-executed the generated config');
 } finally {
-  writeFileSync(KEYWORDS_FILE, backup);
+  if (backup !== null) writeFileSync(KEYWORDS_FILE, backup);
   rmSync(workDir, { recursive: true, force: true });
 }
 
 const restored = readFileSync(KEYWORDS_FILE, 'utf8');
 ok(restored === original, 'the repository keyword file was restored');
 
-console.log(failures === 0 ? '\nkeyword check OK' : `\nkeyword check FAILED (${failures})`);
-process.exit(failures === 0 ? 0 : 1);
+if (failures > 0) {
+  console.log(`\nkeyword check FAILED (${failures})`);
+  process.exit(1);
+}
+console.log('\nkeyword check OK');
