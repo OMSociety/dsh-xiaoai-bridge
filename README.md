@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/OMSociety/dsh-xiaoai-bridge/main/docs/logo.png" alt="DSH XiaoAI Bridge" width="160">
-  <h1>小爱音箱桥接器 DSH XiaoAI Bridge</h1>
+<h1><img src="https://raw.githubusercontent.com/OMSociety/dsh-xiaoai-bridge/main/docs/logo.png" width="192" alt="DSH XiaoAI Bridge"><br>小爱音箱桥接器 DSH XiaoAI Bridge</h1>
+
   <p>把小爱音箱接进 DeepSeek Harness：喊一声唤醒词，答案从音箱里念出来。</p>
   <p>桥接器是本地 Python 服务（源码在 <code>bridge/</code>），由插件当子进程托管；设置页、状态卡、播报纪律都在插件这一半。</p>
 
