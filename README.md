@@ -6,7 +6,7 @@
 
   <p>
     <a href="https://www.npmjs.com/package/dsh-xiaoai-bridge"><img src="https://img.shields.io/npm/v/dsh-xiaoai-bridge?label=version&color=4f6ef7" alt="version"></a>
-    <a href="https://github.com/deepseek-ai/dsh"><img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.1-4f6ef7" alt="DSH"></a>
+    <a href="https://github.com/deepseek-ai/dsh"><img src="https://img.shields.io/badge/DSH-DeepSeek%20Harness-4D6BFE" alt="DSH"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4f6ef7" alt="license"></a>
     <a href="https://github.com/OMSociety/dsh-xiaoai-bridge/stargazers"><img src="https://img.shields.io/github/stars/OMSociety/dsh-xiaoai-bridge?color=4f6ef7" alt="stars"></a>
     <a href="https://github.com/OMSociety/dsh-xiaoai-bridge/issues"><img src="https://img.shields.io/github/issues/OMSociety/dsh-xiaoai-bridge?color=4f6ef7" alt="issues"></a>
@@ -127,7 +127,6 @@ flowchart LR
 
 | 需要 | 版本 / 说明 |
 | --- | --- |
-| DSH | `0.2.0-rc.2` 至 `0.3.0` 之前（含各补丁线的预发布形态） |
 | Node | 20 或更新 |
 | pnpm | 装插件依赖用（只有一个运行依赖 `@deepseek-ai/schemastery`） |
 | Python | 3.12 |
