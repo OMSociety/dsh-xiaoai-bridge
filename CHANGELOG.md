@@ -8,6 +8,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-11-23
+
+### 修复
+
+- **插件路由的同源判断不再依赖写死的候选源。** 此前只放行 `webServer.host`、`localhost` 与 `127.0.0.1` 加端口拼出的三个 Origin，经局域网地址、远程地址或反向代理（Host 为域名）打开设置页时，所有写请求被 `403 cross-origin request refused` 拒绝。现在把请求的 `Origin` 与它自己的 `Host` 经 URL 归一后比对，一致即放行；`Origin: null` 与 `sec-fetch-site: cross-site` 仍然拒绝。
+
+### Fixed
+
+- **The plugin routes' same-origin check no longer depends on hard-coded candidates.** It used to accept only three Origins built from `webServer.host`, `localhost` and `127.0.0.1` plus the port, so opening the settings page through a LAN address, a remote address or a reverse proxy (`Host` is a domain name) made every write request fail with `403 cross-origin request refused`. The request's `Origin` is now compared with its own `Host` after URL normalisation and passes when they match; `Origin: null` and `sec-fetch-site: cross-site` are still refused.
+
 ## [1.0.2] - 2026-11-02
 
 ### 变更

@@ -29,7 +29,7 @@ import net from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mountHttp } from '../lib/http.js';
+import { mountHttp, sameOrigin as sameOriginOf } from '../lib/http.js';
 import { createSessionBridge } from '../lib/session.js';
 import { createBridgeClient } from '../lib/bridge.js';
 import { DEFAULTS } from '../lib/config.js';
@@ -279,6 +279,17 @@ async function main() {
     });
     eq(preflightSame.status, 204, 'a same-origin preflight is answered 204');
     ok(!('access-control-allow-origin' in preflightSame.headers), 'even the 204 stays CORS-header free (deliberate)');
+
+    // Origin is judged against the Host the request addressed, so a LAN address,
+    // a remote address and a reverse-proxy domain all work.
+    ok(sameOriginOf({ headers: { host: 'gui.example.com', origin: 'https://gui.example.com' } }), 'a proxy domain is same-origin when Origin equals Host');
+    ok(sameOriginOf({ headers: { host: '192.168.1.20:3080', origin: 'http://192.168.1.20:3080' } }), 'a LAN address is same-origin when Origin equals Host');
+    ok(sameOriginOf({ headers: { host: 'localhost:3080', origin: 'http://LOCALHOST:3080' } }), 'host case is normalised');
+    ok(sameOriginOf({ headers: { host: 'gui.example.com' } }), 'a request without Origin passes');
+    ok(!sameOriginOf({ headers: { host: 'gui.example.com', origin: 'https://evil.example' } }), 'a foreign Origin is refused on a proxy domain');
+    ok(!sameOriginOf({ headers: { host: 'gui.example.com', origin: 'null' } }), 'Origin null is refused');
+    ok(!sameOriginOf({ headers: { host: 'gui.example.com', origin: 'https://gui.example.com', 'sec-fetch-site': 'cross-site' } }), 'sec-fetch-site cross-site is refused');
+    ok(!sameOriginOf({ headers: { origin: 'https://gui.example.com' } }), 'an Origin without a Host is refused');
   }
 
   // ---------------------------------------------------------- unknown routes
