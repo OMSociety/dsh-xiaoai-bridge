@@ -56,7 +56,7 @@ let skipped = 0;
  * that depend on those paths are reported as skipped instead of failing, so a run
  * on another platform says what it did not cover rather than calling it a bug.
  */
-const IDENTITY_SUPPORTED = process.platform === 'win32';
+const IDENTITY_SUPPORTED = ['win32', 'linux'].includes(process.platform);
 
 /**
  * @param {string} label assertion name
@@ -205,6 +205,7 @@ const bridgeDir = join(root, 'bridge');
 const coreDir = join(bridgeDir, 'core');
 mkdirSync(dataDir, { recursive: true });
 mkdirSync(coreDir, { recursive: true });
+writeFileSync(join(bridgeDir, 'config.py'), 'APP_CONFIG = {}\n');
 writeFileSync(join(bridgeDir, 'main.py'), 'setInterval(() => {}, 1000);\n', 'utf8');
 writeFileSync(join(coreDir, 'dummy.py'), 'VALUE = 1\n', 'utf8');
 
@@ -281,6 +282,16 @@ function makeSupervisor(overrides = {}) {
   });
 }
 
+{
+  const dummy = await startDummy();
+  writePidRecord(dummy.pid);
+  const supervisor = makeSupervisor({readCommandLine: async () => null});
+  try {
+    check('identity unavailable refuses adoption', !(await supervisor.start()).ok);
+    check('identity unavailable refuses stop', !(await supervisor.stop()).ok);
+    check('observed process and record survive', isAlive(dummy.pid) && existsSync(pidPath));
+  } finally { dummy.kill(); await waitGone(dummy.pid, Date.now() + 5000); }
+}
 console.log('case A: leftover bridge whose recorded identity matches is adopted');
 {
   stamp(join(bridgeDir, 'main.py'), Date.now() - HOUR_MS);
@@ -678,6 +689,54 @@ console.log('case M: a credential read accepts both shapes the store may answer 
   check('a record without a value is nothing', credentialText({ source: 'env' }) === null);
   check('a non-string value is nothing', credentialText({ value: 42 }) === null);
   check('a number is nothing', credentialText(7) === null);
+}
+
+console.log('case N: restart propagates a refused stop without launching');
+{
+  const dummy = await startDummy();
+  writePidRecord(dummy.pid);
+  const supervisor = makeSupervisor({ readCommandLine: async () => null });
+  try {
+    await supervisor.start();
+    const stopped = await supervisor.stop();
+    const before = logText();
+    const restart = await supervisor.restart();
+    check('restart returns the original control refusal', !restart.ok && restart.error === stopped.error);
+    check('no new start is attempted on stop failure', before === logText() && isAlive(dummy.pid));
+  } finally { dummy.kill(); await waitGone(dummy.pid, Date.now() + 5000); }
+}
+
+console.log('case O: restart orders control requests and samples the new environment');
+{
+  const marker = join(dataDir, 'port-probe');
+  writeFileSync(join(bridgeDir, 'main.py'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, process.env.API_SERVER_PORT);setInterval(()=>{},1000);`);
+  let port = 9100;
+  const supervisor = makeSupervisor({ getConfig: () => ({ ...config, apiServerPort: port }) });
+  try {
+    const first = await supervisor.start();
+    check('fixture receives the initial environment', await until(() => existsSync(marker) && readFileSync(marker, 'utf8') === '9100', 3000));
+    port = 9101;
+    const before = startedPids().length;
+    const [a,b,c] = await Promise.all([supervisor.restart(), supervisor.restart(), supervisor.ensureStarted()]);
+    check('parallel restarts share one replacement', a.ok && b.pid === a.pid && a.pid !== first.pid && startedPids().length === before + 1);
+    check('demand waits for the new generation', c.ok && c.pid === a.pid);
+    check('new child receives changed port', await until(() => readFileSync(marker, 'utf8') === '9101', 3000));
+    const [restarted, stopped] = await Promise.all([supervisor.restart(), supervisor.stop()]);
+    check('a later stop wins over in-flight restart', restarted.ok && stopped.ok && !supervisor.running());
+  } finally { await supervisor.stop(); }
+}
+
+console.log('case P: render failure with existing output does not launch');
+{
+  const supervisor = makeSupervisor();
+  const output = supervisor.renderConfig();
+  check('previously rendered configuration is present', output.ok && existsSync(output.path));
+  mkdirSync(`${output.path}.tmp`);
+  const before = startedPids().length;
+  const result = await supervisor.start();
+  check('render error reaches caller', !result.ok && result.error.includes('config render failed'));
+  check('failed render leaves process unstarted', !supervisor.running() && before === startedPids().length && !existsSync(pidPath));
+  await supervisor.stop();
 }
 
 rmSync(root, { recursive: true, force: true });

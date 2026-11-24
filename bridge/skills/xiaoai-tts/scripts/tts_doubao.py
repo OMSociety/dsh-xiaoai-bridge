@@ -16,7 +16,7 @@ DEFAULT_SPEAKER = None
 
 def tts_doubao(text, speaker=None, speed=1.0, emotion=None, 
                context_texts=None, app_id=None, access_key=None, 
-               resource_id=None, blocking=False):
+               resource_id=None, blocking=False, timeout=60000):
     """
     使用火山 TTS 播放文字
     
@@ -50,7 +50,7 @@ def tts_doubao(text, speaker=None, speed=1.0, emotion=None,
     if resource_id:
         data["resource_id"] = resource_id
     
-    result = api_request("/api/tts/doubao", method="POST", data=data)
+    result = api_request("/api/tts/doubao", method="POST", data=data, timeout=timeout / 1000)
     
     mode = "阻塞模式" if blocking else "非阻塞模式"
     speaker_info = f"[{speaker or DEFAULT_SPEAKER}]"
@@ -62,6 +62,7 @@ def tts_doubao(text, speaker=None, speed=1.0, emotion=None,
 def main():
     parser = argparse.ArgumentParser(description="火山 TTS 语音合成")
     parser.add_argument("text", help="要合成的文本")
+    parser.add_argument("--timeout", type=int, default=60000, help="请求等待时间（毫秒）")
     parser.add_argument("--speaker", "-s", default=DEFAULT_SPEAKER,
                         help=f"音色 ID（默认: {DEFAULT_SPEAKER}）")
     parser.add_argument("--speed", type=float, default=1.0,
@@ -79,10 +80,12 @@ def main():
     
     args = parser.parse_args()
     
+    if args.timeout <= 0:
+        parser.error("timeout 必须为正毫秒数")
+
     # 验证语速范围
     if not 0.8 <= args.speed <= 2.0:
-        print("❌ 错误: 语速必须在 0.8-2.0 之间")
-        sys.exit(1)
+        parser.error("语速必须在 0.8-2.0 之间")
     
     try:
         context = args.context
@@ -97,13 +100,13 @@ def main():
             context_texts=context,
             app_id=args.app_id,
             access_key=args.access_key,
-            blocking=args.blocking
+            blocking=args.blocking, timeout=args.timeout
         )
         
         if result.get("success"):
-            print(f"🎵 火山 TTS 播放成功")
+            print("播放完成" if args.blocking else "桥接器已受理播报")
         else:
-            print(f"⚠️ 播放可能失败: {result}")
+            raise RuntimeError("桥接器未确认成功")
     except Exception as e:
         print(f"❌ 错误: {e}")
         sys.exit(1)

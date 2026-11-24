@@ -116,7 +116,7 @@ function fakeReq(method, url, headers = {}, body) {
 async function call(method, url, headers, body) {
   const req = fakeReq(method, url, headers, body);
   const res = fakeRes();
-  await recorded.routes[0].handler(req, res);
+  await recorded.routes[0].handler(req, res, {principal:{kind:'owner'}});
   let parsed = null;
   try { parsed = JSON.parse(res.body); } catch { /* non-JSON */ }
   return { status: res.status, body: parsed ?? res.body };

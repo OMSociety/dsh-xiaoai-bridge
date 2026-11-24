@@ -55,7 +55,7 @@ class _FakeSession:
     async def __aexit__(self, *exc_info):
         return False
 
-    def post(self, url, json=None, headers=None):
+    def post(self, url, json=None, headers=None, **kwargs):
         self.posted = {"url": url, "json": json, "headers": headers}
         return self.response
 

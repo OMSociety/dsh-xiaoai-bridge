@@ -34,7 +34,8 @@ class DecisionTableTest(unittest.TestCase):
         for peer in ("127.0.0.1", "::1", "127.0.0.5"):
             with self.subTest(peer=peer):
                 self.assertIsNone(api_auth.authorize("", "", peer))
-                self.assertIsNone(api_auth.authorize("secret", "", peer))
+                self.assertIsNotNone(api_auth.authorize("secret", "", peer))
+                self.assertIsNone(api_auth.authorize("secret", "secret", peer))
 
     def test_remote_peer_without_a_configured_token_is_refused(self):
         reason = api_auth.authorize("", "", "192.168.1.30")
@@ -78,7 +79,7 @@ class HeaderTest(unittest.TestCase):
 
 
 class TokenSourceTest(unittest.TestCase):
-    """The environment wins; the rendered config is the manual-run fallback."""
+    """Only the dedicated pairing environment variable authorizes remote clients."""
 
     def setUp(self):
         self._saved = dict(__import__("os").environ)
@@ -99,14 +100,15 @@ class TokenSourceTest(unittest.TestCase):
             self.assertEqual("from-env", api_auth.configured_token())
             fake.get_app_config.assert_not_called()
 
-    def test_config_is_used_when_the_env_is_empty(self):
+    def test_dsh_config_is_ignored_when_the_env_is_empty(self):
         import os
 
         os.environ.pop(api_auth.TOKEN_ENV_VAR, None)
         fake = mock.Mock()
         fake.get_app_config.return_value = {"token": " from-config "}
         with mock.patch("core.utils.config.ConfigManager.instance", return_value=fake):
-            self.assertEqual("from-config", api_auth.configured_token())
+            self.assertEqual("", api_auth.configured_token())
+            fake.get_app_config.assert_not_called()
 
     def test_missing_config_reads_as_unconfigured(self):
         import os

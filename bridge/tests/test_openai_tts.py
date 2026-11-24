@@ -191,7 +191,7 @@ class OpenAITTSPlaybackTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(importlib.import_module("os").path.exists(audio_path))
         speaker.play.assert_not_awaited()
 
-    async def test_unsupported_playback_format_falls_back_before_request(self):
+    async def test_unsupported_playback_format_fails_before_request(self):
         speaker = unittest.mock.MagicMock()
         speaker.play = unittest.mock.AsyncMock(return_value=True)
         config = {
@@ -209,12 +209,13 @@ class OpenAITTSPlaybackTest(unittest.IsolatedAsyncioTestCase):
                     "get_speaker",
                     return_value=speaker,
                 ):
-                    await self.manager._play_response_with_tts(
-                        "你好", tts_speaker="alloy"
-                    )
+                    with self.assertRaises(ValueError):
+                        await self.manager._play_response_with_tts(
+                            "你好", tts_speaker="alloy"
+                        )
 
         synthesize.assert_not_awaited()
-        speaker.play.assert_awaited_once_with(text="你好", blocking=True)
+        speaker.play.assert_not_awaited()
 
 
 if __name__ == "__main__":

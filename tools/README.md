@@ -10,7 +10,7 @@
 |---|---|---|
 | `doc-check.mjs` | 对外文档 QA：README / CHANGELOG / CONTRIBUTING 里的 emoji、`---` 分隔线、表格列数是否一致，以及 README 内部锚点是否都能落到标题上 | `node tools/doc-check.mjs` |
 | `changelog-check.mjs` | CHANGELOG 结构 QA：版本标题格式（非 `Unreleased` 必须有 `- YYYY-MM-DD`）、中文类别必须排在英文之前、中英两侧类别与条目数一一对应、类别名在白名单内 | `node tools/changelog-check.mjs` |
-| `plugin-smoke.mjs` | 宿主侧端到端冒烟：用假 cordis 上下文加载 `lib/index.js` 并应用插件，然后直接驱动挂上的 `/plugin/xiaoai` handler，覆盖 `/asr` 鉴权、`/config` revision 冲突与 `POST /data/wipe` 的拒绝路径 | `node tools/plugin-smoke.mjs` |
+| `plugin-smoke.mjs` | 宿主侧端到端冒烟：用假 cordis 上下文加载 `lib/index.js` 并应用插件，然后直接驱动挂上的 `/plugin/xiaoai` handler，核验所有者 `/health` 的诊断信息、机器 `/asr` 的 bearer 鉴权、`/config` revision 冲突与 `POST /data/wipe` 的拒绝路径 | `node tools/plugin-smoke.mjs` |
 | `render-outline.mjs` | 用 `check-client.mjs` 的那套桩渲染 `lib/client.js`，打印页面大纲（折叠区、隐藏字段、控件种类），改设置页时不用重启 DSH 就能看结构 | `node tools/render-outline.mjs` |
 
 ## 已知状态

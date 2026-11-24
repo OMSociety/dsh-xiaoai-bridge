@@ -67,10 +67,11 @@ function section(name) {
  * @param {number} port port the Origin allowlist must agree with
  * @returns {{handler: (req: object, res: object) => void, registrations: object[], effects: number}}
  */
-function captureHandler(deps, port) {
+function captureHandler(deps, port, connection) {
   const registrations = [];
   let effects = 0;
   const webCtx = {
+    get: key => key === 'connection' ? connection : undefined,
     webServer: {
       host: '127.0.0.1',
       port,
@@ -85,7 +86,7 @@ function captureHandler(deps, port) {
     },
   };
   mountHttp(webCtx, deps);
-  return { handler: registrations[0]?.handler, registrations, effects };
+  return { handler: (req, res) => registrations[0].handler(req, res, {principal:{kind:'owner'}}), registrations, effects };
 }
 
 /** @param {http.Server} server @returns {Promise<number>} bound port */
@@ -233,6 +234,37 @@ const PREFIX = '/plugin/xiaoai';
 
 async function main() {
   // ---------------------------------------------------------------- mounting
+  const owner = { principal: { kind: 'owner' } };
+  const guest = { principal: { kind: 'guest' } };
+  for (const [name, rcPeer, third, expected] of [
+    ['rc browser', owner, [], 200], ['rc API', { ...owner }, [], 403], ['rc absent', undefined, [], 403],
+    ['alpha owner', null, [owner], 200], ['alpha guest', owner, [guest], 403], ['alpha absent', owner, [undefined], 403],
+  ]) {
+    const connection = { browserPeer: owner, admit: () => ({ peer: rcPeer }) };
+    const spec = captureHandler(makeDeps().deps, 0, connection).registrations[0];
+    const res = { writeHead(code) { this.code = code; }, end() {} };
+    await spec.handler({ method: 'GET', url: '/plugin/xiaoai/health', headers: {} }, res, ...third);
+    eq(res.code, expected, `${name} management admission`);
+    eq(spec.auth({method:'POST',url:new URL('http://localhost/plugin/xiaoai/asr')}), 'anonymous', 'machine callback reaches plugin bearer');
+    eq(spec.auth({method:'GET',url:new URL('http://localhost/plugin/xiaoai/config')}), 'required', 'management requires host admission');
+  }
+  section('readiness: authenticated, read-only machine handshake');
+  for (const [token, bearer, delivery, status] of [
+    ['fixture', 'fixture', true, 200], ['fixture', '', true, 401],
+    ['', '', true, 503], ['fixture', 'fixture', false, 503],
+  ]) {
+    const {deps} = makeDeps({resolveToken: async () => token, sessions: delivery
+      ? {deliver() { throw Error('readiness attempted delivery'); }} : undefined,
+      state: {collectFacts() { throw Error('readiness requested management state'); }} });
+    const spec = captureHandler(deps, 0).registrations[0];
+    const url = new URL(`http://localhost${PREFIX}/ready`);
+    eq(spec.auth({method:'GET', url}), 'anonymous', 'host admits machine handshake');
+    eq(spec.auth({method:'POST', url}), 'required', 'machine handshake is GET only');
+    const res = {writeHead(code) { this.code = code; }, end(body) { this.body = JSON.parse(body); }};
+    await spec.handler({method:'GET', url:url.pathname, headers:{authorization:`Bearer ${bearer}`}}, res);
+    eq(res.code, status, 'readiness status');
+    eq(res.body, {ok: status === 200}, 'readiness returns only its boolean result');
+  }
   section('mount: the route tree is registered under the shared prefix once');
   {
     const { deps } = makeDeps();
@@ -795,7 +827,7 @@ async function main() {
       logger: { warn: () => {} },
       diagnostics: { note: () => {} },
     });
-    eq((await upperCase.request('/api/health')).ok, true, 'a host name in mixed case is not treated as hostile');
+    eq((await upperCase.request('/api/health')).ok, true, 'localhost is dialed on a literal loopback address');
 
     // A wildcard bind has no address of its own to dial, so it is dialed on
     // loopback -- the same normalization the port probe uses (`dialableHost`).

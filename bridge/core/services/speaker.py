@@ -139,16 +139,26 @@ class SpeakerManager:
         )
         return True
 
+    async def stop_native_dialog_audio(self) -> None:
+        """Stop the native text/media players, leaving the bridge PCM session intact."""
+        result = await self.run_shell(
+            "killall tts_play.sh miplayer 2>/dev/null; mphelper pause"
+        )
+        if result is None or result.exit_code != 0:
+            raise RuntimeError("Could not confirm native player stop")
+
     async def stop_device_audio(self) -> None:
         """
         停止设备上的全部播放链路。
         aplay 不立即重启，由 Rust 侧 ensure_player_ready() 在首次
         发送音频数据时按需启动，避免空 buffer 导致 underrun。
         """
-        await self.run_shell(
-            "killall tts_play.sh miplayer 2>/dev/null; mphelper pause"
-        )
-        await dsh_xiaoai_server.stop_playing()
+        # Invalidate in-flight PCM writers before the awaited device stop.
+        dsh_xiaoai_server.begin_playback_session()
+        try:
+            await self.stop_native_dialog_audio()
+        finally:
+            await dsh_xiaoai_server.stop_playing()
 
     async def wake_up(self, awake=True, silent=True):
         """

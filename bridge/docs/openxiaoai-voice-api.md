@@ -42,17 +42,19 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 | `/api/wakeup` | POST | 唤醒小爱 |
 | `/api/interrupt` | POST | 打断当前播放 |
 | `/api/play/file` | POST | 上传并播放音频文件 |
-| `/api/play/text` | POST | 小爱 TTS 播放文字 |
+| `/api/play/text` | POST | 按桥接器的 DSH 合成方式与会话音色播放文字 |
 | `/api/play/url` | POST | 播放远程音频 URL |
 | `/api/tts/doubao` | POST | 豆包 TTS 语音合成 |
 | `/api/tts/doubao_voices` | GET | 获取豆包 TTS 音色列表 |
 
 ## 基础信息
 
-- **Base URL**: `http://{host}:9092`
+- 本机默认地址：`http://127.0.0.1:9092`。托管本机模式只允许回环客户端，无需桥 API 凭据。托管子进程的 `XIAOAI_API_TOKEN` 用于桥回调 DSH；这是独立的传输方向。访问开启专用令牌的独立桥时，即使技能与桥位于同机，也使用下述已配对的 HTTPS 地址。
+- 远程配对：为独立桥服务配置证书受信的 HTTPS 入口。后端 HTTP 监听仅对该入口可达；启用入口前，在后端设置服务专用的 `OPENXIAOAI_REMOTE_TOKEN`，并确认无令牌请求返回 401。启用该令牌后，所有来源（含回环代理）均要求 `Authorization: Bearer <配对令牌>`。勿将未启用配对的回环服务经代理公开。
+- 随附技能将 `OPENXIAOAI_BASE_URL` 与 `OPENXIAOAI_PAIRED_ORIGIN` 都设置为该 HTTPS origin，向客户端注入同一专用令牌。不同远端分别配对。
+- 撤销时，先关闭该实例的 HTTPS 入口，再轮换服务端专用令牌并重启实例，使原令牌失效；清除技能运行环境中的地址、配对 origin 与令牌。需要继续为其他客户端服务时，仅向获准客户端注入新令牌，验证鉴权后再开放入口。
 - **Content-Type**: `application/json`
 
----
 
 ## 健康检查
 
@@ -78,7 +80,6 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 | status | 服务状态：目前只会是 `"healthy"`（进程活着才答得上话） |
 | speaker_ready | 是否音箱已初始化并准备好接收指令 |
 
----
 
 ## 获取音箱状态
 
@@ -102,7 +103,6 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 |------|------|
 | status | 播放状态：`"playing"`, `"paused"`, `"idle"` |
 
----
 
 ## 唤醒音箱
 
@@ -118,12 +118,11 @@ OpenXiaoAI HTTP API 提供了一套远程控制小爱音箱播放语音的接口
 
 **Example**:
 ```bash
-curl -X POST http://{host}:9092/api/wakeup \
+curl -X POST http://127.0.0.1:9092/api/wakeup \
   -H "Content-Type: application/json" \
   -d '{"silent": true}'
 ```
 
----
 
 ## 打断播放
 
@@ -133,10 +132,9 @@ curl -X POST http://{host}:9092/api/wakeup \
 
 **Example**:
 ```bash
-curl -X POST http://{host}:9092/api/interrupt
+curl -X POST http://127.0.0.1:9092/api/interrupt
 ```
 
----
 
 ## 播放音频文件
 
@@ -153,17 +151,16 @@ curl -X POST http://{host}:9092/api/interrupt
 
 **Example (curl)**:
 ```bash
-curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
+curl -X POST "http://127.0.0.1:9092/api/play/file?blocking=true" \
   -F "file=@/path/to/audio.mp3"
 ```
 
----
 
 ## 播放文字 (TTS)
 
 ### POST /api/play/text
 
-使用小爱自带 TTS 播放文字。
+自动念 DSH 回复和 `xiaoai_speak` 都通过此接口入队。开始播放时，桥接器读取 `dsh.tts_provider` 并使用该会话的音色。`blocking: false` 的成功响应只表示请求已入队；实际合成或播放失败可查桥接器日志。音色服务失败或播放被打断即结束本次请求，重试由调用方明确发起。
 
 **Request Body**:
 
@@ -171,16 +168,15 @@ curl -X POST "http://{host}:9092/api/play/file?blocking=true" \
 |------|------|------|------|
 | text | string | 是 | 要播放的文字 |
 | blocking | bool | 否 | 是否阻塞等待，默认 `false` |
-| timeout | int | 否 | 超时时间（毫秒），默认 600000 |
+| timeout | int | 否 | 原生播报命令的超时上限（毫秒），默认 600000 |
 
 **Example**:
 ```bash
-curl -X POST http://{host}:9092/api/play/text \
+curl -X POST http://127.0.0.1:9092/api/play/text \
   -H "Content-Type: application/json" \
   -d '{"text": "你好", "blocking": false}'
 ```
 
----
 
 ## 播放远程 URL
 
@@ -198,12 +194,11 @@ curl -X POST http://{host}:9092/api/play/text \
 
 **Example**:
 ```bash
-curl -X POST http://{host}:9092/api/play/url \
+curl -X POST http://127.0.0.1:9092/api/play/url \
   -H "Content-Type: application/json" \
   -d '{"url": "http://example.com/audio.mp3", "blocking": false}'
 ```
 
----
 
 ## 豆包 TTS
 
@@ -217,7 +212,7 @@ curl -X POST http://{host}:9092/api/play/url \
 |------|------|------|------|
 | text | string | 是 | 要合成的文本 |
 | app_id | string | 否 | App ID（默认从 config.py 读取） |
-| access_key | string | 否 | Access Key（默认从 config.py 读取） |
+| access_key | string | 否 | Access Key（请求值优先，其次为 `DOUBAO_ACCESS_KEY` 环境变量和配置） |
 | resource_id | string | 否 | 资源 ID（自动根据音色检测） |
 | speaker_id | string | 否 | 音色 ID（默认 `zh_female_vv_uranus_bigtts`） |
 | speed | float | 否 | 语速，0.8-2.0（默认 1.0） |
@@ -227,14 +222,14 @@ curl -X POST http://{host}:9092/api/play/url \
 
 **Example - 基础调用**:
 ```bash
-curl -X POST http://{host}:9092/api/tts/doubao \
+curl -X POST http://127.0.0.1:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
   -d '{"text": "你好，我是豆包语音助手"}'
 ```
 
 **Example - 指定音色和情感**:
 ```bash
-curl -X POST http://{host}:9092/api/tts/doubao \
+curl -X POST http://127.0.0.1:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
   -d '{
     "text": "你怎么能这样！",
@@ -245,7 +240,7 @@ curl -X POST http://{host}:9092/api/tts/doubao \
 
 **Example - 2.0 音色 + 指令控制**:
 ```bash
-curl -X POST http://{host}:9092/api/tts/doubao \
+curl -X POST http://127.0.0.1:9092/api/tts/doubao \
   -H "Content-Type: application/json" \
   -d '{
     "text": "这是一个很长的句子",
@@ -254,7 +249,6 @@ curl -X POST http://{host}:9092/api/tts/doubao \
   }'
 ```
 
----
 
 ## 获取音色列表
 
@@ -271,16 +265,15 @@ curl -X POST http://{host}:9092/api/tts/doubao \
 **Example**:
 ```bash
 # 获取所有版本概览
-curl http://{host}:9092/api/tts/doubao_voices
+curl http://127.0.0.1:9092/api/tts/doubao_voices
 
 # 仅获取 2.0 音色
-curl http://{host}:9092/api/tts/doubao_voices?version=2.0
+curl http://127.0.0.1:9092/api/tts/doubao_voices?version=2.0
 
 # 仅获取 1.0 音色
-curl http://{host}:9092/api/tts/doubao_voices?version=1.0
+curl http://127.0.0.1:9092/api/tts/doubao_voices?version=1.0
 ```
 
----
 
 ## 音色分类
 
@@ -308,7 +301,6 @@ curl http://{host}:9092/api/tts/doubao_voices?version=1.0
 | 高冷御姐(多情感) | zh_female_gaolengyujie_emo_v2_mars_bigtts | 支持 emotion 参数 |
 | ... | ... | ... |
 
----
 
 ## 情感参数 (emotion)
 
@@ -343,7 +335,6 @@ curl http://{host}:9092/api/tts/doubao_voices?version=1.0
 | 娱乐八卦 | entertainment |
 | 方言 | dialect |
 
----
 
 ## 配置说明
 
@@ -360,7 +351,6 @@ curl http://{host}:9092/api/tts/doubao_voices?version=1.0
 }
 ```
 
----
 
 ## 错误码
 
@@ -368,5 +358,9 @@ curl http://{host}:9092/api/tts/doubao_voices?version=1.0
 |------------|------|
 | 200 | 成功 |
 | 400 | 请求参数错误 |
+| 401 | 远端未配对或凭据未匹配；检查目标 origin 和该实例专用令牌。连接失败或 TLS 验证失败不会返回此 HTTP 状态。 |
+| 409 | 阻塞文本播报被打断 |
 | 500 | 服务器内部错误 |
 | 503 | Speaker 未初始化；播放队列已满（同时排队或发声的播报达到上限）；后台播报任务创建失败 |
+
+豆包应用 ID 按请求、配置顺序读取；Access Key 按请求、`DOUBAO_ACCESS_KEY` 环境变量、配置顺序读取。会话播报使用相同的环境变量与配置优先级。

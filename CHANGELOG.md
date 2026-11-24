@@ -8,6 +8,30 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-25
+
+### 安全
+
+- 管理路由要求宿主所有者身份；机器回调独立验证 bearer。托管客户端只拨回环地址，远程技能使用显式 HTTPS 配对和专用凭据。
+
+### 修复
+
+- 播报回执不明时保留本轮占位；留痕记录受理状态，截断时省略号计入长度。设置页以字段为单位保存编辑。
+- DSH 自动回复、主动播报和独立桥回复都使用选定音色。合成或播放失败时保留文字和诊断，是否重试由用户决定。
+- 启停与重启按请求顺序执行。桥接器用专用就绪接口检查会话投递入口，所有者通过状态卡查看详细诊断。
+- 桥接器停止和清理以进程身份、停止结果与端口状态为准。发包检查校验白名单实物与双语日志。
+
+### Security
+
+- Management routes require a host owner; machine callbacks authenticate separately. Managed clients dial loopback, while remote skills use explicit HTTPS pairing with dedicated credentials.
+
+### Fixed
+
+- Unconfirmed playback retains the turn claim. Logs record acceptance, truncation includes the ellipsis, and the settings editor tracks individual fields.
+- DSH automatic replies, tool announcements and standalone bridge replies use the selected voice. If synthesis or playback fails, the text and diagnostics remain available for a manual retry.
+- Bridge lifecycle requests run in order. The bridge checks session delivery through a dedicated readiness endpoint; owners can view detailed diagnostics in the status card.
+- Bridge cleanup checks process identity, stop outcome and port state. Packaging checks validate declared files and bilingual release entries.
+
 ## [1.0.3] - 2026-11-23
 
 ### 修复

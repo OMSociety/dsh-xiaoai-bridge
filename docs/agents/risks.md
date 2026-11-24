@@ -11,7 +11,7 @@
 | `lib/http.js` | 路由、请求体解析与同源校验错了会直接动到鉴权边界（缺令牌必须 fail-closed），真机 socket 行为离线也测不全 | 跑 `node scripts\check-http.mjs`；协议语义变动再用真实请求打通一遍（含拒绝路径） |
 | `lib/exposure.js` | `xiaoai_speak` 与其技能注册到哪一层（音箱会话的 agent 作用域，或逃生门打开时的全局层）；注册错层会让普通会话也看得见工具，或让音箱会话里反而没有工具 | 跑 `node scripts\check-session.mjs`（case 9/10 覆盖作用域注册、无模型选择那一路、exposureState 的降级与逃生门）；宿主没有 scoped `tools`/`skills` 时必须**不注册**并记一条 `scope-registration-unavailable`，绝不偷偷退回全局 |
 | `cordis.patch.yml`（含「小爱模式」预设那一条 insert） | 一个 bundle 两条 insert：插件本体（设置卡命名空间 `id: xiaoai`，定了就不能改）与音箱会话的 Agent 预设（`preset-xiaoai`）；声明写坏会让预设装上却激活失败（`agent-preset-broken`），`plugins` 清单里误加子代理、计划模式或 `dsh-tool-ask-user` 则等于把语音会话又交回给要人点界面的工具 | 跑 `node scripts\check-session.mjs`（case 11）；profile 里是 `link:`，改完不用重装，但新增工具要重启 DSH 并让音箱会话新建一个；宿主没有 `agentPresets` 注册表或 `agentPreset` 留空时**完全不碰注册表** |
-| `lib/cleanup.js` | GENERATED/HISTORY 划分错了，会在每次 DSH 关闭时删掉 `spoken.jsonl`（用户明确要留的历史）；teardown 只在「stop 成功且端口都释放」时才删 generated，否则要 `removeGenerated({ keep: ['bridge.pid'] })` | 跑 `check-cleanup` |
+| `lib/cleanup.js` | `spoken.jsonl` 属于 HISTORY，关闭时保留。桥进程成功停止且端口均已释放后，清理 GENERATED；其余情况保留生成文件 | 跑 `check-cleanup` |
 | `lib/ports.js` + `bridge/native/src/server.rs` + `bridge/docker-compose.yml` | `4399` 是硬编码的；仓库内不同步会让「端口仍被占用」的诊断误报或漏报，漏改设备侧 `/data/open-xiaoai/server.txt`（不在仓库内）则是音箱完全没反应；`4399` 默认还要求设备带令牌（`speakerAuth`），设备侧没带的表现是日志报 401、音箱同样没反应 | 三处一起改 + 人工改设备侧（含 `?token=`），跑 `check-cleanup`、`check-supervisor` |
 | `lib/process.js` | 接管 DSH 异常退出后遗留的桥接器进程（按 pid 文件里的 **pid + 命令行身份**）与 Windows 下的进程树清理；看门狗的重启预算按**滑动崩溃窗口**算（`crashWindowMs`）；改错会留下孤儿进程占着 4399/9092，或把「一天崩一次」误判成崩溃循环 | 跑 `node scripts\check-supervisor.mjs`；真机验收里核对卸载后无残留 |
 | `locale/zh.json`、`locale/en.json` 与 `lib/client.js` | 插件标题/描述在 json 里，其余界面文案在 `client.js` 的两张内联表里，中英 parity 没有工具守着 | 三处一起改 |
@@ -42,4 +42,4 @@
 | 日志刷 `Unknown tts_provider=` | provider 名字没进 `SUPPORTED_PROVIDERS`，见 [change-contract.md](./change-contract.md) |
 | 音箱自己接自己的话 | 有播报路径没过 `PlaybackGate`，或闸门提前放开 |
 | 音箱完全没反应，日志里 `[DSH] Plugin not reachable at` | 桥接器连不上插件：确认 DSH 在跑，且 `base_url` 是 `http://127.0.0.1:19387/plugin/xiaoai` |
-| 每一句都被拒 | 令牌没拿到：看插件 `/health` 的 `tokenConfigured` 与诊断里的 `token-not-applied` |
+| 每一句都被拒 | 用桥回调凭据检查 `GET /plugin/xiaoai/ready`。所有者可在状态卡核对 `tokenConfigured` 与 `token-not-applied` 诊断；设备和模型可用性需单独核验 |

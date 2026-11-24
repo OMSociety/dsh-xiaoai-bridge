@@ -109,7 +109,7 @@ await check('an over-long line is cut at a sentence end, not mid-sentence', () =
   assert.equal(truncateSpokenText('你好你好。世界', 6), '你好你好。');
 });
 await check('a line with no early sentence end is cut and marked with an ellipsis', () => {
-  assert.equal(truncateSpokenText('一二三四五六七八九十', 5), '一二三四五…');
+  assert.equal(truncateSpokenText('一二三四五六七八九十', 5), '一二三四…');
 });
 await check('a cut that would split an emoji pair is pulled back instead', () => {
   // The emoji is a surrogate pair, so a limit of 3 lands between its halves.
@@ -118,7 +118,7 @@ await check('a cut that would split an emoji pair is pulled back instead', () =>
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), false, 'a lone high surrogate leaked into the spoken line');
 });
 await check('a boundary that already ends on a whole pair is left alone', () => {
-  assert.equal(truncateSpokenText('ab🙂cd', 4), 'ab🙂…');
+  assert.equal(truncateSpokenText('ab🙂cd', 4), 'ab…');
 });
 await check('a limit landing on the second half of a pair drops the pair, not half of it', () => {
   // A limit of 2 used to pull the boundary *forward* to 2 -- past the pair that
@@ -129,15 +129,15 @@ await check('a limit landing on the second half of a pair drops the pair, not ha
   assert.equal(out, 'a…');
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), false, 'a lone high surrogate leaked into the spoken line');
   // The same string at a limit that covers the whole pair keeps it.
-  assert.equal(truncateSpokenText('a🙂bc', 3), 'a🙂…');
+  assert.equal(truncateSpokenText('a🙂bc', 3), 'a…');
 });
 await check('a one-character limit keeps one whole character, not just the ellipsis', () => {
   // A limit of 1 in front of a pair used to pull the boundary back to 0, which
   // left the spoken line as the bare ellipsis.
   const out = truncateSpokenText('🙂abc', 1);
-  assert.equal(out, '🙂…');
+  assert.equal(out, '…');
   assert.equal(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), false, 'a lone high surrogate leaked into the spoken line');
-  assert.equal(truncateSpokenText('你好', 1), '你…');
+  assert.equal(truncateSpokenText('你好', 1), '…');
 });
 await check('an empty override follows the session model', () => {
   assert.deepEqual(resolveReplyerRoute({}, { provider: 'sp', model: 'sm' }), { provider: 'sp', model: 'sm', source: 'session' });
@@ -415,6 +415,7 @@ await check('the newest draft of the turn is the one that gets spoken', () => {
 await check('the spoken line is logged with the intent it came from', () => {
   assert.equal(h1.records.length, 1);
   assert.deepEqual(h1.records[0], {
+    status: 'accepted',
     time: h1.records[0].time,
     device: 'dev-1',
     intent: '最终版草稿',
@@ -453,7 +454,8 @@ const claimA = h3.autoSpeak.claimToolSpeak('session-speak-3');
 const claimB = h3.autoSpeak.claimToolSpeak('session-speak-3');
 h3.autoSpeak.onTurnEnd('session-speak-3');
 await check('the tool may speak once per turn and the repeat is refused', () => {
-  assert.deepEqual(claimA, { allowed: true });
+  assert.equal(claimA.allowed, true);
+  assert.equal(typeof claimA.owner, 'symbol');
   assert.deepEqual(claimB, { allowed: false, reason: 'already' });
   assert.deepEqual(h3.bridge.spoken, [], 'a tool turn is never auto-spoken as well');
 });
@@ -506,7 +508,7 @@ h8.autoSpeak.onAssistantText('session-speak-8', '一二三四五六七八');
 h8.autoSpeak.onTurnEnd('session-speak-8');
 await until(() => h8.bridge.spoken.length === 1, 'the raw fallback line');
 await check('a missing route speaks the agent text (bounded) rather than a failure line', () => {
-  assert.deepEqual(h8.bridge.spoken, ['一二三四…']);
+  assert.deepEqual(h8.bridge.spoken, ['一二三…']);
 });
 
 const h9 = harness({ replyerHistoryTurns: 1 });
@@ -580,6 +582,7 @@ await check('an approval says only where to go, never the payload', () => {
   assert.deepEqual(a1.bridge.spoken, ['到电脑上点一下']);
   assert.deepEqual(a1.calls, [], 'the approval line is not reworded by the reply generator');
   assert.deepEqual(a1.records[0], {
+    status: 'accepted',
     time: a1.records[0].time,
     device: 'dev-a1',
     intent: 'approval: Bash',
@@ -679,7 +682,7 @@ const r1 = await t1.tool.execute({ text: '念这句' }, { agent: { session: { id
 await check('the tool speaks, claims the turn and logs the line', () => {
   assert.deepEqual(t1.played, ['念这句']);
   assert.deepEqual(t1.claims, ['session-tool-1']);
-  assert.deepEqual(r1, { text: '已让小爱音箱念出：念这句' });
+  assert.deepEqual(r1, { text: '桥接器已受理播报：念这句' });
   assert.equal(t1.noted.length, 1);
   assert.deepEqual(t1.noted[0], { sessionId: 'session-tool-1', deviceKey: 'dev', intent: '念这句', spoken: '念这句', source: 'tool' });
 });
@@ -705,7 +708,7 @@ f1.autoSpeak.onUtterance({ sessionId: F1, deviceKey: 'dev-f1', text: '你好' })
 let f1Attempts = 0;
 f1.bridge.playText = async () => {
   f1Attempts += 1;
-  return f1Attempts === 1 ? { ok: false, status: 503, error: 'HTTP 503: Playback queue is full' } : { ok: true };
+  return f1Attempts === 1 ? { ok: false, status: 503, data: { success: false, queued: false }, error: 'HTTP 503: Playback queue is full' } : { ok: true };
 };
 const f1Tool = createSpeakTool({
   getConfig: () => ({ enabled: true, apiServerEnabled: true }),
@@ -845,6 +848,37 @@ await check('every refusal before the claim leaves the turn able to speak', asyn
   await refusedCallStillSpeaks({ label: 'foreign-session', speaker: false });
 });
 
+for (const status of [500, 502, 503]) {
+  await check(`unconfirmed HTTP ${status} and concurrent preflight refusal preserve the owner's reservation`, async () => {
+    const h = harness();
+    const id = `concurrent-${status}`;
+    const exec = { agent: { session: { id } } };
+    h.autoSpeak.onUtterance({ sessionId: id, text: 'fixture' });
+    let finish, attempts = 0;
+    h.bridge.playText = () => { attempts++; return new Promise(resolve => { finish = resolve; }); };
+    const tool = createSpeakTool({ getConfig: () => ({ enabled: true, apiServerEnabled: true }), bridge: h.bridge,
+      sessions: { deviceForSession: () => ({ key: 'fixture' }) }, autoSpeak: h.autoSpeak });
+    const pending = tool.execute({ text: 'one' }, exec);
+    h.autoSpeak.onToolCall(id, SPEAK_TOOL_NAME);
+    assert.equal((await tool.execute({ text: '' }, exec)).isError, true);
+    assert.equal(h.autoSpeak.snapshot()[0].claimed, true);
+    finish({ ok: false, status, error: 'unconfirmed' });
+    assert.match((await pending).text, /未知/);
+    assert.match((await tool.execute({ text: 'repeat' }, exec)).text, /忽略/);
+    h.autoSpeak.onAssistantText(id, 'draft'); h.autoSpeak.onTurnEnd(id);
+    assert.equal(attempts, 1); assert.equal(h.records.length, 0);
+  });
+}
+await check('a late rejection from another turn cannot release the current claim', () => {
+  const h = harness(); const id = 'generation';
+  h.autoSpeak.onUtterance({ sessionId: id }); const old = h.autoSpeak.claimToolSpeak(id);
+  h.autoSpeak.onUtterance({ sessionId: id }); const current = h.autoSpeak.claimToolSpeak(id);
+  h.autoSpeak.releaseToolSpeak(id, old.owner);
+  assert.equal(h.autoSpeak.claimToolSpeak(id).allowed, false);
+  h.autoSpeak.releaseToolSpeak(id, current.owner);
+  assert.equal(h.autoSpeak.claimToolSpeak(id).allowed, true);
+});
+
 const t3 = toolHarness();
 const r3 = await t3.tool.execute({ text: '   ' }, {});
 await check('an empty text is refused', () => {
@@ -970,7 +1004,7 @@ function reviveHarness({ playText, ensureBridge, reviveWaitMs, revivePollMs }) {
 
 const t9 = reviveHarness({
   // Nothing is listening on the first call, then the supervisor brought it up.
-  playText: (attempt) => (attempt === 1 ? { ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' } : { ok: true }),
+  playText: (attempt) => (attempt === 1 ? { ok: false, notSent: true, error: '无法连接桥接器 http://127.0.0.1:9092' } : { ok: true }),
   ensureBridge: async () => ({ ok: true, pid: 4242 }),
   reviveWaitMs: 500,
   revivePollMs: 5,
@@ -979,13 +1013,13 @@ await check('a bridge that is down is started on demand, then the line is spoken
   const result = await t9.tool.execute({ text: '水开了' }, { agent: { session: { id: 'session-tool-9' } } });
   assert.deepEqual(t9.played, ['水开了', '水开了']);
   assert.equal(t9.attempts.length, 1);
-  assert.deepEqual(result, { text: '已让小爱音箱念出：水开了' });
+  assert.deepEqual(result, { text: '桥接器已受理播报：水开了' });
   assert.equal(t9.noted.length, 1, 'a line that was really spoken is still logged');
   assert.equal(t9.noted[0].source, 'tool');
 });
 
 const t10 = reviveHarness({
-  playText: () => ({ ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' }),
+  playText: () => ({ ok: false, notSent: true, error: '无法连接桥接器 http://127.0.0.1:9092' }),
   ensureBridge: async () => ({ ok: false, error: 'bridge is not running (autostart is off)' }),
 });
 await check('when the bridge cannot be started the reason is reported, not swallowed', async () => {
@@ -1016,8 +1050,8 @@ const t12 = reviveHarness({
 await check('a revived bridge that never answers stops at the deadline', async () => {
   const result = await t12.tool.execute({ text: '水开了' }, {});
   assert.equal(result.isError, true);
-  assert.ok(t12.played.length >= 2, `expected retries after the start, saw ${t12.played.length}`);
-  assert.equal(t12.attempts.length, 1);
+  assert.equal(t12.played.length, 1);
+  assert.equal(t12.attempts.length, 0);
 });
 
 const t13Played = [];
@@ -1026,7 +1060,7 @@ const t13 = createSpeakTool({
   bridge: {
     playText: async (text) => {
       t13Played.push(text);
-      return { ok: false, error: '无法连接桥接器 http://127.0.0.1:9092' };
+      return { ok: false, notSent: true, error: '无法连接桥接器 http://127.0.0.1:9092' };
     },
   },
   sessions: { deviceForSession: () => ({ key: 'dev' }), primaryDevice: () => null },

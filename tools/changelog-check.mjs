@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const body = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
-const lines = body.split('\n');
+const lines = body.split(/\r?\n/);
 
 const CN = { 新增: 'Added', 变更: 'Changed', 废弃: 'Deprecated', 移除: 'Removed', 修复: 'Fixed', 安全: 'Security' };
 const EN = new Set(Object.values(CN));
@@ -38,6 +38,7 @@ lines.forEach((line, i) => {
   if (/^- /.test(line) && group) group.items += 1;
 });
 
+if (!versions.length) { console.error('CHANGELOG has no version headings'); problems += 1; }
 for (const v of versions) {
   const seenEn = v.groups.findIndex((g) => g.lang === 'en');
   const lastCn = v.groups.reduce((acc, g, i) => (g.lang === 'cn' ? i : acc), -1);

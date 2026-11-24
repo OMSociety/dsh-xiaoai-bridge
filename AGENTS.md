@@ -66,6 +66,8 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 ```
 
 - Rust 导出面就是 Python 侧的契约，改名或改签名要同时改全部调用点，Python 侧没有任何类型检查兜底。
+- `lib/bridge-lifecycle.js` 为启动、停止、重启与按需启动排队；`lib/process.js` 执行进程操作、核验身份并运行看门狗。状态卡用所有者路由 `GET /plugin/xiaoai/health`；桥接器用插件 bearer 调用 `GET /plugin/xiaoai/ready` 检查会话投递入口。
+- DSH 自动回复、`xiaoai_speak` 和独立桥对话回复各按配置使用一个合成服务与音色。失败即结束本次播报，保留文字和诊断供核查。
 - 会话后端之间不互相调用；要出声一律走 `core/services/tts/router.py` 的 `TTSRouter`。
 - 设备命令集中在 `core/services/speaker.py`，新代码不要另拼 shell。Rust 导出的播放类函数是不带闸门的底层出口，新增直调必须自己承担闸门责任。
 - 任何播报路径都必须过 `core/utils/playback_gate.py` 的单例 `PlaybackGate`，不要自己另写一份计时。
@@ -105,7 +107,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 - 禁止把提交推到 `origin` 之外的任何远端。原因：本仓库的提交只去 `origin`，另一个远端（`upstream`）是别人的项目，只读参考。
 - 禁止自行 bump `package.json` 的版本号。原因：版本是用户可见契约，改前先报备。
 - 禁止在 `bridge/core/external_conversation.py` 里调用 `speaker.abort_xiaoai()`。原因：会打断 FileMonitor 的唤醒通道（该文件顶部注释写明了这条），要停播用播放闸门或 `stop_playing`。
-- 禁止在桥接器业务代码里新增绕开 `bridge/core/services/speaker.py` 的设备命令。原因：打断语义集中在那里，散落会让某些路径打不断；`bridge/core/xiaoai.py` 里那份同内容副本是有意保留的既存状态。
+- 设备停播命令集中在 `bridge/core/services/speaker.py`。`stop_native_dialog_audio` 停止设备原生对话的声音，`stop_device_audio` 停止设备全部播放；调用方按打断范围选择入口。
 - 禁止在播报路径上跳过 `PlaybackGate`。原因：麦克风一直在流，闸门没关时桥接器会听见自己并自问自答。
 - 禁止手改 `bridge/uv.lock` / `bridge/Cargo.lock`。原因：用 `uv` 更新它们，手改会与 `pyproject.toml` / `Cargo.toml` 漂移。
 - 禁止引入第二个日志级别环境变量（如 `LOG_LEVEL`）。原因：`bridge/core/utils/logger.py` 只读 `LOGLEVEL`，另一个名字看着生效其实是死键。
@@ -123,7 +125,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 5. 改了宿主/客户端行为时，重启 DSH 后在真机上核对：插件在 profile 里是 `link:` 指向本仓库的 checkout，重启即载入当前工作树，不需要重新安装。
 6. 改过配置键、端点或 provider：[bridge/docs/openxiaoai-voice-api.md](./bridge/docs/openxiaoai-voice-api.md)（端点）与本文件同步更新。
 
-CI（`.github/workflows/ci.yml`）只覆盖不依赖本机环境的那半边：`ubuntu-latest` + node 22，装 npm 依赖后跑 `npm run check`。那里没有 `bridge/.venv` 与模型包，`check-config` / `check-keywords` 计为跳过；`check-supervisor` 的命令行身份断言只在 Windows 上跑（`lib/process.js` 只在 Windows 读命令行），Linux 上计为跳过并在结尾报数。所以 CI 绿不等于这些路径被覆盖过：第 2 条的 pytest 与第 3–5 条的真机核对只能在本地做，命令行身份相关的那几项也只在本地 Windows 上跑到；改动只碰文档时，第 1、2 条仍要跑一遍。
+CI（`.github/workflows/ci.yml`）在 `ubuntu-latest` 使用 Node 22 安装依赖并运行 `npm run check`。缺少桥接器虚拟环境或模型时，`check-config`、`check-keywords` 记录为跳过。`check-supervisor` 在 Linux 通过 `/proc`、在 Windows 通过 CIM 核验进程命令行。验收时分别记录 Ubuntu CI、Windows 专项、桥接器 pytest 和真机结果。仅改文档时也执行第 1、2 条。
 
 `tools/plugin-smoke.mjs` 可以顺手当回归跑，但它是 `tools/` 下的按需工具，**不算那九条检查、也不在 CI 里跑**。
 
@@ -131,7 +133,7 @@ CI（`.github/workflows/ci.yml`）只覆盖不依赖本机环境的那半边：`
 
 - 改 `lib/client.js` 前想清楚：手写产物、没有 bundler，语法或席位写错只有运行时才炸。
 - 改 `lib/config.js` 时两处（`DEFAULTS` 与 `CONFIG_SCHEMA`）一起改，运行时坏值会被 `sanitizeConfig` 静默回退成默认值。
-- 改 `lib/http.js` 等于动鉴权边界：缺令牌必须 fail-closed，离线检查也测不全真机 socket 行为。
+- 改 `lib/http.js` 等于动鉴权边界：管理请求须有所有者身份；0.2.2-rc.5 单独核验 browserPeer 对象，0.2.3-alpha.2 使用处理器第三参数，首个 0.2.3 RC 时清理 0.2.2 适配。机器回调独立校验插件 bearer，离线检查不能代替宿主实测。
 - 改 `lib/exposure.js` 时，宿主没有 scoped `tools`/`skills` 就必须不注册并记 `scope-registration-unavailable`，绝不退回全局。
 - 动 `4399`、`lib/process.js`、`PlaybackGate` 或豆包凭据前，先读 [docs/agents/risks.md](./docs/agents/risks.md) 对应那一行。
 

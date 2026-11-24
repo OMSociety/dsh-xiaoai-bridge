@@ -77,7 +77,8 @@
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/plugin/xiaoai/health` | 插件概况（含令牌是否配置） |
+| GET | `/plugin/xiaoai/health` | 所有者查看插件概况、令牌配置与桥接器状态 |
+| GET | `/plugin/xiaoai/ready` | 桥接器用与 `/asr` 相同的 bearer 检查会话投递入口；就绪时返回 `200 {"ok":true}` |
 | GET | `/plugin/xiaoai/config` | 读设置（供设置页用；保存时带 revision） |
 | POST | `/plugin/xiaoai/config` | 写设置（`ops` 或 `patch`，二选一） |
 | POST | `/plugin/xiaoai/asr` | 桥接器提交一句识别文本（bearer 门禁） |
@@ -89,6 +90,8 @@
 | POST | `/plugin/xiaoai/bridge/stop` | 停止桥接器 |
 | POST | `/plugin/xiaoai/bridge/restart` | 重启桥接器（换了环境变量类的设置后用） |
 | POST | `/plugin/xiaoai/data/wipe` | 清空数据目录（body 必须是 `{"confirm":"wipe"}`） |
+
+`/ready` 成功表示插件接受该令牌，且已有会话投递入口。要确认模型能回答、设备能出声，需分别检查会话回复和音箱播放。
 
 ## 工作原理
 
@@ -214,9 +217,9 @@ dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 | 小爱原生（默认） | `xiaoai` | 音箱自带的合成 | 不想配豆包凭据，音色由设备决定 |
 | 豆包语音合成 | `doubao` | 火山引擎的豆包语音合成 | 想要固定音色、复刻音色或统一语速 |
 
-选中的值一定会写进渲染出的 `config.py`，不存在「留空跟随模板」。以前的「朗读音色」（`ttsSpeaker`）已经删掉：它和这个开关本来是同一件事的两套入口——桥接器的旧规则就是看那个音色值是不是 `xiaoai` 来决定走哪条路。豆包音色现在只在选「豆包语音合成」时由「豆包音色」给，插件不再写 `dsh.tts_speaker`，桥接器模板里那个默认值原样留着。
+自动念回复和 `xiaoai_speak` 都使用设置页选定的合成方式；选豆包时，二者使用同一个「豆包音色」。独立运行桥接器时，对话回复使用该桥配置的合成方式与音色。
 
-> **注意**：写一个桥接器不认识的值不会报错：它只记一条 `Unknown tts_provider=...`，然后按音色回退。「没报错」不等于「接上了」。
+如果合成或播放失败，本次播报到此结束，文字和错误信息保留供核查。先查看会话和桥接器日志，确认音色、凭据及设备状态后，再决定是否手动重试。
 
 ### 基本
 
@@ -274,7 +277,7 @@ dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 | --- | --- | --- | --- |
 | **自动念出回复** `autoSpeak` | 布尔 | 开 | 模型这一轮没调 `xiaoai_speak` 时，把回复正文交给回复器润色后念出来。关掉后只有模型主动调工具才出声，回复器那一组选项会收起来（值保留）。**审批等待提示语不受这个开关影响**：审批是工具卡在屏幕上等人处理，这一句照念（见下一行）。 |
 | **任何会话都能让小爱说话** `speakFromAnySession` | 布尔 | 关 | 关：`xiaoai_speak` 只在音箱发起的会话里可用，工具与技能也只注册在那一层。开：桌面与网页会话也能调它。 |
-| **播报字数上限** `spokenMaxChars` | 整数 40-2000 | `300` | 一条播报最多多少字；超了先让回复器精简一次，仍然超就截断。 |
+| **播报字数上限** `spokenMaxChars` | 整数 40-2000 | `300` | 回复文本的 UTF-16 长度上限，含末尾省略号；超了先让回复器精简一次，仍然超就截断。 |
 | **审批等待提示语** `approvalText` | 文本 | `需要你到电脑上确认一下` | 工具卡在宿主审批流上时念的固定一句，**关掉「自动念出回复」也照念**（审批意味着有工具正等你到电脑上点一下）。审批请求的正文永远不会被念出来。 |
 | **回复器模型** `replyerProvider` / `replyerModel` | 下拉（DSH 模型目录） | 跟随会话默认模型 | 从这台 DSH 已配置的模型里挑一个给回复器用；选项按 provider 分组，选中后写成「provider/model」两个键。选「跟随会话默认模型」等于把两项留空、不指定路由。选项直接读 DSH 的模型目录（读不到、目录为空、当前值已不在目录里，卡片都会写明并给「重试」）。切换只对回复器即时生效——语音会话的 agent 路由在会话创建时就定了，要重启 DSH 才换。 |
 | **回复器参考轮数** `replyerHistoryTurns` | 整数 0-50 | `6` | 回复器能看到最近多少轮对话（只用于润色，不影响主会话的上下文）。 |
@@ -309,7 +312,7 @@ dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | **启用本地 API 服务** `apiServerEnabled` | 布尔 | 开 | 关掉后桥接器不提供 API，`xiaoai_speak` 会直接回「桥接器 API Server 已在设置中关闭」。 |
-| **监听地址** `apiServerHost` | 文本 | `127.0.0.1` | API Server 的监听地址。保持 loopback 最安全：改成 `0.0.0.0` 等于把音箱的播放与唤醒交给整个局域网。 |
+| **监听地址** `apiServerHost` | 文本 | `127.0.0.1` | 托管 API 使用本机回环地址。远端独立实例的 HTTPS 配对及专用凭据配置见[语音 API 接入说明](bridge/docs/openxiaoai-voice-api.md)。 |
 | **监听端口** `apiServerPort` | 整数 1-65535 | `9092` | API Server 的端口。 |
 | **访问令牌凭据名** `apiServerTokenCredential` | 文本（标识符） | `XIAOAI_API_TOKEN` | 存放访问令牌的 DSH 凭据名，不是令牌本身。插件用它给 `/asr` 做 bearer 门禁，并把它交给桥接器。**改完要重启桥接器**，环境变量在进程启动时快照。 |
 
@@ -317,7 +320,9 @@ dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 
 能触达 `POST /plugin/xiaoai/asr` 的调用方，等于拿到了这个 agent 的输入通道：请求正文会被当成一句用户消息。这条路径上插件不做任何语义拦截，也没有给语音轮次单独收窄工具集——一句话得到的权限，等于它落进去的那个会话的权限。
 
-机械保障只有两条：`/asr` 的 bearer 门禁（fail closed：没配置令牌一律 503，bearer 对不上回 401，且不看来源地址），以及宿主既有的审批流（审批前音箱先念固定的一句提示，审批请求的正文永不念出，决定由宿主做）。其余插件路由（`/config`、`/bridge/*`、`/data/wipe`）按设计不做鉴权：它们和 DSH 在同一台机器、同一个信任边界里。要更强的约束只能靠会话与 agent 层（预设、审批策略、沙箱）。
+设置页以宿主已保存值填表，只提交手工修改的字段。保存时若版本冲突，会载入其他字段的最新值；同一字段由两方同时修改时，选择「保留我的修改」或「采用已保存值」再保存。
+
+管理请求先过同源检查，再由宿主证明所有者身份。0.2.2-rc.5 只接受已认证且与宿主浏览器 owner 为同一对象的 peer；API peer 及无法证明身份的调用返回 403。0.2.3-alpha.2 使用宿主传给路由的 owner peer。机器回调 `POST /asr` 独立校验插件 bearer；未配置返回 503，令牌不符返回 401。审批提示只念固定文字，决定由宿主处理。
 
 ### 最小可用配置
 
@@ -354,7 +359,7 @@ dsh plugin --profile <profile> add "dsh-xiaoai-bridge"
 | --- | --- | --- |
 | 渲染出的桥接器配置 | `<数据目录>/config.py` | 覆盖层，模板是仓库里的 `bridge/config.py`；每次保存设置重写一次，删掉也会在下次启动时重新渲染 |
 | 桥接器日志 | `<数据目录>/bridge.log` | 桥接器进程的 stdout/stderr，加上插件自己追加的诊断行；`GET /plugin/xiaoai/bridge/logs` 读它。文件超过 8 MiB 时轮转一次，旧的那份是 `bridge.log.1`（只留一个槽位） |
-| 播报留痕 | `<数据目录>/spoken.jsonl` | 每念一句追加一行；到 5 MiB 轮转一次，旧的那份是 `spoken.jsonl.1`（只留一个槽位） |
+| 播报留痕 | `<数据目录>/spoken.jsonl` | 桥接器每受理一条播报追加一行（`status: accepted`）；到 5 MiB 轮转一次，旧的那份是 `spoken.jsonl.1`（只留一个槽位） |
 | 进程文件 | `<数据目录>/bridge.pid` | 记着当前桥接器进程，启动时重写 |
 | 设备与会话映射 | `<数据目录>/devices.json` | 音箱设备到 DSH 会话的绑定；绑定的会话被归档后会自动重开一个 |
 | 桥接器设备标识 | `<数据目录>/device.json` | 桥接器自己持久化的设备 ID（`device_id`），写在配置文件同目录 |
@@ -396,7 +401,7 @@ DSH 退出、插件重载与 `dsh plugin remove` 跑的是同一套清理，它�
 - 状态卡：设置页里，看进程、API Server、令牌、预设与最近错误。
 - 插件日志：DSH 自己的日志，诊断行以 `dsh-xiaoai-bridge:` 开头。
 - 桥接器日志：`<数据目录>/bridge.log`，或调 `GET /plugin/xiaoai/bridge/logs?limit=200` 看最近若干行。
-- 播报留痕：`<数据目录>/spoken.jsonl`——「音箱到底念了什么」看这里，它记的是真正播出去的话。
+- 播报留痕：`<数据目录>/spoken.jsonl`——记录桥接器受理的文本；取消、设备失败与实际播放完成须看设备状态。
 
 ### 常见症状
 
@@ -450,7 +455,8 @@ Set-Location bridge
 代码放在哪：
 
 ```
-lib/index.js         插件入口：设置卡片、生命周期、session/event 转发
+lib/index.js         插件入口：宿主服务装配、会话事件转发
+lib/bridge-lifecycle.js  串行处理启动、停止、重启及按需启动
 lib/process.js       子进程托管：启动、停止、日志、看门狗、环境变量
 lib/render-config.js 设置项 → 渲染出的 config.py
 lib/tools.js         xiaoai_speak 工具

@@ -14,7 +14,9 @@ import dsh_xiaoai_server
 from aiohttp import web
 from core.ref import get_speaker, get_xiaoai
 from core.services.api_auth import auth_mode, bearer_auth
+from core.services.tts.router import TTSRouter
 from core.services.tts.doubao import DoubaoTTS
+from core.services.tts.credentials import doubao_credentials
 from core.utils.background import spawn_background
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
@@ -70,20 +72,21 @@ def _release_play_slot() -> None:
         _pending_plays -= 1
 
 
-async def _play_text_serially(speaker, text: str, timeout: int) -> None:
-    """排队后真正出声，直到设备放完才让出锁。
-
-    `speaker.play(blocking=False)` 只是把文本交给设备就返回，声音还在后面放；
-    锁必须等到闸门重新打开（设备上报播完，或闸门的兜底到期）才算这一路结束，
-    否则第二路的命令会叠在第一路的声音上。`timeout` 兼作等待上限。
-    """
-    try:
-        async with _playback_lock():
-            await speaker.play(text=text, blocking=False, timeout=timeout)
-            await PlaybackGate.wait_until_open(timeout=max(timeout, 0) / 1000)
-    except Exception as exc:
-        logger.error(f"[APIServer] Background text playback failed: {exc}")
-    # 名额不在这里归还：见 _finalize_play_task（协程可能还没跑第一步就被取消）。
+async def _play_text_serially(text: str, timeout: int):
+    """Resolve hot configuration once the queued request owns the speaker."""
+    async with _playback_lock():
+        settings = ConfigManager.instance().get_app_config("dsh", {})
+        voices = settings.get("session_tts_speakers", {})
+        voice = voices.get(settings.get("session_key")) if isinstance(voices, dict) else None
+        await TTSRouter.play(
+            text,
+            configured_provider=settings.get("tts_provider"),
+            tts_speaker=voice or settings.get("tts_speaker", "xiaoai"),
+            tts_speed=settings.get("tts_speed", 1.0),
+            native_timeout_ms=timeout,
+            log_prefix="API",
+        )
+        return True
 
 
 # 在飞 / 还在锁上排队的播报任务。打断（POST /api/interrupt 与原生唤醒打断）
@@ -103,10 +106,10 @@ def _finalize_play_task(task: asyncio.Task) -> None:
     _play_tasks.discard(task)
 
 
-def _spawn_play_task(speaker, text: str, timeout: int) -> asyncio.Task:
+def _spawn_play_task(text: str, timeout: int) -> asyncio.Task:
     """起一条串行播报任务，并登记进 `_play_tasks` 以便被打断取消。"""
     task = spawn_background(
-        _play_text_serially(speaker, text, timeout),
+        _play_text_serially(text, timeout),
         name="api-play-text",
     )
     _play_tasks.add(task)
@@ -138,7 +141,7 @@ def cancel_pending_plays() -> int:
 class APIServer:
     """HTTP API Server to control the speaker remotely"""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9092):
         self.host = host
         self.port = port
         self.config = ConfigManager.instance()
@@ -205,11 +208,7 @@ class APIServer:
         请求在入队后立刻返回（响应里 `queued`/`serialized` 说明这一点），真正
         的 TTS 在后台任务里持锁完成；队列满则回 503 + `queued: false`。
 
-        `blocking=true` 是有意保留的另一条通道，不是漏掉队列的旁路：它占住
-        同一个串行名额、持同一把锁等 `tts_play.sh` 整个跑完（最长 `timeout`，
-        默认 600 秒），期间后面的话只能排队 —— 这正是"同步播报"的语义，等待
-        上限（`timeout`）就是它自己的保护。插件侧恒发 `blocking:false`
-        （lib/bridge.js），所以这条路径只服务于手动调用。
+        `blocking=true` 等待同一任务完成；`timeout` 是原生播报命令的毫秒上限。
         """
         try:
             data = await request.json()
@@ -231,51 +230,23 @@ class APIServer:
                     status=503
                 )
 
-            # Run in background to not block the response
+            if not _reserve_play_slot():
+                return web.json_response({"success": False, "error": "Playback queue is full", "queued": False}, status=503)
+            try:
+                task = _spawn_play_task(text, timeout)
+            except Exception as exc:
+                _release_play_slot()
+                logger.error(f"[API] Could not queue playback: {exc}")
+                return web.json_response({"success": False, "error": "Could not queue playback", "queued": False}, status=503)
             if blocking:
-                if not _reserve_play_slot():
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": "Playback queue is full",
-                            "queued": False,
-                        },
-                        status=503,
-                    )
                 try:
-                    async with _playback_lock():
-                        result = await speaker.play(text=text, blocking=True, timeout=timeout)
-                finally:
-                    _release_play_slot()
+                    result = await task
+                except asyncio.CancelledError:
+                    if asyncio.current_task().cancelling():
+                        raise
+                    return web.json_response({"success": False, "error": "Playback interrupted"}, status=409)
                 return web.json_response({"success": result})
-            else:
-                if not _reserve_play_slot():
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": "Playback queue is full",
-                            "queued": False,
-                        },
-                        status=503,
-                    )
-                # 持强引用的后台任务：这条协程可能被 GC 回收（见 utils/background.py），
-                # 而且要串行到设备真的放完才让出锁。任务同时被登记，供打断取消。
-                try:
-                    _spawn_play_task(speaker, text, timeout)
-                except Exception as exc:  # noqa: BLE001 - 名额必须归还
-                    # 建任务失败时名额没有 done 回调去归还，留着它就等于把这个
-                    # 进程的队列永久占满（之后每次播放都是 503）。
-                    _release_play_slot()
-                    logger.error(f"[API] 创建后台播报任务失败: {exc}")
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": "Could not queue playback",
-                            "queued": False,
-                        },
-                        status=503,
-                    )
-                return web.json_response({
+            return web.json_response({
                     "success": True,
                     "message": "Playing text in background",
                     "queued": True,
@@ -581,7 +552,7 @@ class APIServer:
         data = {
             "status": "healthy",
             "speaker_ready": get_speaker() is not None,
-            # "bearer" = non-loopback callers need the token;
+            # "bearer" = every caller needs the paired token;
             # "loopback-only" = no token is configured, so only this machine
             # is served (see core/services/api_auth.py).
             "auth": auth_mode(),
@@ -643,15 +614,14 @@ class APIServer:
             # Get credentials from request or config
             tts_config = self.config.get_app_config("tts.doubao", {})
 
-            app_id = data.get("app_id") or tts_config.get("app_id")
-            access_key = data.get("access_key") or tts_config.get("access_key")
+            app_id, access_key = doubao_credentials(tts_config, data)
             # resource_id is now optional - will be auto-detected based on speaker
             resource_id = data.get("resource_id") or tts_config.get("resource_id")
             resource_id_for_log = resource_id or "<auto>"
 
             if not all([app_id, access_key]):
                 return web.json_response(
-                    {"success": False, "error": "Doubao TTS credentials not configured. Provide app_id and access_key in request or config.py"},
+                    {"success": False, "error": "Doubao TTS credentials not configured. Configure app_id and DOUBAO_ACCESS_KEY"},
                     status=400
                 )
 

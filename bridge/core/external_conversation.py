@@ -87,6 +87,7 @@ class ExternalConversationController:
         self._loop: asyncio.AbstractEventLoop | None = None
         # Playback token for the current TTS session
         self._playback_token: int | None = None
+        self._playback_task: asyncio.Task | None = None
 
     # ---- config helpers ----
 
@@ -162,6 +163,9 @@ class ExternalConversationController:
         self.active = False
         self._cancel_vad_future()
         self._cancel_xiaoai_asr_future()
+        if self._playback_task is not None:
+            task = self._playback_task
+            task.get_loop().call_soon_threadsafe(task.cancel)
         if self._playback_token is not None:
             dsh_xiaoai_server.stop_tts_playback(self._playback_token)
             self._playback_token = None
@@ -279,9 +283,7 @@ class ExternalConversationController:
         )
         if response is None:
             logger.warning(f"No response from {self.BACKEND_NAME}", module=self.LOG_MODULE)
-            speaker = get_speaker()
-            if speaker:
-                await speaker.play(text="抱歉，我没有收到回复")
+            await self._play_tts("抱歉，我没有收到回复")
             return "continue"
 
         # 5. Stop recording → TTS → Start recording → Notify → Wait for silence
@@ -318,9 +320,7 @@ class ExternalConversationController:
         response = await self.backend.send(full_text, wait_response=True)
         if response is None:
             logger.warning(f"No response from {self.BACKEND_NAME}", module=self.LOG_MODULE)
-            speaker = get_speaker()
-            if speaker:
-                await speaker.play(text="抱歉，我没有收到回复")
+            await self._play_tts("抱歉，我没有收到回复")
             return "continue"
 
         await self._stop_recording()
@@ -611,23 +611,24 @@ class ExternalConversationController:
     # ---- TTS ----
 
     async def _play_tts(self, text: str):
-        """Play text via Doubao TTS (blocks until playback finishes)."""
+        """Play one response through the configured provider."""
         self._playback_token = dsh_xiaoai_server.begin_playback_session()
         try:
-            await self.backend._play_response_with_tts(
-                text,
-                tts_speaker=self.backend.get_tts_speaker_for_session_key(),
-                playback_token=self._playback_token,
+            self._playback_task = asyncio.create_task(
+                self.backend._play_response_with_tts(
+                    text,
+                    tts_speaker=self.backend.get_tts_speaker_for_session_key(),
+                    playback_token=self._playback_token,
+                )
             )
+            await self._playback_task
         except Exception as exc:
             logger.error(
                 f"TTS playback error: {exc}",
                 module=self.LOG_MODULE,
             )
-            speaker = get_speaker()
-            if speaker:
-                await speaker.play(text=text)
         finally:
+            self._playback_task = None
             self._playback_token = None
 
     async def _play_notify(self):

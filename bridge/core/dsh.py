@@ -23,6 +23,8 @@ speaks when the model has something to say.
 
 import asyncio
 import uuid
+import ipaddress
+from urllib.parse import urlsplit
 from typing import Any
 
 import aiohttp
@@ -36,6 +38,19 @@ DEFAULT_BASE_URL = "http://127.0.0.1:19387/plugin/xiaoai"
 # Spoken when the plugin cannot be reached at all (plan layer 2). The settings
 # page renders `dsh.fallback_text`; this is only the last resort.
 FALLBACK_SPEECH = "连不上电脑，请稍后再试"
+
+
+def callback_base(value):
+    url = urlsplit(str(value))
+    if (url.scheme not in ("http", "https") or not url.hostname or url.username is not None
+            or url.query or url.fragment or "\\" in str(value)):
+        raise ValueError("DSH callback requires a loopback URL")
+    host = "127.0.0.1" if url.hostname == "localhost" else url.hostname
+    if not ipaddress.ip_address(host).is_loopback:
+        raise ValueError("DSH callback requires a loopback address")
+    host = f"[{host}]" if ":" in host else host
+    port = f":{url.port}" if url.port is not None else ""
+    return f"{url.scheme}://{host}{port}{url.path.rstrip('/')}"
 
 
 class DshManager:
@@ -96,7 +111,7 @@ class DshManager:
                 else False
             )
 
-        cls._base_url = str(config.get("base_url", DEFAULT_BASE_URL)).rstrip("/")
+        cls._base_url = callback_base(config.get("base_url", DEFAULT_BASE_URL))
         # The shared secret lives in the DSH credential store and reaches the
         # bridge through the plugin's spawn environment, so prefer the env var
         # and treat the config value as a fallback for manual runs.
@@ -151,7 +166,7 @@ class DshManager:
 
     @classmethod
     async def connect(cls):
-        """Probe the plugin health route.
+        """Check the authenticated session delivery endpoint.
 
         A failure here is expected whenever DSH is not running: the plugin
         hosts the bridge process, but the bridge can also be started by hand.
@@ -165,21 +180,16 @@ class DshManager:
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as session:
                 async with session.get(
-                    cls._health_url(), headers=cls._headers()
+                    cls._ready_url(), headers=cls._headers(), allow_redirects=False
                 ) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"HTTP {response.status}")
                     body: Any = await response.json(content_type=None)
-                    if response.status >= 400:
-                        raise RuntimeError(f"HTTP {response.status}: {body}")
-            if isinstance(body, dict) and body.get("ok"):
-                cls._connected = True
-                bridge = (body.get("health") or {}).get("bridge") or {}
-                logger.info(
-                    f"[DSH] Connected to plugin {body.get('plugin')} "
-                    f"{body.get('version')} (namespace={body.get('namespace')}, "
-                    f"bridge_managed={bridge.get('managed')})"
-                )
-            else:
-                raise RuntimeError(f"unexpected health payload: {body!r}")
+                    if not isinstance(body, dict) or body.get('ok') is not True:
+                        raise RuntimeError('unexpected readiness response')
+            cls._connected = True
+            cls.last_error = None
+            logger.info('[DSH] Authenticated session delivery endpoint is ready')
         except Exception as exc:
             cls.last_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
@@ -204,8 +214,8 @@ class DshManager:
     # ---- url / headers ----
 
     @classmethod
-    def _health_url(cls) -> str:
-        return cls._base_url.rstrip("/") + "/health"
+    def _ready_url(cls) -> str:
+        return cls._base_url.rstrip("/") + "/ready"
 
     @classmethod
     def _asr_url(cls) -> str:
@@ -291,6 +301,7 @@ class DshManager:
             cls.initialize_from_config()
         if not cls._enabled:
             logger.warning("[DSH] send called but backend is disabled")
+            await cls._play_fallback()
             return None
 
         run_id = str(uuid.uuid4())
@@ -345,14 +356,8 @@ class DshManager:
         not, and silence is the worst answer because the speaker was just
         woken. The wording is rendered from the settings page.
         """
-        from core.ref import get_speaker
-
-        speaker = get_speaker()
-        if not speaker:
-            logger.warning("[DSH] No speaker available for the fallback line")
-            return
         try:
-            await speaker.play(text=cls._fallback_text or FALLBACK_SPEECH)
+            await cls._play_response_with_tts(cls._fallback_text or FALLBACK_SPEECH)
             logger.info("[DSH] Played the fallback line")
         except Exception as exc:
             logger.error(f"[DSH] Failed to play the fallback line: {exc}")
@@ -373,19 +378,20 @@ class DshManager:
             "source": "kws",
         }
         reply: str | None = None
+        refused_before_delivery = False
         try:
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=cls._timeout)
             ) as session:
                 async with session.post(
-                    cls._asr_url(), json=payload, headers=cls._headers()
+                    cls._asr_url(), json=payload, headers=cls._headers(), allow_redirects=False
                 ) as response:
+                    refused_before_delivery = response.status in (401, 403)
                     body: Any = await response.json(content_type=None)
-                    if response.status >= 400:
-                        message = (
-                            body.get("error", body) if isinstance(body, dict) else body
-                        )
-                        raise RuntimeError(f"HTTP {response.status}: {message}")
+                    if not 200 <= response.status < 300:
+                        if isinstance(body, dict) and body.get('delivered') is False:
+                            refused_before_delivery = True
+                        raise RuntimeError(f"HTTP {response.status}")
             if isinstance(body, dict):
                 reply = body.get("reply") or None
             cls._connected = True
@@ -393,9 +399,9 @@ class DshManager:
             cls.last_error = f"{type(exc).__name__}: {exc}"
             cls._connected = False
             logger.error(f"[DSH] Failed to submit utterance: {cls.last_error}")
-            # The caller is fire-and-forget, so this is the only place that
-            # knows the utterance never arrived.
-            await cls._play_fallback()
+            # An interrupted response can belong to an already delivered turn.
+            if refused_before_delivery or isinstance(exc, aiohttp.ClientConnectorError):
+                await cls._play_fallback()
         finally:
             waiter = cls._response_events.get(run_id)
             if reply:

@@ -6,10 +6,9 @@
 import os
 import sys
 import argparse
-import urllib.request
-import urllib.error
+import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from api_client import get_api_config, get_api_token, UNAUTHORIZED_HINT
+from api_client import api_request
 
 
 def play_file(file_path, blocking=False):
@@ -23,49 +22,22 @@ def play_file(file_path, blocking=False):
     if not os.path.exists(file_path):
         raise Exception(f"文件不存在: {file_path}")
     
-    base_url = get_api_config()
-    full_url = f"{base_url}/api/play/file?blocking={'true' if blocking else 'false'}"
-    
-    # 构建 multipart/form-data 请求
-    boundary = "----FormBoundary"
-    
+    boundary = uuid.uuid4().hex
     with open(file_path, "rb") as f:
         file_data = f.read()
     
     filename = os.path.basename(file_path)
     
     body = (
-        f"------{boundary}\r\n"
+        f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f"Content-Type: audio/mpeg\r\n\r\n"
     ).encode("utf-8")
     body += file_data
-    body += f"\r\n------{boundary}--\r\n".encode("utf-8")
+    body += f"\r\n--{boundary}--\r\n".encode("utf-8")
     
-    headers = {
-        "Content-Type": f"multipart/form-data; boundary=----{boundary}"
-    }
-    token = get_api_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    
-    req = urllib.request.Request(full_url, data=body, headers=headers, method="POST")
-    
-    try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            import json
-            result = json.loads(response.read().decode("utf-8"))
-            
-            mode = "阻塞模式" if blocking else "非阻塞模式"
-            print(f"✅ 上传并播放 [{mode}]: {filename}")
-            return result
-    except urllib.error.HTTPError as e:
-        error_msg = f"HTTP 错误: {e.code} - {e.reason}"
-        if e.code == 401:
-            error_msg += f"\n{UNAUTHORIZED_HINT}"
-        raise Exception(error_msg)
-    except Exception as e:
-        raise Exception(f"请求失败: {e}")
+    return api_request(f"/api/play/file?blocking={str(blocking).lower()}", method="POST",
+                       data=body, content_type=f"multipart/form-data; boundary={boundary}", timeout=60)
 
 
 def main():
@@ -79,7 +51,7 @@ def main():
     try:
         result = play_file(args.file, blocking=args.blocking)
         if result.get("success"):
-            print(f"🎵 播放成功")
+            print("播放完成" if args.blocking else "桥接器已受理播报")
         else:
             print(f"⚠️ 播放可能失败: {result}")
     except Exception as e:

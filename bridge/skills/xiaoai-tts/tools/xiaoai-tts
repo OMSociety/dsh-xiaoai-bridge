@@ -19,7 +19,7 @@ def run_script(script_name, args_list, capture=True):
         print(f"错误: 脚本不存在 {script_path}", file=sys.stderr)
         return None, "", "脚本不存在", 1
     
-    cmd = ["python3", script_path] + args_list
+    cmd = [sys.executable, script_path] + args_list
     
     if capture:
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -34,7 +34,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  xiaoai-tts tts "你好，小爱"           # 语音播报（优先 Doubao，失败回退小爱 TTS）
+  xiaoai-tts tts "你好，小爱"           # 语音播报（Doubao TTS）
   xiaoai-tts tts "你好" -s zh_female_xiaohe_uranus_bigtts  # 指定音色
   xiaoai-tts tts "你好" --speed 1.2     # 调整语速
   xiaoai-tts tts "好耶" -m happy        # 开心语气
@@ -50,8 +50,8 @@ def main():
     
     subparsers = parser.add_subparsers(dest='command', help='可用命令')
     
-    # tts 命令 - 优先 Doubao，失败回退 text
-    tts_parser = subparsers.add_parser('tts', help='语音播报（优先 Doubao TTS，失败自动回退小爱 TTS）')
+    # tts 命令 - Doubao
+    tts_parser = subparsers.add_parser('tts', help='语音播报（Doubao TTS）')
     tts_parser.add_argument('content', help='要播放的文字内容')
     tts_parser.add_argument('--speaker', '-s', default='', 
                             help='音色名称（默认: 服务端默认')
@@ -95,7 +95,7 @@ def main():
     
     # 执行对应命令
     if args.command == 'tts':
-        # 优先尝试 Doubao TTS
+        # Doubao TTS
         cmd_args = [args.content]
         if args.speaker != '':
             cmd_args.extend(['--speaker', args.speaker])
@@ -112,21 +112,8 @@ def main():
         if args.timeout != 60000:
             cmd_args.extend(['--timeout', str(args.timeout)])
         
-        result, stdout, stderr, code = run_script('tts_doubao.py', cmd_args)
-        
-        if code == 0 and result and result.returncode == 0:
-            print(stdout, end='')
-            sys.exit(0)
-        else:
-            # Doubao 失败，回退到 text
-            print(f"⚠️ Doubao TTS 失败，回退到小爱自带 TTS...", file=sys.stderr)
-            text_args = [args.content]
-            if args.blocking:
-                text_args.append('--blocking')
-            if args.timeout != 60000:
-                text_args.extend(['--timeout', str(args.timeout)])
-            sys.exit(run_script('play_text.py', text_args)[3])
-    
+        sys.exit(run_script('tts_doubao.py', cmd_args, capture=False)[3])
+
     elif args.command == 'text':
         cmd_args = [args.content]
         if args.blocking:

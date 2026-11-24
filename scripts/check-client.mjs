@@ -1,16 +1,17 @@
 /**
- * Structural check for the hand-authored browser half (`lib/client.js`).
+ * Offline component check for the hand-authored browser half (`lib/client.js`).
  *
  * The client half is a committed build artifact in DSH's module-loader format,
  * so there is no bundler to catch mistakes. This script evaluates the bundle in
  * a sandbox with stubbed `react` / `react/jsx-runtime`, then asserts that the
  * module id matches the package name, that the plugin exports `apply`/`inject`,
  * and that applying it registers the bundle's configuration under the slot the
- * plugin manager actually dispatches. It also renders the component once with
- * stubbed hooks to prove the tree builds in both the `page` and `summary` views.
+ * plugin manager actually dispatches. It renders both slot views, then mounts the page with
+ * stateful hooks and a revision-fenced in-memory config endpoint.
  *
  * Run: node scripts/check-client.mjs
  */
+import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,13 +66,12 @@ if (captured !== null) {
   //    NOT require a cordis service package: those belong in `dsh.client.inject`.
   const requested = [];
   const seen = { forms: [], valueFields: [], switches: [], segments: [], selects: [], folds: [], hidden: [] };
-  // Every `setState` updater the page calls while this check drives it. The stub
-  // never re-renders, so recording them is the only way to observe what a
-  // control such as the route picker puts into the draft.
-  const stateWrites = [];
+  const hooks = createHookDriver();
+  const buttons = [];
   const element = (type, props, key) => {
     // Native controls are not stubbed components, so capture the one the page
     // builds by hand: the project-group picker.
+    if (type === 'button' || type === primitivesStub.Button) buttons.push(props);
     if (type === 'select') seen.selects.push(props ?? {});
     // Gated fields and gated sections stay mounted behind `xiaoai_hidden`, so
     // the class list is what says whether a group is on the page right now.
@@ -81,6 +81,7 @@ if (captured !== null) {
   };
   const text = (children) => children;
   const primitivesStub = {
+    Button: (props) => element('button', props),
     SettingsForm: (props) => {
       seen.forms.push(props);
       return element('div', { children: [props.labels?.unavailable, props.children, props.labels?.save] });
@@ -117,14 +118,7 @@ if (captured !== null) {
     requested.push(specifier);
     if (specifier === 'react') {
       return {
-        useState: (initial) => [
-          typeof initial === 'function' ? initial() : initial,
-          (next) => { stateWrites.push(next); },
-        ],
-        useEffect: () => {},
-        useCallback: (fn) => fn,
-        useMemo: (fn) => fn(),
-        useRef: (initial) => ({ current: initial }),
+        ...hooks.api,
         createElement: element,
         Fragment: Symbol('Fragment'),
       };
@@ -188,6 +182,7 @@ if (captured !== null) {
         register(ns, copy) { localeRegistrations += 1; dictionaries.set(ns, copy); return () => {}; },
         bind: (ns) => (key) => dictionaries.get(ns)?.zh?.[key] ?? key,
       },
+      remote: { session: { modelCatalog: async () => ({ groups: [{ id: 'openai', models: [{ id: 'gpt-5' }] }] }) } },
       effect: (fn) => fn(),
     };
     try {
@@ -229,6 +224,8 @@ if (captured !== null) {
           for (const label of configFields) {
             check(page.includes(label), `page view is missing the field ${JSON.stringify(label)}`);
           }
+          check(page.includes('自动念回复和 xiaoai_speak 都只用这里选的音色'), 'the TTS setting must identify both speech paths');
+          check(page.includes('查看诊断后手动重试'), 'the TTS setting must explain what to do after a failed announcement');
           // Inside the 高级 fold: the fold must exist (asserted below) and keep
           // carrying these two labels.
           for (const label of ['桥接器目录', 'Python 解释器']) {
@@ -357,11 +354,11 @@ if (captured !== null) {
           //    project-group picker, populated from GET /health, not a free-text
           //    path: the host groups a session only when its cwd is exactly a
           //    workspace path, so a typed path would silently leave the speaker
-          //    ungrouped. The harness never lets /health answer, which is
+          //    ungrouped. The initial render precedes the /health response, which is
           //    exactly the empty-list case. The second is the reply-generator
           //    route: one picker over the pair of stored keys (provider and
-          //    model), filled from the host's model catalogue. The harness never
-          //    runs effects, so the catalogue stays idle and only the
+          //    model), filled from the host's model catalogue. Before effects run,
+          //    the catalogue stays idle and only the
           //    "follow the session's default model" option can render.
           check(seen.selects.length === 2, `expected 2 native <select>, got ${seen.selects.length}`);
           const workspacePicker = seen.selects.find((control) => control.id === 'xiaoai-sessionCwd');
@@ -384,32 +381,12 @@ if (captured !== null) {
               values.length === 1 && values[0] === '',
               `an unloaded catalogue must offer only "follow the session's default", got ${JSON.stringify(values)}`,
             );
-            // The other half of the write path: the ops are only as good as the
-            // draft the control puts them in, so drive the real change handler
-            // and replay the updater it recorded.
-            stateWrites.length = 0;
-            routePicker.onChange({ target: { value: 'openai/gpt-5' } });
-            check(stateWrites.length >= 1, 'one pick must touch the draft');
-            let replayed = {};
-            for (const update of stateWrites) replayed = typeof update === 'function' ? update(replayed) : update;
-            check(
-              replayed.replyerProvider === 'openai' && replayed.replyerModel === 'gpt-5',
-              `one pick must fill both keys of the pair, got ${JSON.stringify(replayed)}`,
-            );
-            stateWrites.length = 0;
-            routePicker.onChange({ target: { value: '' } });
-            let cleared = { replyerProvider: 'openai', replyerModel: 'gpt-5' };
-            for (const update of stateWrites) cleared = typeof update === 'function' ? update(cleared) : update;
-            check(
-              cleared.replyerProvider === '' && cleared.replyerModel === '',
-              `"follow the session's default" must clear both keys, got ${JSON.stringify(cleared)}`,
-            );
           }
           check(source.includes('healthFacts.workspaces'), 'the picker must read the workspace list out of the /health facts');
           check(source.includes('field.sessionCwd.follow'), 'the picker needs a "follow the default" option label');
 
           // The catalogue wiring itself: the remote call is made in apply()
-          // (the harness never calls it, so assert it by name), the picker reads
+          // (assert the service wiring by name), the picker reads
           // it through the module-level snapshot, and the failing case offers a
           // retry rather than an empty list.
           check(
@@ -452,47 +429,8 @@ if (captured !== null) {
             'the pair behind the route picker must draw nothing yet still produce ops (render: false, not hidden)',
           );
 
-          // 7d. The card's write path, exercised rather than grepped: a control
-          //     that draws but writes nothing is invisible until someone saves,
-          //     which is how the route picker shipped once already. `__check` is
-          //     the bundle's own buildOps/routeChoices, so what is asserted here
-          //     is what a save would really send.
           const seam = mod.__check;
-          check(seam && typeof seam.buildOps === 'function', 'the bundle must expose its ops builder to this check');
-          check(seam && typeof seam.routeChoices === 'function', 'the bundle must expose routeChoices to this check');
-          if (seam && typeof seam.buildOps === 'function') {
-            const routePaths = ['replyerProvider', 'replyerModel'];
-            const routeOnly = (plan) => plan.ops.filter((op) => routePaths.includes(op.path[0]));
-            const written = seam.buildOps(
-              { replyerProvider: 'openai', replyerModel: 'gpt-5' },
-              {},
-              { value: { replyerProvider: 'old', replyerModel: 'old' } },
-            );
-            check(
-              JSON.stringify(routeOnly(written)) === JSON.stringify([
-                { op: 'set', path: ['replyerProvider'], value: 'openai' },
-                { op: 'set', path: ['replyerModel'], value: 'gpt-5' },
-              ]),
-              `a picked route must write both stored keys, got ${JSON.stringify(routeOnly(written))}`,
-            );
-            const followed = seam.buildOps(
-              { replyerProvider: '', replyerModel: '' },
-              {},
-              { value: { replyerProvider: 'openai', replyerModel: 'gpt-5' } },
-            );
-            check(
-              JSON.stringify(routeOnly(followed)) === JSON.stringify([
-                { op: 'unset', path: ['replyerProvider'] },
-                { op: 'unset', path: ['replyerModel'] },
-              ]),
-              `"follow the session default" must clear both keys, got ${JSON.stringify(routeOnly(followed))}`,
-            );
-            const untouched = seam.buildOps({}, {}, { value: { doubaoAccessKeyCredential: 'DOUBAO_ACCESS_KEY' } });
-            check(
-              !untouched.ops.some((op) => op.path[0] === 'doubaoAccessKeyCredential'),
-              `a save must not touch the credential name the plugin owns, got ${JSON.stringify(untouched.ops)}`,
-            );
-          }
+          check(typeof seam?.routeChoices === 'function', 'the bundle must expose routeChoices to this check');
           if (seam && typeof seam.routeChoices === 'function') {
             const pickedRoute = seam.routeChoices(
               { status: 'ready', groups: [{ id: 'openai', name: 'OpenAI', models: [{ id: 'gpt-5', name: 'GPT-5' }] }] },
@@ -530,9 +468,8 @@ if (captured !== null) {
           check(source.includes('hint.continuousConversation'), 'the switch has no hint');
 
           // 9. The status card reports the API Server probe and the diagnostics
-          //    list. The harness never lets /health answer (useEffect is a no-op,
-          //    useState never updates), so the rows themselves cannot render
-          //    here: assert the wiring by name, and assert separately that every
+          //    list. The initial render precedes the /health response,
+          //    so the rows themselves cannot render here: assert the wiring by name, and assert separately that every
           //    diagnostic code the host can store has wording in both languages.
           for (const needle of [
             'status.api',
@@ -560,52 +497,6 @@ if (captured !== null) {
               `lib/diagnostics.js reports ${JSON.stringify(code)} but the page has no wording for it`,
             );
           }
-
-          // 10. The save path's conflict handling and the config read's failure
-          //     branch. Neither can be reached from the rendered snapshot (the
-          //     harness never answers /config or /health), but both decide what
-          //     the user still has on screen afterwards, so assert the branches
-          //     that keep the draft and the snapshot alive.
-          check(
-            source.includes('if (keepDraft !== true) applySnapshot(out.body.descriptor);'),
-            'a conflict reload must refresh the revision without re-seeding the draft',
-          );
-          // The bare `loadConfig();` re-seeds the form while `loadConfig(true)`
-          // keeps the draft, so each call site is pinned to its own branch. A
-          // swap (the conflict drops the draft, the successful save keeps it)
-          // would still contain every one of those strings somewhere.
-          const conflictAt = source.indexOf('out.status === 409');
-          const beforeConflict = conflictAt < 0 ? '' : source.slice(0, conflictAt);
-          const afterConflict = conflictAt < 0 ? '' : source.slice(conflictAt);
-          check(conflictAt >= 0, 'the save path must still handle a host revision conflict');
-          check(
-            /loadConfig\(true\);/.test(afterConflict.slice(0, 900)),
-            'the 409 branch must keep the draft so the same ops can be saved again',
-          );
-          check(
-            !/loadConfig\(true\);/.test(beforeConflict),
-            'no branch that runs before the conflict may hold the draft: a successful save re-seeds',
-          );
-          check(
-            (beforeConflict.match(/loadConfig\(\);/g) ?? []).length === 1,
-            'the successful save must re-seed the form from the host snapshot exactly once',
-          );
-          check(
-            (afterConflict.match(/loadConfig\(\);/g) ?? []).length === 0,
-            'no call site after the conflict handling may re-seed the form; only the successful save does',
-          );
-          check(
-            (source.match(/loadConfig\(dirty\);/g) ?? []).length === 2,
-            'mounting and the toolbar refresh must pass the draft flag so neither re-seeds over unsaved edits',
-          );
-          check(
-            (source.match(/snapshot: null/g) ?? []).length === 1,
-            'only the initial state may start without a snapshot',
-          );
-          check(
-            (source.match(/status: "error", snapshot: prev\.snapshot/g) ?? []).length === 2,
-            'both config-read failure paths must keep the last usable snapshot',
-          );
 
           // 11. The catalogue's degraded states: a failed read disables the
           //     picker (the list on screen is not a list of what can be picked)
@@ -734,12 +625,131 @@ if (captured !== null) {
           for (const key of zhKeys) {
             check(String(copy.en[key] ?? '').length > 0, `the en dictionary is missing wording for ${JSON.stringify(key)}`);
           }
+          await verifyEditor({ first, seen, hooks, buttons, copy });
         } catch (err) {
-          failures.push('component render threw: ' + String(err?.message ?? err));
+          failures.push('component check failed: ' + String(err?.stack ?? err));
         }
       }
     }
   }
+}
+
+/** Persist hook slots between renders and run committed effects in dependency order. */
+function createHookDriver() {
+  let mounted = false, cursor = 0;
+  const cells = [], effects = [];
+  const slot = () => cells[cursor++] ??= {};
+  const changed = (prev, deps) => !prev || !deps || deps.some((v, i) => !Object.is(v, prev[i]));
+  const api = {
+    useState(initial) {
+      const cell = mounted ? slot() : {};
+      if (!('value' in cell)) cell.value = typeof initial === 'function' ? initial() : initial;
+      return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; }];
+    },
+    useRef(initial) { return mounted ? (slot().ref ??= { current: initial }) : { current: initial }; },
+    useCallback(fn, deps) {
+      if (!mounted) return fn;
+      const cell = slot();
+      if (changed(cell.deps, deps)) { cell.fn = fn; cell.deps = deps; }
+      return cell.fn;
+    },
+    useEffect(fn, deps) {
+      if (!mounted) return;
+      const cell = slot();
+      if (changed(cell.deps, deps)) {
+        cell.deps = deps;
+        effects.push(() => { cell.cleanup?.(); cell.cleanup = fn(); });
+      }
+    },
+  };
+  return { api, mount() { mounted = true; }, begin() { cursor = 0; }, commit() { effects.splice(0).forEach((run) => run()); } };
+}
+
+async function verifyEditor({ first, seen, hooks, buttons, copy }) {
+  let revision = 1, readError = false;
+  const user = { deviceName: 'kitchen', apiServerPort: 9092, replyerProvider: 'acme', replyerModel: 'm1' };
+  const posts = [];
+  const response = (status, body) => ({ ok: status === 200, status, json: async () => body });
+  sandbox.fetch = async (url, init) => {
+    if (url !== '/plugin/xiaoai/config') return response(200, { ok: true });
+    if (init.method !== 'POST') return readError ? response(503, { ok: false, error: 'offline' })
+      : response(200, { ok: true, descriptor: { value: { ...DEFAULTS, ...user }, base: DEFAULTS, user: { ...user }, revision } });
+    const request = JSON.parse(init.body);
+    posts.push(request);
+    if (request.revision !== revision) return response(409, { ok: false });
+    for (const op of request.ops) {
+      if (op.op === 'unset') delete user[op.path[0]];
+      else user[op.path[0]] = op.value;
+    }
+    revision++;
+    return response(200, { ok: true });
+  };
+  hooks.mount();
+  const render = () => {
+    hooks.begin();
+    for (const rows of Object.values(seen)) rows.length = 0;
+    buttons.length = 0;
+    const text = collectText(first.component({ view: 'page' })).join('');
+    hooks.commit();
+    return text;
+  };
+  const tick = async () => { await new Promise(setImmediate); return render(); };
+  const field = (key) => seen.valueFields.find((row) => row.id === 'xiaoai-' + key);
+  const form = () => seen.forms[0];
+  const action = (label) => buttons.find((button) => button.children === label).onClick();
+  const rename = (text) => { field('deviceName').onEdit(text); render(); };
+  const writeName = (value) => ({ op: 'set', path: ['deviceName'], value });
+  render();
+  assert.equal(form().state.available, false);
+  await tick();
+  assert.equal(form().state.available, true);
+  assert.equal(field('deviceName').text, 'kitchen');
+  assert.equal(field('apiServerPort').text, '9092');
+  assert.equal(form().state.dirty, false);
+  assert.equal(form().state.invalid, false);
+  form().onSave(); assert.equal(posts.length, 0);
+
+  rename('office'); user.apiServerPort = 9100; revision++;
+  form().onSave(); await tick();
+  assert.equal(field('apiServerPort').text, '9100');
+  assert.equal(field('deviceName').text, 'office');
+  form().onSave(); await tick();
+  assert.deepEqual(posts.slice(-2), [1, 2].map((revision) => ({ revision, ops: [writeName('office')] })));
+  assert.equal(form().state.dirty, false);
+
+  for (const keep of [false, true]) {
+    rename('local'); user.deviceName = 'remote-' + keep; revision++;
+    form().onSave(); await tick();
+    assert.equal(form().state.invalid, true);
+    const count = posts.length;
+    form().onSave(); assert.equal(posts.length, count);
+    action(keep ? '保留我的修改' : '采用已保存值'); render();
+    assert.equal(form().state.invalid, false);
+    assert.equal(field('deviceName').text, keep ? 'local' : user.deviceName);
+    assert.equal(form().state.dirty, keep);
+    if (keep) { form().onSave(); await tick(); assert.deepEqual(posts.at(-1).ops, [writeName('local')]); }
+  }
+  field('apiServerPort').onEdit('oops'); render();
+  action(copy.zh['status.refresh']); await tick();
+  assert.equal(field('apiServerPort').text, 'oops');
+  assert.equal(form().state.invalid, true);
+  form().onDiscard(); render();
+  field('apiServerPort').onReset(); render();
+  assert.equal(field('apiServerPort').text, String(DEFAULTS.apiServerPort));
+  form().onSave(); await tick();
+  assert.deepEqual(posts.at(-1).ops, [{ op: 'unset', path: ['apiServerPort'] }]);
+
+  const pick = (value) => { seen.selects.find((s) => s.id === 'xiaoai-replyerRoute').onChange({ target: { value } }); render(); };
+  pick('openai/gpt-5'); form().onSave(); await tick();
+  assert.deepEqual(posts.at(-1).ops, [
+    { op: 'set', path: ['replyerProvider'], value: 'openai' }, { op: 'set', path: ['replyerModel'], value: 'gpt-5' },
+  ]);
+  pick(''); form().onSave(); await tick();
+  assert.deepEqual(posts.at(-1).ops, ['replyerProvider', 'replyerModel'].map((key) => ({ op: 'unset', path: [key] })));
+  rename('study'); readError = true; action(copy.zh['status.refresh']);
+  assert.ok((await tick()).includes('offline'));
+  assert.equal(field('deviceName').text, 'study');
+  assert.equal(form().state.available, true);
 }
 
 /** Flatten the stubbed element tree into its visible text. */

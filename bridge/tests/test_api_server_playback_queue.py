@@ -73,6 +73,7 @@ class PlaybackSerializationTest(unittest.TestCase):
         self.speaker = _FakeSpeaker(self.gate)
         self.server = self.api_module.APIServer(host="127.0.0.1", port=0)
         self._patches = [
+            mock.patch("core.ref.get_speaker", return_value=self.speaker),
             mock.patch.object(self.api_module, "get_speaker", return_value=self.speaker),
             mock.patch.object(self.api_module, "PlaybackGate", self.gate),
         ]

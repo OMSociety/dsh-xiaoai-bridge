@@ -9,17 +9,12 @@ description: Control Xiaoai speaker via OpenXiaoAI Voice API for high-quality TT
 
 ## 前置配置
 
-在 env 中添加：
-
-```bash
-OPENXIAOAI_BASE_URL="http://192.168.x.x:9092"  # OpenXiaoAI 服务地址
-XIAOAI_API_TOKEN="<token>"  # 非 loopback 调用方需要；env 优先，其次配置文件的 dsh.token（loopback 调用可留空）
-```
+默认请求本机 `http://127.0.0.1:9092`。需要远程调用时，请操作者先为独立桥接实例设置 HTTPS 入口，确认目标服务后将 `OPENXIAOAI_BASE_URL` 和 `OPENXIAOAI_PAIRED_ORIGIN` 设为同一 HTTPS origin（如 `https://speaker.example.org`）。通过秘密管理工具分别向该客户端与对应桥进程注入此服务专用的 `OPENXIAOAI_REMOTE_TOKEN`。请求不会跟随重定向；遇到 401，核对目标及配对凭据，勿要求用户在对话里粘贴令牌。
 
 ## 使用方法
 
 ```bash
-# 语音播报（优先 Doubao TTS，失败自动回退小爱自带 TTS）
+# 语音播报（Doubao TTS；--timeout 以毫秒指定请求等待时间，超时表示结果未知）
 xiaoai-tts tts "你好，我是小爱语音助手"
 
 # 指定音色
@@ -113,5 +108,5 @@ xiaoai-tts tts "你好，我是你的专属语音助手" -s S_xxxxxxxx
 
 ## API 端点
 
-- Base URL: `http://{host}:9092`
+- Base URL: 使用前置配置中的地址
 - Content-Type: `application/json`

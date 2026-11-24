@@ -1,127 +1,84 @@
-#!/usr/bin/env python3
-"""
-OpenXiaoAI API 配置和基础工具
-
-自本 fork 起，API Server 在非 loopback 调用方上要求
-`Authorization: Bearer <token>`（loopback 一律放行）。token 的取法与桥接器一致：
-环境变量 `XIAOAI_API_TOKEN` 优先，其次配置文件里的 `dsh.token`。
-"""
-
-import os
+"""Dependency-free client for a local bridge or an explicitly paired HTTPS origin."""
+import ipaddress
 import json
-import importlib.util
-import urllib.request
+import os
 import urllib.error
-from pathlib import Path
+import urllib.request
+from urllib.parse import urlsplit
 
 
-def get_api_config():
-    """获取 API 配置"""
-    base_url = os.environ.get("OPENXIAOAI_BASE_URL", "http://192.168.3.6:9092")
-    # 移除末尾的斜杠
-    return base_url.rstrip("/")
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
 
 
-def _config_candidates():
-    """按优先级列出可能的 config.py 路径。"""
-    configured = os.environ.get("CONFIG_PATH", "").strip()
-    if configured:
-        yield Path(configured).expanduser()
-    home = os.environ.get("DSH_HOME", "").strip() or os.path.join(os.path.expanduser("~"), ".dsh")
-    yield Path(home) / "xiaoai-bridge" / "config.py"
-    # .../bridge/skills/xiaoai-tts/scripts/api_client.py -> .../bridge/config.py
-    yield Path(__file__).resolve().parents[3] / "config.py"
+# A loopback call must stay on the same machine, even with system proxies configured.
+def _open(req, timeout):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    return opener.open(req, timeout=timeout)
 
 
-def _token_from_config():
-    """从渲染后的 config.py 里读 dsh.token。"""
-    for path in _config_candidates():
-        try:
-            if not path.is_file():
-                continue
-            spec = importlib.util.spec_from_file_location("xiaoai_tts_config", path)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            token = ((getattr(module, "APP_CONFIG", None) or {}).get("dsh") or {}).get("token")
-            token = str(token or "").strip()
-            if token:
-                return token
-        except Exception:
-            continue
-    return ""
+def _origin(value):
+    url = urlsplit(value)
+    if (url.scheme not in ('https', 'http') or not url.hostname or url.username is not None
+            or url.path not in ('', '/') or url.query or url.fragment or '\\' in value
+            or any(c.isspace() or ord(c) < 32 for c in value)):
+        raise ValueError('桥接地址须为 HTTP(S) origin（仅协议、主机、端口）')
+    port = url.port if url.port is not None else (443 if url.scheme == 'https' else 80)
+    return url.scheme, url.hostname, port
 
 
-def get_api_token():
-    """获取 API bearer token（可能为空：loopback 调用不需要）。"""
-    token = os.environ.get("XIAOAI_API_TOKEN", "").strip()
-    if token:
-        return token
-    return _token_from_config()
-
-
-UNAUTHORIZED_HINT = (
-    "HTTP 401：该地址不是 loopback，需要 bearer token。"
-    "请设置环境变量 XIAOAI_API_TOKEN，或从 DSH 的 xiaoai 插件设置页/凭据里取出 token。"
-)
-
-
-def api_request(path, method="GET", data=None, headers=None):
-    """发送 API 请求"""
-    base_url = get_api_config()
-    full_url = f"{base_url}{path}"
-    
-    default_headers = {
-        "Content-Type": "application/json"
-    }
-    token = get_api_token()
-    if token:
-        default_headers["Authorization"] = f"Bearer {token}"
-    if headers:
-        default_headers.update(headers)
-    
-    req = urllib.request.Request(
-        full_url,
-        headers=default_headers,
-        method=method
-    )
-    
-    if data:
-        req.data = json.dumps(data).encode("utf-8")
-    
+def _destination():
+    base = os.environ.get('OPENXIAOAI_BASE_URL', 'http://127.0.0.1:9092').rstrip('/')
+    scheme, host, port = _origin(base)
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        error_msg = f"HTTP 错误: {e.code} - {e.reason}"
-        try:
-            error_body = json.loads(e.read().decode("utf-8"))
-            error_msg += f"\n详情: {error_body}"
-        except:
-            pass
-        if e.code == 401:
-            error_msg += f"\n{UNAUTHORIZED_HINT}"
-        raise Exception(error_msg)
-    except Exception as e:
-        raise Exception(f"请求失败: {e}")
+        local = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = host == 'localhost'
+    if local:
+        # Dial the numeric loopback address directly.
+        local_host = '127.0.0.1' if host == 'localhost' else (f'[{host}]' if ':' in host else host)
+        return f'{scheme}://{local_host}:{port}', ''
+    paired = os.environ.get('OPENXIAOAI_PAIRED_ORIGIN', '')
+    if scheme != 'https' or not paired or _origin(paired) != (scheme, host, port):
+        raise ValueError('远程请求需要匹配的 HTTPS OPENXIAOAI_PAIRED_ORIGIN')
+    token = os.environ.get('OPENXIAOAI_REMOTE_TOKEN', '').strip()
+    if not token:
+        raise ValueError('配对服务缺少 OPENXIAOAI_REMOTE_TOKEN')
+    authority = f'[{host}]' if ':' in host else host
+    return f'{scheme}://{authority}:{port}', token
+
+
+def api_request(path, method='GET', data=None, *, content_type='application/json', timeout=30):
+    base, token = _destination()
+    if not path.startswith('/api/'):
+        raise ValueError('需要 /api/ 路径')
+    headers = {'Content-Type': content_type}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    if data is not None and not isinstance(data, bytes):
+        data = json.dumps(data).encode('utf-8')
+    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+    try:
+        with _open(req, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        hint = '：核对配对目标与 OPENXIAOAI_REMOTE_TOKEN' if exc.code == 401 else ''
+        exc.close()
+        raise RuntimeError(f'HTTP {exc.code}{hint}') from exc
 
 
 def check_health():
-    """检查服务健康状态"""
-    return api_request("/api/health")
+    return api_request('/api/health')
 
 
 def get_status():
-    """获取音箱状态"""
-    return api_request("/api/status")
+    return api_request('/api/status')
 
 
 def wakeup(silent=True):
-    """唤醒小爱"""
-    return api_request("/api/wakeup", method="POST", data={"silent": silent})
+    return api_request('/api/wakeup', method='POST', data={'silent': silent})
 
 
 def interrupt():
-    """打断当前播放"""
-    return api_request("/api/interrupt", method="POST")
+    return api_request('/api/interrupt', method='POST')

@@ -248,7 +248,7 @@ class MLXAudioTTSFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(importlib.import_module("os").path.exists(audio_path))
         speaker.play.assert_not_awaited()
 
-    async def test_playback_error_falls_back_and_still_removes_temporary_audio(self):
+    async def test_playback_error_is_terminal_and_removes_temporary_audio(self):
         speaker = unittest.mock.MagicMock()
         speaker.play_server_file = unittest.mock.AsyncMock(
             side_effect=RuntimeError("rust playback failed")
@@ -265,13 +265,14 @@ class MLXAudioTTSFallbackTest(unittest.IsolatedAsyncioTestCase):
                 with patch.object(
                     importlib.import_module("core.ref"), "get_speaker", return_value=speaker
                 ):
-                    await self.manager._play_response_with_tts("你好")
+                    with self.assertRaises(RuntimeError):
+                        await self.manager._play_response_with_tts("你好")
 
         audio_path = speaker.play_server_file.await_args.kwargs["file_path"]
         self.assertFalse(importlib.import_module("os").path.exists(audio_path))
-        speaker.play.assert_awaited_once_with(text="你好", blocking=True)
+        speaker.play.assert_not_awaited()
 
-    async def test_tts_timeout_falls_back_to_xiaoai_native_tts(self):
+    async def test_tts_timeout_does_not_replay(self):
         speaker = unittest.mock.MagicMock()
         speaker.play = unittest.mock.AsyncMock(return_value=True)
         config = {"base_url": "http://mlx-audio:8000/v1"}
@@ -289,9 +290,10 @@ class MLXAudioTTSFallbackTest(unittest.IsolatedAsyncioTestCase):
                 with patch.object(
                     importlib.import_module("core.ref"), "get_speaker", return_value=speaker
                 ):
-                    await self.manager._play_response_with_tts("你好")
+                    with self.assertRaises(MLXAudioTTSTimeoutError):
+                        await self.manager._play_response_with_tts("你好")
 
-        speaker.play.assert_awaited_once_with(text="你好", blocking=True)
+        speaker.play.assert_not_awaited()
 
     def test_missing_provider_keeps_legacy_xiaoai_and_doubao_selection(self):
         self.manager._tts_provider = None

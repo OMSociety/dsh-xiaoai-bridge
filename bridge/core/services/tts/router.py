@@ -8,7 +8,7 @@ import dsh_xiaoai_server
 from core.services.tts.doubao import DoubaoTTS
 from core.services.tts.mlx_audio import MLXAudioTTS
 from core.services.tts.openai import PLAYBACK_SUPPORTED_FORMATS, OpenAITTS
-from core.utils.base import get_env
+from core.services.tts.credentials import doubao_credentials
 from core.utils.config import ConfigManager
 from core.utils.logger import logger
 from core.utils.playback_gate import PlaybackGate
@@ -26,15 +26,12 @@ class TTSRouter:
         configured_provider: str | None,
         tts_speaker: str | None,
     ) -> str:
-        """Resolve an explicit provider while preserving legacy selection."""
+        """Select the configured provider, or infer it from the configured speaker."""
         provider = str(configured_provider or "").strip().lower()
         if provider in cls.SUPPORTED_PROVIDERS:
             return provider
         if provider:
-            logger.warning(
-                f"Unknown tts_provider={configured_provider!r}; "
-                "using legacy speaker-based selection"
-            )
+            raise ValueError(f"Unknown tts_provider={configured_provider!r}")
         return "xiaoai" if tts_speaker == cls.XIAOAI_TTS_SPEAKER else "doubao"
 
     @classmethod
@@ -47,8 +44,9 @@ class TTSRouter:
         tts_speed: float = 1.0,
         playback_token: int | None = None,
         log_prefix: str = "TTS",
+        native_timeout_ms: int = 600000,
     ) -> None:
-        """Synthesize and play text, falling back to XiaoAI native TTS."""
+        """Attempt one playback with the selected provider."""
         provider = cls.resolve_provider(configured_provider, tts_speaker)
         # 所有回复播报的收口点，包括绕过 SpeakerManager 的豆包通道
         # （`tts_play` 直接推流），所以闸门要在这里再关一层。
@@ -58,8 +56,10 @@ class TTSRouter:
                     from core.ref import get_speaker
 
                     speaker = get_speaker()
-                    if speaker:
-                        await speaker.play(text=text, blocking=True)
+                    if not speaker:
+                        raise RuntimeError("Speaker manager is not available")
+                    if not await speaker.play(text=text, blocking=True, timeout=native_timeout_ms):
+                        raise RuntimeError("Native TTS playback not confirmed")
                     return
 
                 if provider == "doubao":
@@ -81,7 +81,7 @@ class TTSRouter:
                     f"[{log_prefix}] Error playing response with TTS: "
                     f"{type(exc).__name__}: {exc}"
                 )
-                await cls._fallback_to_xiaoai(text, log_prefix=log_prefix)
+                raise
 
     @classmethod
     async def _play_doubao(
@@ -93,12 +93,7 @@ class TTSRouter:
         playback_token: int | None,
     ) -> None:
         tts_config = ConfigManager.instance().get_app_config("tts.doubao", {})
-        app_id = tts_config.get("app_id")
-        # The Access Token lives in the DSH credential store and reaches the
-        # bridge through the plugin's spawn environment, so prefer the env var
-        # and treat the config value as a fallback for manual runs — the same
-        # rule `core/dsh.py` applies to XIAOAI_API_TOKEN.
-        access_key = get_env("DOUBAO_ACCESS_KEY") or tts_config.get("access_key")
+        app_id, access_key = doubao_credentials(tts_config)
         if not app_id or not access_key:
             raise ValueError("Doubao TTS credentials are not configured")
 
@@ -214,14 +209,3 @@ class TTSRouter:
                         f"[{log_name} TTS] Failed to remove temporary "
                         f"audio file {temporary_path}: {exc}"
                     )
-
-    @classmethod
-    async def _fallback_to_xiaoai(cls, text: str, *, log_prefix: str) -> None:
-        try:
-            from core.ref import get_speaker
-
-            speaker = get_speaker()
-            if speaker:
-                await speaker.play(text=text, blocking=True)
-        except Exception as exc:
-            logger.error(f"[{log_prefix}] XiaoAI TTS fallback failed: {exc}")

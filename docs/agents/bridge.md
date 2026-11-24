@@ -24,7 +24,7 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 要守住的边界：
 
 - Rust 导出面就是 Python 侧的契约。`lib.rs` 注册 `start_server` / `start_recording` / `stop_recording` / `start_playing` / `stop_playing` / `run_shell` / `on_output_data`；`native/src/tts/mod.rs` 另注册 `tts_play` / `tts_play_background` / `tts_stream_play` / `tts_stream_play_background` / `tts_stream_collect` / `begin_playback_session` / `stop_tts_playback` / `decode_audio` / `play_audio_file`；`native/src/python.rs` 的 `init_module` 还注册 `register_fn` / `unregister_fn`，`native/src/opus.rs` 注册 `OpusEncoder` / `OpusDecoder` 两个类（`lib.rs` 依次调 opus / python / tts 三个 `init_module`）。改名或改签名要同时改全部调用点，Python 侧没有任何类型检查兜底。
-- 环境变量分两侧读：Python 侧是 `main.py` / `core/app.py` / `core/utils/*`；Rust 侧 `native/src/server.rs` 读 `AUDIO_INPUT_ENABLE`、`SILENT_START_ENABLE`、`DSH_XIAOAI_TOKEN`（`4399` 的客户端鉴权：设置项 `speakerAuth` 默认开时由 `lib/process.js` 写入同一枚访问令牌，留空即不鉴权；服务端同时接受 `Authorization: Bearer <token>` 与拨号 URL 里的 `?token=<token>`，后者是给不带任何请求头的官方客户端的唯一入口）。API Server 的开关与监听地址只由环境变量决定，`config.py` 里没有 `api_server` 段。
+- 环境变量分两侧读：Python 侧是 `main.py` / `core/app.py` / `core/utils/*`；Rust 侧 `native/src/server.rs` 读 `AUDIO_INPUT_ENABLE`、`SILENT_START_ENABLE`、`DSH_XIAOAI_TOKEN`（`4399` 的客户端鉴权：设置项 `speakerAuth` 默认开时由 `lib/process.js` 写入同一枚访问令牌，留空即不鉴权；服务端同时接受 `Authorization: Bearer <token>` 与拨号 URL 里的 `?token=<token>`，后者是给不带任何请求头的官方客户端的唯一入口）。API Server 通过环境变量启用，监听地址由 `API_SERVER_HOST` 指定。
 - 设备绑定来自 `core/dsh.py` 读的 `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST`（插件侧由 `lib/process.js` 按设置项写入）：它们随每次 `/asr` 提交，改设备绑定要确认这两条没有被绕过。
 - 会话后端之间不互相调用；要出声一律走 `core/services/tts/router.py` 的 `TTSRouter`，不要在某个后端里直接实例化 provider。
 - 设备命令集中在 `core/services/speaker.py`，**新代码不要另拼 shell**。既存例外只有 `core/xiaoai.py` 里那一份打断命令串与 `run_shell` 直调（历史遗留，改打断路径时两处都要看），它不是可以照抄的范例。Rust 导出的播放类函数（`on_output_data` / `play_audio_file` / `start_playing` / `tts_play*`）是**不带闸门的底层出口**，现有调用点分布在 `speaker.py`、`core/xiaoai.py`、`core/wakeup_session.py`、`core/services/api_server.py` 与 TTS router；新代码要出声就走 `speaker.play(...)` 或 `TTSRouter`，新增直调就必须自己承担闸门责任。
@@ -52,9 +52,10 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 | `API_SERVER_ENABLE` | `bridge/main.py`、`bridge/core/app.py` | 开 API Server，默认关 |
 | `AUDIO_INPUT_ENABLE` | `bridge/main.py`（默认 `"1"`）、`bridge/core/app.py`、`bridge/native/src/server.rs` | 音频输入；关掉后 KWS 与 `local_asr` 不可用 |
 | `SILENT_START_ENABLE` | `bridge/native/src/server.rs` | Rust 侧静默启动，只有 `true` / `1` / `yes` / `on` 算开；插件由 `silentStart` 设置项路由 |
-| `API_SERVER_HOST` | `bridge/core/app.py` | 默认 `127.0.0.1`；设成 `0.0.0.0` 等于把播放与唤醒交给整个局域网 |
+| `API_SERVER_HOST` | `bridge/core/app.py` | 默认 `127.0.0.1`；远程部署使用独立实例和受保护的 HTTPS 入口 |
 | `API_SERVER_PORT` | `bridge/core/app.py` | 默认 `9092` |
-| `XIAOAI_API_TOKEN` | `bridge/core/services/api_auth.py`、`bridge/core/dsh.py` | 两处都读：HTTP bearer 门禁 + DSH 后端令牌；为空时非回环对端一律拒绝 |
+| `XIAOAI_API_TOKEN` | `bridge/core/dsh.py` | DSH 本机机器回调的 bearer |
+| `OPENXIAOAI_REMOTE_TOKEN` | `bridge/core/services/api_auth.py` | 与远端独立实例配对的专用凭据；配置后回环与远端均验证 |
 | `XIAOAI_DEVICE_NAME` / `XIAOAI_DEVICE_HOST` | `bridge/core/dsh.py` | 覆盖 `dsh.device_name` / `device_host`，由插件 `lib/process.js` 的 `bridgeChildEnv()` 按设置项写入，随每次 `/asr` 提交 |
 | `DOUBAO_ACCESS_KEY` | `bridge/core/services/tts/router.py` | 豆包 TTS Access Key，优先于渲染配置的 `tts.doubao.access_key`；进程启动时读一次 |
 | `CONFIG_PATH` | `bridge/core/utils/config_loader.py` | 自定义配置文件路径；插件下指向 `<dataDir>/config.py` |
@@ -63,11 +64,11 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 
 ## API Server 端点
 
-`API_SERVER_ENABLE=1` 时监听（默认 `127.0.0.1:9092`）。鉴权由 `bridge/core/services/api_auth.py` 的 `bearer_auth` 中间件统一加（`XIAOAI_API_TOKEN` 优先、`dsh.token` 兜底，每请求读一次）：回环对端免令牌，非回环必须带 bearer。
+`API_SERVER_ENABLE=1` 时默认监听 `127.0.0.1:9092`。本机模式仅允许回环；远端独立实例的部署者为服务与客户端分别注入同一专用凭据。客户端 `OPENXIAOAI_BASE_URL` 必须与 `OPENXIAOAI_PAIRED_ORIGIN` 匹配，使用 HTTPS。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/api/play/text` | 文字转语音播放；播放全程串行，队列满回 503 |
+| POST | `/api/play/text` | 按 DSH 会话配置合成文字；非阻塞成功表示入队，播放全程串行，队列满回 503 |
 | POST | `/api/play/url` | 播放音频链接；上游遗留端点，本插件无调用点 |
 | POST | `/api/play/file` | 上传并播放音频文件 |
 | POST | `/api/tts/doubao` | 豆包 TTS 合成并播放（可覆盖 app_id / access_key / speaker_id / speed / emotion） |
@@ -77,19 +78,18 @@ core/utils  ←  core/services  ←  core/*.py（会话后端）  ←  main.py
 | GET | `/api/status` | 播放状态：`playing` / `paused` / `idle` |
 | GET | `/api/health` | 健康检查，含 `data.auth` 与 `data.asr` 实况 |
 
-请求体字段、错误码与音色表见 `bridge/docs/openxiaoai-voice-api.md`（那份文档没有鉴权一节，鉴权口径以 `api_auth.py` 为准）。`bridge/config.py` 里没有 `api_server` 段，监听地址只来自环境变量。
+请求体字段、错误码与音色表见 `bridge/docs/openxiaoai-voice-api.md`。`bridge/config.py` 里没有 `api_server` 段，监听地址只来自环境变量。
 
 ## TTS provider
 
-- `bridge/core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS = frozenset(("xiaoai", "doubao", "openai", "mlx_audio"))`；未知名字只 warn 一条 `Unknown tts_provider=` 再按 `tts_speaker` 回退（`xiaoai` 到 xiaoai，否则 doubao），不报错。
+- `bridge/core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS = frozenset(("xiaoai", "doubao", "openai", "mlx_audio"))`。显式指定的名称必须属于此集合。留空时按 `tts_speaker` 选择：`xiaoai` 使用设备原声，其余值使用豆包。
 - 设置页只渲染 `xiaoai` / `doubao`（`lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`、`lib/config.js` 的 `TTS_PROVIDER_VALUES`），`buildOverrides()` 总会写 `dsh.tts_provider`；`openai` / `mlx_audio` 只能手改渲染配置，`bridge/config.py` 里也没有 `tts.openai` / `tts.mlx_audio` 段。
 - 豆包凭据：`_play_doubao` 先读环境变量 `DOUBAO_ACCESS_KEY`，取不到才用 `tts.doubao.access_key`；`app_id` / `access_key` 缺一即 `raise ValueError("Doubao TTS credentials are not configured")`，不会静默换 provider。
 - `bridge/config.py` 的 `tts.doubao` 默认值：`default_speaker` = `zh_female_vv_uranus_bigtts`、`audio_format` = `pcm`、`stream` = `True`（`stream=True` 走 Rust 的 `tts_stream_play`，否则 `tts_play`）。
-- OpenAI 兼容 / MLX-Audio 走 `_play_openai_compatible`：整段下载后经 `speaker.play_server_file()` 播出，**不支持 SSE 流式**；`response_format` 只接受 mp3 / flac / wav / ogg / pcm（`PLAYBACK_SUPPORTED_FORMATS`），其余抛 `is not supported by the Bridge playback decoder`；`tts_speaker` 非 `xiaoai` 时当 voice 覆盖。出错统一回退 xiaoai TTS。
+- OpenAI 兼容 / MLX-Audio 走 `_play_openai_compatible`：整段下载后经 `speaker.play_server_file()` 播出，**不支持 SSE 流式**；`response_format` 只接受 mp3 / flac / wav / ogg / pcm（`PLAYBACK_SUPPORTED_FORMATS`），其余抛 `is not supported by the Bridge playback decoder`；`tts_speaker` 非 `xiaoai` 时当 voice 覆盖。合成或播放失败时，本次播报结束并记录错误；重试由调用方明确发起。
 
 ## 独立运行与 Docker
 
 - 正式部署走本地源码：在 `bridge/` 里 `uv sync`，再 `uv run main.py`（前置 `uv` 与 Rust 工具链，Linux 另需 `pkg-config` / `patchelf`）；`bridge/scripts/start.sh` 是本地辅助脚本（例：`API_SERVER_ENABLE=1 DSH_ENABLE=1 ./scripts/start.sh`）。只开 API Server：在 `bridge/` 里 `$env:API_SERVER_ENABLE='1'; .\.venv\Scripts\python.exe main.py`。
 - 要真设备、真凭据时才跑的手动脚本：在 `bridge/` 里 `.\.venv\Scripts\python.exe tests/test_tts.py`。
-- `bridge/docker-compose.yml` 头部自带 fork 警告：它拉的是上游镜像 `ghcr.io/coderzc/open-xiaoai-bridge:latest`，**不含本 fork 的 bearer 鉴权门禁与 DSH 后端接线**，照它部署会得到一个没有 bearer 门禁的桥接器，不要把 compose 当正式部署路径。
-- Compose 事实（仅参考）：端口 `4399:4399` 与 `9092:9092`，`API_SERVER_HOST=0.0.0.0`，卷 `./config.py:/app/config.py` 与 `./models:/app/core/models`，`DSH_ENABLE=1`，网络需 `network_mode: host` 或把 `dsh.base_url` 指向宿主机局域网 IP。
+- `bridge/docker-compose.yml` 使用本仓 Dockerfile 与 Linux host 网络，桥 API 绑定 `127.0.0.1`，`DSH_ENABLE` 默认 `0`；配置只读挂载，模型目录独立挂载。

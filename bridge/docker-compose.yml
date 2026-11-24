@@ -1,26 +1,15 @@
-# 注意：本文件来自上游仓库（coderzc/open-xiaoai-bridge），拉取的是上游镜像，
-# 不含本 fork 的改动（bearer 鉴权门禁、DSH 后端接线、去掉的历史连接器）。
-# 照它部署得到的是"没有 bearer 门禁"的桥接器，与本插件"默认带鉴权"的承诺
-# 不一致，因此不建议用于本插件的正式部署。
-#
-# 正式部署请用本地源码运行（见 ../AGENTS.md 的「桥接器（bridge/）」一节）：
-#   cd bridge && uv sync && uv run main.py
-# 或者把下面这行换成上游没有的本地构建，并自行确认构建产物带鉴权：
-#   build: .
+# Linux host networking lets the bridge reach the host callback on loopback.
 services:
   open-xiaoai-bridge:
-    image: ghcr.io/coderzc/open-xiaoai-bridge:latest
+    build: .
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "4399:4399"
-      - "9092:9092"
     environment:
-      - LOGLEVEL=INFO # 日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
-      - API_SERVER_ENABLE=1 # 启用 HTTP API 服务（可选）
-      - API_SERVER_HOST=0.0.0.0 # HTTP API 服务监听地址（默认监听 127.0.0.1）
-      - DSH_ENABLE=1            # 启用 DSH 后端
+      LOGLEVEL: INFO
+      API_SERVER_ENABLE: "1"
+      API_SERVER_HOST: "127.0.0.1"
+      DSH_ENABLE: "${DSH_ENABLE:-0}"
+      XIAOAI_API_TOKEN: "${XIAOAI_API_TOKEN:-}"
     volumes:
-      - ./config.py:/app/config.py
+      - ./config.py:/app/config.py:ro
       - ./models:/app/core/models
-    stdin_open: true
-    tty: true      

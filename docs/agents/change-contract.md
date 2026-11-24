@@ -21,9 +21,9 @@
 
 ## 加 TTS provider
 
-- 桥接器侧名字必须进 `bridge/core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS`；不在集合里只会 warn 一条 `Unknown tts_provider=` 再按 `tts_speaker` 回退（不报错，所以容易看着没事其实没生效）。
+- 桥接器侧名字必须进 `bridge/core/services/tts/router.py` 的 `SUPPORTED_PROVIDERS`；显式未知名称作为配置错误处理。新增服务要验证成功、失败、被打断三条路径，失败或被打断即结束该次播报。
 - 插件侧还要把名字加进 `lib/render-config.js` 的 `RENDERED_TTS_PROVIDERS`，否则 `buildOverrides()` 永远不写 `dsh.tts_provider`，设置页选中等于没选。
-- 两张表不是同一张：`lib/config.js` 的 `TTS_PROVIDER_VALUES` 是设置页能选什么（只有 `xiaoai` 与 `doubao`，没有「留空跟随」这一档，所以 `buildOverrides()` 总会写 `dsh.tts_provider`），桥接器的 `SUPPORTED_PROVIDERS` 是真正支持什么。桥接器那条「空值就按 `tts_speaker` 回退」的旧规则还在，只是设置页不再产出空值。
+- 两张表不是同一张：`lib/config.js` 的 `TTS_PROVIDER_VALUES` 是设置页能选什么（只有 `xiaoai` 与 `doubao`，没有「留空跟随」这一档，所以 `buildOverrides()` 总会写 `dsh.tts_provider`），桥接器的 `SUPPORTED_PROVIDERS` 是真正支持什么。独立桥的合成方式留空时，按该会话的 `tts_speaker` 选择服务。
 - 断言会一起动：`scripts/check-config.mjs`（`tts_provider` 连默认值也照写、豆包四值按需写进 `tts.doubao`）、`scripts/check-client.mjs`（`ttsProvider` 选项文案逐字断言）。
 - 跑 `check-config`、`check-client` 与 `pytest -q tests/test_tts_router.py`。
 
@@ -69,7 +69,7 @@
 
 ## 改进程托管（接管遗留进程 / watchdog / 进程树清理）
 
-- 代码在 `lib/process.js`。
+- `lib/bridge-lifecycle.js` 用同一队列处理 start、stop、restart 与 ensureStarted；相邻同类请求共享结果，重启仅在停止成功后启动。`lib/process.js` 执行子进程操作，负责身份核验、环境装配与看门狗。
 - 接管要**认身份**，不是只认 pid：pid 文件里存的是 pid + 命令行身份，win32 用 `Get-CimInstance Win32_Process` 取命令行比对解释器与 `main.py`（旧版裸数字 pid 文件的记录退回只比对 `main.py`）。
 - 看门狗的重启预算是**滑动崩溃窗口**（`crashWindowMs`，默认 60 分钟）里的崩溃计数，不是「连续崩了几次」。别引入「活够久就清零」的规则（那会让周期性慢崩永远重试下去），只有用户显式 `start()` 才清空。
 - spawn 失败也要进看门狗（否则一次失败就再也不重启），start/stop 要有并发守卫。
@@ -77,7 +77,7 @@
 
 ## 改 HTTP 路由
 
-- `lib/http.js`：前缀 `ROUTE_PREFIX = '/plugin/xiaoai'`；`/health`、`/config` GET 与 POST、`/bridge/logs`、`/bridge/start`、`/bridge/stop`、`/bridge/status`、`/bridge/health`、`/bridge/restart`、`/asr`、`/devices`、`/data/wipe`。
+- `lib/http.js`：前缀 `ROUTE_PREFIX = '/plugin/xiaoai'`；机器路由 `GET /ready` 与 `POST /asr` 共用插件 bearer。所有者路由包括 `/health`、`/config` GET 与 POST、`/bridge/logs`、`/bridge/start`、`/bridge/stop`、`/bridge/status`、`/bridge/health`、`/bridge/restart`、`/devices`、`/data/wipe`。
 - 请求体一律 `JSON.parse(await readBody(req))`，设置写入要处理 revision 冲突；同源校验（`Origin` 检查）在同一个文件里，**不要加 CORS 头**。
 - 跑 `node scripts\check-http.mjs`：它是唯一直接碰 HTTP 层的离线检查，覆盖缺令牌 fail-closed 503、错误/缺失 bearer 401、正确 bearer 只投递一次、非 JSON 400、真实 socket 上超限体收到 400 而不是 `ECONNRESET`、跨源 403 且不带 CORS 头、未知路由 404、`/data/wipe` 缺 confirm 拒绝、bridge 客户端拒绝恶意 host:port。
 - 它拦不住的是真机 socket 时序与设备侧行为，改协议语义时仍要拿真实请求把改动的路由打通一遍（含拒绝路径）。
@@ -143,5 +143,5 @@
 ## 改版本号与对外文档
 
 - 改版本号：**先报备用户**（仓库既有纪律，见 [CONTRIBUTING.md](../../CONTRIBUTING.md)）。
-- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](../../CHANGELOG.md) 的版本条目（当前是 `## [1.0.1] - 2026-11-01`），不要写进 README 或提交信息。
+- 改对外文档：零 emoji、不写 `---`、只写最终状态；架构上的偏离与取舍写进 [CHANGELOG.md](../../CHANGELOG.md) 的版本条目（版本取 `package.json` 的 `version`），不要写进 README 或提交信息。
 - 文档改完跑 `node tools\doc-check.mjs` 与 `node tools\changelog-check.mjs`（这两个不属于那九条离线检查）。

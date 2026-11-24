@@ -38,13 +38,11 @@ if (pkg.icon) need(pkg.icon, '插件图标 icon')
 need('cordis.patch.yml', '挂载声明')
 need('package.json', '包清单本身')
 
-for (const target of Object.values(pkg.exports ?? {})) {
-  const value = typeof target === 'string' ? target : target?.default
-  if (typeof value !== 'string' || value.includes('*')) continue
-  if (!value.startsWith('./')) continue
-  if (!existsSync(join(ROOT, value))) continue
-  need(value, 'exports 导出的文件')
+function checkExport(target) {
+  if (target && typeof target === 'object') return Object.values(target).forEach(checkExport)
+  if (typeof target === 'string' && target.startsWith('./') && !target.includes('*')) need(target, 'exports 导出的文件')
 }
+checkExport(pkg.exports)
 
 function globToRegExp(glob) {
   return new RegExp('^' + glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$')
@@ -62,7 +60,7 @@ for (const entry of pkg.files ?? []) {
   }
   const onDisk = join(ROOT, normalized)
   if (!existsSync(onDisk)) {
-    notes.push(`files 条目 ${entry} 在本地不存在，跳过`)
+    problems.push(`files 条目 ${entry} 在本地不存在`)
     continue
   }
   const isDir = statSync(onDisk).isDirectory()

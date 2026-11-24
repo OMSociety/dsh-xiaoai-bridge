@@ -69,6 +69,7 @@ class _InterruptQueueTestCase(unittest.TestCase):
         self.speaker = _FakeSpeaker(self.gate)
         self.server = self.api_module.APIServer(host="127.0.0.1", port=0)
         self._patches = [
+            mock.patch("core.ref.get_speaker", return_value=self.speaker),
             mock.patch.object(
                 self.api_module, "get_speaker", return_value=self.speaker
             ),
@@ -141,6 +142,38 @@ class InterruptCancelsQueueTest(_InterruptQueueTestCase):
 
         asyncio.run(scenario())
 
+    def test_interrupt_cancels_blocking_waiter_in_mixed_queue(self):
+        async def scenario():
+            started = asyncio.Event()
+            queued = asyncio.Event()
+            later = asyncio.Event()
+            calls = []
+            async def play(text, **kwargs):
+                calls.append(text)
+                started.set()
+                if text == 'first':
+                    await later.wait()
+                return True
+            original = self.api_module._spawn_play_task
+            def register(*args, **kwargs):
+                task = original(*args, **kwargs)
+                if args[0] == "waiting":
+                    queued.set()
+                return task
+            with mock.patch.object(self.speaker, 'play', play), mock.patch.object(self.api_module, '_spawn_play_task', register):
+                async with TestClient(TestServer(self.server.app)) as client:
+                    await client.post('/api/play/text', json={'text': 'first'})
+                    await asyncio.wait_for(started.wait(), 3)
+                    waiter = asyncio.create_task(client.post('/api/play/text', json={'text': 'waiting', 'blocking': True}))
+                    await asyncio.wait_for(queued.wait(), 3)
+                    self.assertEqual(200, (await client.post('/api/interrupt')).status)
+                    self.assertEqual(409, (await asyncio.wait_for(waiter, 3)).status)
+                    new = await client.post('/api/play/text', json={'text': 'new', 'blocking': True})
+                    self.assertEqual(200, new.status)
+                    self.assertEqual(['first', 'new'], calls)
+                    self.assertEqual(0, self.api_module._pending_plays)
+        asyncio.run(scenario())
+
     def test_interrupt_without_queue_keeps_device_stop_semantics(self):
         """没有排队任务时，打断仍然是"停设备 + 关会话"，闸门照旧放行。"""
         self.gate.hold_until_device_stops(max_seconds=30.0)
@@ -185,7 +218,7 @@ class CancelPendingPlaysUnitTest(_InterruptQueueTestCase):
         async def scenario():
             self.api_module._pending_plays = 0
             self.assertTrue(self.api_module._reserve_play_slot())
-            task = self.api_module._spawn_play_task(self.speaker, "第一句", 1000)
+            task = self.api_module._spawn_play_task("第一句", 1000)
             # 协程体（含 finally）根本不会执行，名额只能靠任务收尾回调归还
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):

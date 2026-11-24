@@ -29,7 +29,9 @@ COPY . .
 RUN uv sync --locked --no-install-project --no-editable
 
 # 构建 Rust 扩展并安装
-RUN uv run maturin build --release --manifest-path native/Cargo.toml && uv remove maturin
+RUN .venv/bin/maturin build --locked --release --manifest-path native/Cargo.toml --out /tmp/wheels \
+    && uv pip install --python .venv/bin/python --no-deps /tmp/wheels/*.whl \
+    && .venv/bin/python -c "import dsh_xiaoai_server"
 
 
 FROM python:3.12-slim

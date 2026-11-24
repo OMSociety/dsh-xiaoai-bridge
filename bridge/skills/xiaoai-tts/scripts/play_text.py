@@ -25,7 +25,7 @@ def play_text(text, blocking=False, timeout=60000):
         "timeout": timeout
     }
     
-    result = api_request("/api/play/text", method="POST", data=data)
+    result = api_request("/api/play/text", method="POST", data=data, timeout=timeout / 1000)
     
     mode = "阻塞模式" if blocking else "非阻塞模式"
     print(f"✅ 已发送播放请求 [{mode}]: {text[:50]}{'...' if len(text) > 50 else ''}")
@@ -44,15 +44,18 @@ def main():
     
     args = parser.parse_args()
     
+    if args.timeout <= 0:
+        parser.error("timeout 必须为正毫秒数")
+
     # 默认非阻塞（blocking=False）
     blocking = args.blocking if args.blocking else False
     
     try:
         result = play_text(args.text, blocking=blocking, timeout=args.timeout)
         if result.get("success"):
-            print(f"🎵 播放成功")
+            print("播放完成" if args.blocking else "桥接器已受理播报")
         else:
-            print(f"⚠️ 播放可能失败: {result}")
+            raise RuntimeError("桥接器未确认成功")
     except Exception as e:
         print(f"❌ 错误: {e}")
         sys.exit(1)
